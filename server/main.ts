@@ -46,17 +46,30 @@ const users: User[] = [];
 const gifts: Gift[] = [];
 
 if (!HELIUS_API_KEY) {
-  console.warn("Warning: Missing HELIUS_API_KEY. Wallet balances will be mocked.");
+  console.warn("⚠️ Warning: Missing HELIUS_API_KEY. Using public devnet RPC (rate limited).");
 }
 
 // ✅ FIXED: Always create connection (don't make it null)
 // Use Helius devnet if API key exists, otherwise use public devnet RPC
-const connection = HELIUS_API_KEY
-  ? new Connection(`https://rpc-devnet.helius.xyz/?api-key=${HELIUS_API_KEY}`, 'confirmed')
-  : new Connection('https://api.devnet.solana.com', 'confirmed');
+// Helius format: https://mainnet.helius-rpc.com/?api-key=YOUR_KEY (change mainnet to devnet)
+const RPC_URL = HELIUS_API_KEY
+  ? `https://devnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`
+  : 'https://api.devnet.solana.com';
 
+console.log('🌐 Connecting to Solana Devnet RPC:', RPC_URL.replace(HELIUS_API_KEY || '', '***'));
 
-console.log('🌐 Connected to Solana Devnet');
+const connection = new Connection(RPC_URL, 'confirmed');
+
+// Test connection
+(async () => {
+  try {
+    const version = await connection.getVersion();
+    console.log('✅ Successfully connected to Solana Devnet. Version:', version['solana-core']);
+  } catch (error: any) {
+    console.error('❌ Failed to connect to Solana RPC:', error?.message || error);
+    console.error('🔧 Please check your HELIUS_API_KEY in server/.env file');
+  }
+})();
 
 // ✅ FIX: Remove TipLink initialization - we'll use the static create() method instead
 // TipLink doesn't need to be initialized with a client, we use it directly
