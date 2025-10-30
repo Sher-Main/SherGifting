@@ -2,9 +2,12 @@ import express from 'express';
 import cors from 'cors';
 import { TipLink } from '@tiplink/api';
 import { Connection, LAMPORTS_PER_SOL, PublicKey, Keypair, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import 'dotenv/config';
 import { authenticateToken, AuthRequest } from './authMiddleware';
 import bs58 from 'bs58';
+import fs from 'fs';
+import path from 'path';
 
 
 // --- Types (duplicated from frontend for simplicity) ---
@@ -24,16 +27,21 @@ interface User {
 interface Gift {
   id: string;
   sender_did: string;
+  sender_email: string;
   recipient_email: string;
-  token_address: string;
+  token_mint: string; // Mint address for SPL tokens, or 'SOL' for native SOL
   token_symbol: string;
+  token_decimals: number;
   amount: number;
   message: string;
   status: GiftStatus;
   tiplink_url: string;
-  tiplink_id: string;
+  tiplink_public_key: string;
+  transaction_signature: string;
   created_at: string;
   claimed_at?: string | null;
+  claimed_by?: string | null;
+  claim_signature?: string | null;
 }
 
 const app = express();
@@ -59,13 +67,40 @@ if (TREASURY_PRIVATE_KEY) {
     process.exit(1);
   }
 } else {
-  // Generate a new treasury wallet for development
+  // Generate a new treasury wallet and auto-save to .env
   treasuryKeypair = Keypair.generate();
+  const privateKeyBase58 = bs58.encode(treasuryKeypair.secretKey);
+  
   console.log('⚠️ No TREASURY_PRIVATE_KEY found. Generated new treasury wallet:');
   console.log('Public Key:', treasuryKeypair.publicKey.toBase58());
-  console.log('Private Key (base58):', bs58.encode(treasuryKeypair.secretKey));
-  console.log('💡 Add this to server/.env as TREASURY_PRIVATE_KEY for production');
-  console.log('🚰 Fund this wallet with devnet SOL: https://faucet.solana.com');
+  console.log('💾 Auto-saving to server/.env...');
+  
+  try {
+    const envPath = path.join(__dirname, '.env');
+    let envContent = '';
+    
+    // Read existing .env if it exists
+    if (fs.existsSync(envPath)) {
+      envContent = fs.readFileSync(envPath, 'utf-8');
+    }
+    
+    // Add or update TREASURY_PRIVATE_KEY
+    if (envContent.includes('TREASURY_PRIVATE_KEY=')) {
+      envContent = envContent.replace(/TREASURY_PRIVATE_KEY=.*/, `TREASURY_PRIVATE_KEY=${privateKeyBase58}`);
+    } else {
+      envContent += `\nTREASURY_PRIVATE_KEY=${privateKeyBase58}\n`;
+    }
+    
+    fs.writeFileSync(envPath, envContent);
+    console.log('✅ Treasury private key saved to .env file');
+    console.log('🔄 Please restart the server for changes to take effect');
+    console.log('🚰 Fund this wallet with devnet SOL: https://faucet.solana.com');
+    console.log('📍 Treasury address:', treasuryKeypair.publicKey.toBase58());
+  } catch (error) {
+    console.error('❌ Failed to save to .env:', error);
+    console.log('⚠️ Please manually add this to server/.env:');
+    console.log(`TREASURY_PRIVATE_KEY=${privateKeyBase58}`);
+  }
 }
 
 if (!HELIUS_API_KEY) {
@@ -96,6 +131,24 @@ const connection = new Connection(RPC_URL, 'confirmed');
 
 // ✅ FIX: Remove TipLink initialization - we'll use the static create() method instead
 // TipLink doesn't need to be initialized with a client, we use it directly
+
+// --- SUPPORTED TOKENS ---
+const SUPPORTED_TOKENS = [
+  {
+    mint: 'So11111111111111111111111111111111111111112', // Native SOL (wrapped)
+    symbol: 'SOL',
+    name: 'Solana',
+    decimals: 9,
+    isNative: true
+  },
+  {
+    mint: 'Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr', // Devnet USDC
+    symbol: 'USDC',
+    name: 'USD Coin (Devnet)',
+    decimals: 6,
+    isNative: false
+  }
+];
 
 // --- ROUTES ---
 
@@ -153,33 +206,18 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
 });
 
 
-// Get treasury wallet info (public key for deposits)
-app.get('/api/treasury/info', (req, res) => {
-  res.json({
-    public_key: treasuryKeypair.publicKey.toBase58(),
-    message: 'Send SOL to this address to add funds to your gifting balance'
-  });
+// Get supported tokens
+app.get('/api/tokens', (req, res) => {
+  res.json({ tokens: SUPPORTED_TOKENS });
 });
 
-// 🚧 DEVELOPMENT ONLY: Add test balance
-app.post('/api/treasury/add-test-balance', (req, res) => {
-  const { privy_did, amount } = req.body;
-  
-  if (!privy_did || !amount) {
-    return res.status(400).json({ error: 'Missing required fields' });
-  }
-
-  const user = users.find(u => u.privy_did === privy_did);
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-
-  user.balance += amount;
-  console.log(`💰 Test: Added ${amount} SOL to ${user.email}. New balance: ${user.balance}`);
-  
+// Get treasury wallet info (public key for deposits)
+app.get('/api/treasury/info', (req, res) => {
+  const publicKey = treasuryKeypair.publicKey.toBase58();
+  console.log('📍 Treasury wallet address requested:', publicKey);
   res.json({
-    success: true,
-    balance: user.balance
+    public_key: publicKey,
+    message: 'Send devnet SOL to this address to fund the treasury'
   });
 });
 
@@ -196,6 +234,25 @@ app.get('/api/treasury/balance', authenticateToken, (req: AuthRequest, res) => {
   }
 
   res.json({ balance: user.balance });
+});
+
+// Add test balance (development only - remove in production!)
+app.post('/api/treasury/add-test-balance', async (req, res) => {
+  const { privy_did, amount } = req.body;
+  
+  if (!privy_did || !amount) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  const user = users.find(u => u.privy_did === privy_did);
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  user.balance += amount;
+  console.log(`🧪 Test: Added ${amount} SOL to ${user.email}. New balance: ${user.balance}`);
+
+  res.json({ success: true, new_balance: user.balance });
 });
 
 // Deposit funds (user sends SOL to treasury, we credit their balance)
@@ -260,12 +317,13 @@ app.post('/api/treasury/deposit', authenticateToken, async (req: AuthRequest, re
   }
 });
 
+// Create and fund gift (treasury does everything)
 app.post('/api/gifts/create', async (req, res) => {
-  const { sender_did, recipient_email, token_address, amount, message } = req.body;
+  const { sender_did, recipient_email, token_mint, amount, message } = req.body;
 
-  console.log('🎁 Creating gift:', { sender_did, recipient_email, token_address, amount });
+  console.log('🎁 Creating gift:', { sender_did, recipient_email, token_mint, amount });
 
-  if (!recipient_email || !token_address || !amount || !sender_did) {
+  if (!recipient_email || !token_mint || !amount || !sender_did) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
@@ -275,10 +333,16 @@ app.post('/api/gifts/create', async (req, res) => {
     return res.status(404).json({ error: 'User not found' });
   }
 
-  // Check if sender has sufficient balance
-  if (sender.balance < amount) {
+  // Find token info
+  const tokenInfo = SUPPORTED_TOKENS.find(t => t.mint === token_mint);
+  if (!tokenInfo) {
+    return res.status(400).json({ error: 'Unsupported token' });
+  }
+
+  // Check sender's treasury balance (only for SOL)
+  if (tokenInfo.isNative && sender.balance < amount) {
     return res.status(400).json({ 
-      error: 'Insufficient balance',
+      error: 'Insufficient treasury balance',
       required: amount,
       available: sender.balance
     });
@@ -292,41 +356,92 @@ app.post('/api/gifts/create', async (req, res) => {
     
     console.log('✅ TipLink created:', tiplinkPublicKey.toBase58());
 
-    // Step 2: Fund TipLink from treasury wallet
-    console.log(`💸 Funding TipLink with ${amount} SOL from treasury...`);
-    const transaction = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: treasuryKeypair.publicKey,
-        toPubkey: tiplinkPublicKey,
-        lamports: amount * LAMPORTS_PER_SOL,
-      })
-    );
+    let signature: string;
 
-    const signature = await sendAndConfirmTransaction(
-      connection,
-      transaction,
-      [treasuryKeypair],
-      { commitment: 'confirmed' }
-    );
+    // Step 2: Fund TipLink from treasury wallet
+    if (tokenInfo.isNative) {
+      // Native SOL transfer
+      console.log(`💸 Funding TipLink with ${amount} SOL from treasury...`);
+      const transaction = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: treasuryKeypair.publicKey,
+          toPubkey: tiplinkPublicKey,
+          lamports: amount * LAMPORTS_PER_SOL,
+        })
+      );
+
+      signature = await sendAndConfirmTransaction(
+        connection,
+        transaction,
+        [treasuryKeypair],
+        { commitment: 'confirmed' }
+      );
+    } else {
+      // SPL Token transfer
+      console.log(`💸 Funding TipLink with ${amount} ${tokenInfo.symbol} from treasury...`);
+      
+      const mintPubkey = new PublicKey(token_mint);
+      const treasuryATA = await getAssociatedTokenAddress(mintPubkey, treasuryKeypair.publicKey);
+      const tiplinkATA = await getAssociatedTokenAddress(mintPubkey, tiplinkPublicKey);
+
+      const instructions = [];
+      
+      // Create TipLink's associated token account if it doesn't exist
+      const tiplinkAccountInfo = await connection.getAccountInfo(tiplinkATA);
+      if (!tiplinkAccountInfo) {
+        instructions.push(
+          createAssociatedTokenAccountInstruction(
+            treasuryKeypair.publicKey,
+            tiplinkATA,
+            tiplinkPublicKey,
+            mintPubkey
+          )
+        );
+      }
+
+      // Transfer SPL tokens
+      instructions.push(
+        createTransferInstruction(
+          treasuryATA,
+          tiplinkATA,
+          treasuryKeypair.publicKey,
+          amount * (10 ** tokenInfo.decimals)
+        )
+      );
+
+      const transaction = new Transaction().add(...instructions);
+      signature = await sendAndConfirmTransaction(
+        connection,
+        transaction,
+        [treasuryKeypair],
+        { commitment: 'confirmed' }
+      );
+    }
     
     console.log('✅ TipLink funded! Transaction:', signature);
 
-    // Step 3: Deduct from sender's balance
-    sender.balance -= amount;
-    console.log(`💰 Deducted ${amount} SOL from ${sender.email}. New balance: ${sender.balance}`);
+    // Step 3: Deduct from sender's treasury balance (only for SOL)
+    if (tokenInfo.isNative) {
+      sender.balance -= amount;
+      console.log(`💰 Deducted ${amount} SOL from ${sender.email}. New balance: ${sender.balance}`);
+    }
 
     // Step 4: Create gift record
+    const giftId = `gift_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const newGift: Gift = {
-      id: String(gifts.length + 1),
+      id: giftId,
       sender_did,
+      sender_email: sender.email,
       recipient_email,
-      token_address,
+      token_mint,
+      token_symbol: tokenInfo.symbol,
+      token_decimals: tokenInfo.decimals,
       amount,
       message: message || '',
-      token_symbol: 'SOL',
       status: GiftStatus.SENT,
       tiplink_url: tiplinkUrl,
-      tiplink_id: tiplinkPublicKey.toBase58(),
+      tiplink_public_key: tiplinkPublicKey.toBase58(),
+      transaction_signature: signature,
       created_at: new Date().toISOString()
     };
 
@@ -334,10 +449,11 @@ app.post('/api/gifts/create', async (req, res) => {
     
     console.log('✅ Gift created successfully:', newGift.id);
     
-    // ✅ Return all fields including transaction signature
+    // Return claim URL
+    const claimUrl = `/claim/${giftId}`;
     res.status(201).json({ 
-      tiplink_url: tiplinkUrl,
       gift_id: newGift.id,
+      claim_url: claimUrl,
       tiplink_public_key: tiplinkPublicKey.toBase58(),
       signature: signature,
       new_balance: sender.balance
@@ -356,41 +472,144 @@ app.get('/api/gifts/history', /* authenticateToken, */ (req: AuthRequest, res) =
   res.json(userGifts);
 });
 
-app.post('/api/gifts/claim', /* authenticateToken, */ (req: AuthRequest, res) => {
-  const claimer_did = req.userId!;
-  const { tipLinkId, claimer_wallet_address } = req.body;
-
-  if (!tipLinkId || !claimer_wallet_address) {
-    return res.status(400).json({ error: 'Missing required fields' });
-  }
-
-  const gift = gifts.find(g => g.tiplink_id === tipLinkId);
-
-  if (!gift) {
-    return res.status(404).json({ error: 'Gift not found' });
-  }
-
-  if (gift.status !== GiftStatus.SENT) {
-    return res.status(400).json({ error: 'Gift has already been claimed or is expired.' });
-  }
-
-  gift.status = GiftStatus.CLAIMED;
-  gift.claimed_at = new Date().toISOString();
-  
-  res.json({ success: true });
-});
-
 // ============================================
 // PUBLIC ROUTES (No Authentication Required)
 // ============================================
 
-app.get('/api/gifts/info/:tipLinkId', (req, res) => {
-  const gift = gifts.find(g => g.tiplink_id === req.params.tipLinkId);
+// Get gift info by ID (public - for claim page)
+app.get('/api/gifts/:giftId', (req, res) => {
+  const { giftId } = req.params;
+  const gift = gifts.find(g => g.id === giftId);
   
-  if (gift) {
-    res.json(gift);
-  } else {
-    res.status(404).json({ error: 'Gift not found' });
+  if (!gift) {
+    return res.status(404).json({ error: 'Gift not found' });
+  }
+
+  // Return public info only (hide sensitive data)
+  res.json({
+    amount: gift.amount,
+    token_symbol: gift.token_symbol,
+    sender_email: gift.sender_email,
+    message: gift.message,
+    status: gift.status,
+    created_at: gift.created_at
+  });
+});
+
+// Claim a gift (requires Privy authentication via recipient)
+app.post('/api/gifts/:giftId/claim', async (req, res) => {
+  const { giftId } = req.params;
+  const { recipient_did, recipient_wallet } = req.body;
+
+  console.log('🎁 Claiming gift:', { giftId, recipient_did, recipient_wallet });
+
+  if (!recipient_did || !recipient_wallet) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  // Find the gift
+  const gift = gifts.find(g => g.id === giftId);
+  if (!gift) {
+    return res.status(404).json({ error: 'Gift not found' });
+  }
+
+  // Check if already claimed
+  if (gift.status !== GiftStatus.SENT) {
+    return res.status(400).json({ error: 'Gift has already been claimed or is expired' });
+  }
+
+  try {
+    // Load the TipLink
+    const tipLink = await TipLink.fromUrl(new URL(gift.tiplink_url));
+    console.log('✅ TipLink loaded:', tipLink.keypair.publicKey.toBase58());
+
+    const recipientPubkey = new PublicKey(recipient_wallet);
+    const tokenInfo = SUPPORTED_TOKENS.find(t => t.mint === gift.token_mint);
+    
+    if (!tokenInfo) {
+      return res.status(400).json({ error: 'Invalid token' });
+    }
+
+    let signature: string;
+
+    // Transfer from TipLink → Recipient
+    if (tokenInfo.isNative) {
+      // Native SOL transfer
+      console.log(`💸 Transferring ${gift.amount} SOL to recipient...`);
+      
+      const transaction = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: tipLink.keypair.publicKey,
+          toPubkey: recipientPubkey,
+          lamports: gift.amount * LAMPORTS_PER_SOL,
+        })
+      );
+
+      signature = await sendAndConfirmTransaction(
+        connection,
+        transaction,
+        [tipLink.keypair],
+        { commitment: 'confirmed' }
+      );
+    } else {
+      // SPL Token transfer
+      console.log(`💸 Transferring ${gift.amount} ${gift.token_symbol} to recipient...`);
+      
+      const mintPubkey = new PublicKey(gift.token_mint);
+      const tiplinkATA = await getAssociatedTokenAddress(mintPubkey, tipLink.keypair.publicKey);
+      const recipientATA = await getAssociatedTokenAddress(mintPubkey, recipientPubkey);
+
+      const instructions = [];
+      
+      // Create recipient's associated token account if it doesn't exist
+      const recipientAccountInfo = await connection.getAccountInfo(recipientATA);
+      if (!recipientAccountInfo) {
+        instructions.push(
+          createAssociatedTokenAccountInstruction(
+            tipLink.keypair.publicKey,
+            recipientATA,
+            recipientPubkey,
+            mintPubkey
+          )
+        );
+      }
+
+      // Transfer SPL tokens
+      instructions.push(
+        createTransferInstruction(
+          tiplinkATA,
+          recipientATA,
+          tipLink.keypair.publicKey,
+          gift.amount * (10 ** gift.token_decimals)
+        )
+      );
+
+      const transaction = new Transaction().add(...instructions);
+      signature = await sendAndConfirmTransaction(
+        connection,
+        transaction,
+        [tipLink.keypair],
+        { commitment: 'confirmed' }
+      );
+    }
+
+    console.log('✅ Gift claimed! Transaction:', signature);
+
+    // Update gift status
+    gift.status = GiftStatus.CLAIMED;
+    gift.claimed_at = new Date().toISOString();
+    gift.claimed_by = recipient_did;
+    gift.claim_signature = signature;
+
+    res.json({
+      success: true,
+      signature,
+      amount: gift.amount,
+      token_symbol: gift.token_symbol
+    });
+  } catch (error: any) {
+    console.error('❌ Error claiming gift:', error);
+    res.status(500).json({ error: 'Failed to claim gift', details: error?.message });
   }
 });
 

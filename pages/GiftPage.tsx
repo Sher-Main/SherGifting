@@ -1,34 +1,31 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { heliusService, giftService } from '../services/api';
-import { TokenBalance } from '../types';
+import { tokenService, giftService, treasuryService } from '../services/api';
+import { Token } from '../types';
 import Spinner from '../components/Spinner';
 import { ArrowLeftIcon } from '../components/icons';
-import { usePrivy, useWallets } from '@privy-io/react-auth';
-import { PublicKey } from '@solana/web3.js';
-import { createTransferToTipLinkTransaction } from '../services/solana';
 import QRCode from 'qrcode';
 
 const GiftPage: React.FC = () => {
-    const { user } = useAuth();
+    const { user, refreshUser } = useAuth();
     const navigate = useNavigate();
-    const { wallets } = useWallets(); // ✅ Use this instead of useSolanaWallets
-    const [balances, setBalances] = useState<TokenBalance[]>([]);
-    const [isLoadingBalances, setIsLoadingBalances] = useState(true);
+    const [tokens, setTokens] = useState<Token[]>([]);
+    const [selectedToken, setSelectedToken] = useState<Token | null>(null);
+    const [isLoadingTokens, setIsLoadingTokens] = useState(true);
     const [isSending, setIsSending] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
+    const [treasuryAddress, setTreasuryAddress] = useState<string>('');
     
     const [recipientEmail, setRecipientEmail] = useState('');
-    const [selectedTokenAddress, setSelectedTokenAddress] = useState('');
     const [amount, setAmount] = useState('');
     const [message, setMessage] = useState('');
     
     // Success modal state
     const [showSuccessModal, setShowSuccessModal] = useState(false);
     const [giftDetails, setGiftDetails] = useState<{
-        tiplink_url: string;
+        claim_url: string;
         amount: string;
         token: string;
         recipient: string;
@@ -37,29 +34,38 @@ const GiftPage: React.FC = () => {
     } | null>(null);
 
     useEffect(() => {
-        const fetchBalances = async () => {
-            if (!user?.wallet_address) return;
-            setIsLoadingBalances(true);
+        const fetchTokens = async () => {
+            setIsLoadingTokens(true);
             try {
-                const fetchedBalances = await heliusService.getTokenBalances(user.wallet_address);
-                const filteredBalances = fetchedBalances.filter(b => b.balance > 0);
-                setBalances(filteredBalances);
-                if (filteredBalances.length > 0) {
-                    setSelectedTokenAddress(filteredBalances[0].address);
+                const supportedTokens = await tokenService.getSupportedTokens();
+                setTokens(supportedTokens);
+                if (supportedTokens.length > 0) {
+                    setSelectedToken(supportedTokens[0]); // Default to SOL
                 }
             } catch (e) {
-                setError('Failed to fetch token balances.');
+                setError('Failed to fetch supported tokens.');
                 console.error(e);
             } finally {
-                setIsLoadingBalances(false);
+                setIsLoadingTokens(false);
             }
         };
-        fetchBalances();
-    }, [user]);
-    
-    const selectedToken = balances.find(b => b.address === selectedTokenAddress);
+        fetchTokens();
+    }, []);
 
-    // ✅ REPLACE your handleSendGift with this complete version
+    useEffect(() => {
+        const fetchTreasuryInfo = async () => {
+            try {
+                const response = await fetch('/api/treasury/info');
+                const data = await response.json();
+                setTreasuryAddress(data.public_key);
+                console.log('📍 Treasury wallet address:', data.public_key);
+            } catch (e) {
+                console.error('Failed to fetch treasury info:', e);
+            }
+        };
+        fetchTreasuryInfo();
+    }, []);
+
     const handleSendGift = async (e: React.FormEvent) => {
         e.preventDefault();
         
@@ -79,8 +85,8 @@ const GiftPage: React.FC = () => {
             return;
         }
         
-        // ✅ Check treasury balance instead of wallet balance
-        if (numericAmount > user.balance) {
+        // Check treasury balance
+        if (selectedToken.isNative && numericAmount > user.balance) {
             setError(`Insufficient treasury balance. You have ${user.balance} SOL available for gifting.`);
             return;
         }
@@ -90,25 +96,24 @@ const GiftPage: React.FC = () => {
         setSuccessMessage(null);
 
         try {
-            // ✅ NEW APPROACH: Backend handles everything with treasury wallet!
-            // No need to access user's wallet - backend funds TipLink from treasury
-            console.log('📦 Creating and funding gift via backend treasury...');
+            console.log('🎁 Creating and funding gift via treasury...');
             
             const createResponse = await giftService.createGift({
                 recipient_email: recipientEmail,
-                token_address: selectedTokenAddress,
+                token_mint: selectedToken.mint,
                 amount: numericAmount,
                 message: message,
                 sender_did: user.privy_did,
             });
 
-            const { tiplink_public_key, tiplink_url, gift_id, signature, new_balance } = createResponse;
-            console.log('✅ Gift created and funded! TipLink:', tiplink_public_key);
+            const { claim_url, gift_id, signature, new_balance } = createResponse;
+            console.log('✅ Gift created and funded! Gift ID:', gift_id);
             console.log('✅ Transaction signature:', signature);
             console.log('💰 New balance:', new_balance);
 
-            // Generate QR code for the TipLink
-            const qrCodeDataUrl = await QRCode.toDataURL(tiplink_url, {
+            // Generate QR code for the claim URL
+            const fullClaimUrl = `${window.location.origin}${claim_url}`;
+            const qrCodeDataUrl = await QRCode.toDataURL(fullClaimUrl, {
                 width: 300,
                 margin: 2,
                 color: {
@@ -119,7 +124,7 @@ const GiftPage: React.FC = () => {
 
             // Set gift details and show success modal
             setGiftDetails({
-                tiplink_url,
+                claim_url: fullClaimUrl,
                 amount: numericAmount.toString(),
                 token: selectedToken.symbol,
                 recipient: recipientEmail,
@@ -128,6 +133,9 @@ const GiftPage: React.FC = () => {
             });
             setShowSuccessModal(true);
             
+            // Update user balance
+            await refreshUser();
+            
             // Clear form
             setRecipientEmail('');
             setAmount('');
@@ -135,9 +143,22 @@ const GiftPage: React.FC = () => {
             
         } catch (err: any) {
             console.error('❌ Error creating gift:', err);
-            setError(err.message || 'Failed to send gift. Please try again.');
+            setError(err.response?.data?.error || err.message || 'Failed to send gift. Please try again.');
         } finally {
             setIsSending(false);
+        }
+    };
+
+    const handleAddTestBalance = async () => {
+        if (!user) return;
+        
+        try {
+            const result = await treasuryService.addTestBalance(user.privy_did, 5);
+            await refreshUser();
+            setSuccessMessage(`Added 5 SOL test balance! New balance: ${result.new_balance} SOL`);
+            setTimeout(() => setSuccessMessage(null), 3000);
+        } catch (err: any) {
+            setError('Failed to add test balance');
         }
     };
 
@@ -156,11 +177,19 @@ const GiftPage: React.FC = () => {
         const subject = encodeURIComponent('You received a crypto gift! 🎁');
         const body = encodeURIComponent(
             `You've received ${giftDetails.amount} ${giftDetails.token}!\n\n` +
-            `Click here to claim your gift:\n${giftDetails.tiplink_url}\n\n` +
+            `Click here to claim your gift:\n${giftDetails.claim_url}\n\n` +
             `Happy gifting! 🎉`
         );
         window.open(`mailto:${giftDetails.recipient}?subject=${subject}&body=${body}`, '_blank');
     };
+
+    if (isLoadingTokens) {
+        return (
+            <div className="flex justify-center items-center h-screen">
+                <Spinner />
+            </div>
+        );
+    }
 
     return (
         <div className="animate-fade-in">
@@ -191,12 +220,12 @@ const GiftPage: React.FC = () => {
                             <div className="flex gap-2">
                                 <input
                                     type="text"
-                                    value={giftDetails.tiplink_url}
+                                    value={giftDetails.claim_url}
                                     readOnly
                                     className="flex-1 bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2 text-white text-sm"
                                 />
                                 <button
-                                    onClick={() => copyToClipboard(giftDetails.tiplink_url)}
+                                    onClick={() => copyToClipboard(giftDetails.claim_url)}
                                     className="bg-sky-500 hover:bg-sky-600 text-white px-4 py-2 rounded-lg transition-colors"
                                 >
                                     Copy
@@ -251,142 +280,160 @@ const GiftPage: React.FC = () => {
                 <ArrowLeftIcon className="w-5 h-5" />
                 <span>Back</span>
             </button>
-            <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-8 shadow-lg max-w-lg mx-auto">
-                <h1 className="text-3xl font-bold text-center mb-4">Send a Gift</h1>
+            
+            <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-8 shadow-lg">
+                <h1 className="text-3xl font-bold text-center mb-6">Send a Gift 🎁</h1>
                 
-                {/* Treasury Balance Display */}
+                {/* Treasury Balance Info */}
                 <div className="bg-gradient-to-r from-sky-500/10 to-purple-500/10 border border-sky-500/30 rounded-lg p-4 mb-6">
-                    <div className="flex justify-between items-center mb-3">
-                        <span className="text-slate-300 text-sm">Gifting Balance:</span>
-                        <span className="text-2xl font-bold text-white">{user?.balance || 0} SOL</span>
-                    </div>
-                    {user?.balance === 0 && (
-                        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-3">
-                            <p className="text-yellow-200 text-xs mb-2">
-                                ⚠️ You need to deposit SOL to send gifts. Your wallet has funds but they need to be transferred to the gifting system.
-                            </p>
-                            <div className="grid grid-cols-2 gap-2">
-                                <button
-                                    onClick={() => navigate('/deposit')}
-                                    className="bg-sky-500 hover:bg-sky-600 text-white font-bold py-2 px-4 rounded-lg transition-colors text-sm"
-                                >
-                                    💰 Deposit SOL
-                                </button>
-                                <button
-                                    onClick={async () => {
-                                        try {
-                                            const response = await fetch('/api/treasury/add-test-balance', {
-                                                method: 'POST',
-                                                headers: { 'Content-Type': 'application/json' },
-                                                body: JSON.stringify({ 
-                                                    privy_did: user.privy_did, 
-                                                    amount: 5 
-                                                })
-                                            });
-                                            const data = await response.json();
-                                            if (data.success) {
-                                                setSuccessMessage(`Added 5 SOL to gifting balance!`);
-                                                // Reload page to refresh balance
-                                                window.location.reload();
-                                            }
-                                        } catch (e) {
-                                            setError('Failed to add balance');
-                                        }
-                                    }}
-                                    className="bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-2 px-4 rounded-lg transition-colors text-sm"
-                                >
-                                    🧪 Test Mode
-                                </button>
+                    <div>
+                        <div className="flex justify-between items-center mb-3">
+                            <div>
+                                <p className="text-slate-400 text-sm">Treasury Balance</p>
+                                <p className="text-2xl font-bold text-white">{user?.balance || 0} SOL</p>
                             </div>
+                            <button
+                                onClick={handleAddTestBalance}
+                                className="bg-purple-500 hover:bg-purple-600 text-white text-sm px-4 py-2 rounded-lg transition-colors whitespace-nowrap"
+                            >
+                                🧪 Add Test (Mock)
+                            </button>
+                        </div>
+                        {treasuryAddress && (
+                            <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                                <p className="text-blue-200 text-xs mb-2">
+                                    💡 <strong>For REAL transactions:</strong> Send devnet SOL to the treasury wallet:
+                                </p>
+                                <div className="flex gap-2 items-center">
+                                    <code className="flex-1 bg-slate-900/50 px-2 py-1 rounded text-white text-xs break-all">
+                                        {treasuryAddress}
+                                    </code>
+                                    <button
+                                        onClick={() => copyToClipboard(treasuryAddress)}
+                                        className="bg-sky-500 hover:bg-sky-600 text-white px-2 py-1 rounded text-xs whitespace-nowrap"
+                                    >
+                                        Copy
+                                    </button>
+                                </div>
+                                <p className="text-blue-200 text-xs mt-2">
+                                    Get devnet SOL: <a href="https://faucet.solana.com" target="_blank" rel="noopener noreferrer" className="underline">faucet.solana.com</a>
+                                </p>
+                            </div>
+                        )}
+                    </div>
+                    {user && user.balance === 0 && (
+                        <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                            <p className="text-yellow-200 text-sm">
+                                ⚠️ Your gifting balance is 0. Either add test balance (mock) or fund the treasury wallet with real devnet SOL.
+                            </p>
                         </div>
                     )}
-                    <p className="text-xs text-slate-400">
-                        💡 Deposit SOL from your wallet to send gifts without signing each time.
-                    </p>
                 </div>
                 
-                {isLoadingBalances ? (
-                    <div className="flex justify-center items-center h-40"><Spinner /></div>
-                ) : balances.length === 0 ? (
-                    <p className="text-center text-slate-400">You don't have any tokens to send. Please add funds first.</p>
-                ) : (
-                    <form onSubmit={handleSendGift} className="space-y-6">
-                        <div>
-                            <label htmlFor="recipientEmail" className="block text-sm font-medium text-slate-300 mb-2">Recipient's Email</label>
-                            <input
-                                type="email"
-                                id="recipientEmail"
-                                value={recipientEmail}
-                                onChange={(e) => setRecipientEmail(e.target.value)}
-                                required
-                                className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
-                                placeholder="friend@example.com"
-                            />
-                        </div>
-
-                        <div className="grid grid-cols-3 gap-4">
-                             <div className="col-span-2">
-                                <label htmlFor="amount" className="block text-sm font-medium text-slate-300 mb-2">Amount</label>
-                                <input
-                                    type="number"
-                                    id="amount"
-                                    value={amount}
-                                    onChange={(e) => setAmount(e.target.value)}
-                                    required
-                                    min="0"
-                                    step="any"
-                                    className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
-                                    placeholder="0.00"
-                                />
-                                {selectedToken && <p className="text-xs text-slate-400 mt-1">Balance: {selectedToken.balance.toLocaleString(undefined, {maximumFractionDigits: 6})} {selectedToken.symbol}</p>}
-                            </div>
-                            <div>
-                                <label htmlFor="token" className="block text-sm font-medium text-slate-300 mb-2">Token</label>
-                                <select
-                                    id="token"
-                                    value={selectedTokenAddress}
-                                    onChange={(e) => setSelectedTokenAddress(e.target.value)}
-                                    required
-                                    className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition h-[50px]"
-                                >
-                                    {balances.map(token => (
-                                        <option key={token.address} value={token.address}>{token.symbol}</option>
-                                    ))}
-                                </select>
-                            </div>
-                        </div>
-
-                         <div>
-                            <label htmlFor="message" className="block text-sm font-medium text-slate-300 mb-2">Message (Optional)</label>
-                            <textarea
-                                id="message"
-                                value={message}
-                                onChange={(e) => setMessage(e.target.value)}
-                                rows={3}
-                                className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
-                                placeholder="Happy Birthday!"
-                            />
-                        </div>
-                        
-                        {error && <p className="text-red-400 text-sm text-center">{error}</p>}
-                        {successMessage && <p className="text-green-400 text-sm text-center">{successMessage}</p>}
-
-                        <button
-                            type="submit"
-                            disabled={isSending}
-                            className="w-full bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-600 hover:to-cyan-500 disabled:opacity-50 text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 ease-in-out flex items-center justify-center text-lg shadow-lg"
+                <form onSubmit={handleSendGift} className="space-y-6">
+                    {/* Token Selector */}
+                    <div>
+                        <label htmlFor="token" className="block text-sm font-medium text-slate-300 mb-2">
+                            Token
+                        </label>
+                        <select
+                            id="token"
+                            value={selectedToken?.mint || ''}
+                            onChange={(e) => {
+                                const token = tokens.find(t => t.mint === e.target.value);
+                                setSelectedToken(token || null);
+                            }}
+                            className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
                         >
-                            {isSending ? (
-                                <>
-                                    <Spinner size="6" color="border-white" />
-                                    <span className="ml-3">Sending...</span>
-                                </>
-                            ) : (
-                                'Send Gift'
-                            )}
-                        </button>
-                    </form>
-                )}
+                            {tokens.map(token => (
+                                <option key={token.mint} value={token.mint}>
+                                    {token.symbol} - {token.name}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    {/* Recipient Email */}
+                    <div>
+                        <label htmlFor="recipientEmail" className="block text-sm font-medium text-slate-300 mb-2">
+                            Recipient Email
+                        </label>
+                        <input
+                            type="email"
+                            id="recipientEmail"
+                            value={recipientEmail}
+                            onChange={(e) => setRecipientEmail(e.target.value)}
+                            required
+                            placeholder="recipient@example.com"
+                            className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
+                        />
+                    </div>
+
+                    {/* Amount */}
+                    <div>
+                        <label htmlFor="amount" className="block text-sm font-medium text-slate-300 mb-2">
+                            Amount ({selectedToken?.symbol || 'Token'})
+                        </label>
+                        <input
+                            type="number"
+                            id="amount"
+                            value={amount}
+                            onChange={(e) => setAmount(e.target.value)}
+                            required
+                            min="0"
+                            step="0.000001"
+                            placeholder="0.00"
+                            className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
+                        />
+                        {selectedToken?.isNative && user && (
+                            <p className="text-xs text-slate-400 mt-2">
+                                Available: {user.balance} {selectedToken.symbol}
+                            </p>
+                        )}
+                    </div>
+
+                    {/* Message */}
+                    <div>
+                        <label htmlFor="message" className="block text-sm font-medium text-slate-300 mb-2">
+                            Message (Optional)
+                        </label>
+                        <textarea
+                            id="message"
+                            value={message}
+                            onChange={(e) => setMessage(e.target.value)}
+                            rows={3}
+                            placeholder="Add a personal message..."
+                            className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition resize-none"
+                        />
+                    </div>
+
+                    {error && (
+                        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+                            <p className="text-red-400 text-sm">{error}</p>
+                        </div>
+                    )}
+                    
+                    {successMessage && (
+                        <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-3">
+                            <p className="text-green-400 text-sm">{successMessage}</p>
+                        </div>
+                    )}
+
+                    <button
+                        type="submit"
+                        disabled={isSending || !user || user.balance === 0}
+                        className="w-full bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-600 hover:to-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 ease-in-out flex items-center justify-center text-lg shadow-lg"
+                    >
+                        {isSending ? (
+                            <>
+                                <Spinner size="6" color="border-white" />
+                                <span className="ml-3">Sending Gift...</span>
+                            </>
+                        ) : (
+                            '🎁 Send Gift'
+                        )}
+                    </button>
+                </form>
             </div>
         </div>
     );
