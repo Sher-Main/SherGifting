@@ -2,7 +2,7 @@
 import React from 'react';
 import { useAuth } from '../context/AuthContext';
 import { NavLink } from 'react-router-dom';
-import { GiftIcon, HistoryIcon, WalletIcon } from './icons';
+import { GiftIcon, HistoryIcon, WalletIcon, ArrowDownIcon } from './icons';
 
 const Header: React.FC = () => {
   const { user, logout } = useAuth();
@@ -28,6 +28,7 @@ const Header: React.FC = () => {
              </NavLink>
             <nav className="hidden md:flex items-center space-x-2 bg-slate-900/50 p-1 rounded-lg">
                 <NavLink to="/" end style={({ isActive }) => isActive ? activeLinkStyle : {}} className="px-3 py-2 rounded-md text-sm font-medium text-slate-300 hover:bg-slate-700 transition-colors flex items-center gap-2"><WalletIcon className="w-4 h-4" /> Portfolio</NavLink>
+                <NavLink to="/deposit" style={({ isActive }) => isActive ? activeLinkStyle : {}} className="px-3 py-2 rounded-md text-sm font-medium text-slate-300 hover:bg-slate-700 transition-colors flex items-center gap-2"><ArrowDownIcon className="w-4 h-4" /> Deposit</NavLink>
                 <NavLink to="/history" style={({ isActive }) => isActive ? activeLinkStyle : {}} className="px-3 py-2 rounded-md text-sm font-medium text-slate-300 hover:bg-slate-700 transition-colors flex items-center gap-2"><HistoryIcon className="w-4 h-4" /> History</NavLink>
             </nav>
           </div>

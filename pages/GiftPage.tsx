@@ -78,8 +78,10 @@ const GiftPage: React.FC = () => {
             setError("Please enter a valid amount.");
             return;
         }
-        if (numericAmount > selectedToken.balance) {
-            setError(`You don't have enough ${selectedToken.symbol}.`);
+        
+        // ✅ Check treasury balance instead of wallet balance
+        if (numericAmount > user.balance) {
+            setError(`Insufficient treasury balance. You have ${user.balance} SOL available for gifting.`);
             return;
         }
 
@@ -88,8 +90,10 @@ const GiftPage: React.FC = () => {
         setSuccessMessage(null);
 
         try {
-            // Step 1: Create gift and TipLink on backend
-            console.log('📦 Creating gift on backend...');
+            // ✅ NEW APPROACH: Backend handles everything with treasury wallet!
+            // No need to access user's wallet - backend funds TipLink from treasury
+            console.log('📦 Creating and funding gift via backend treasury...');
+            
             const createResponse = await giftService.createGift({
                 recipient_email: recipientEmail,
                 token_address: selectedTokenAddress,
@@ -98,31 +102,10 @@ const GiftPage: React.FC = () => {
                 sender_did: user.privy_did,
             });
 
-            const { tiplink_public_key, tiplink_url, gift_id } = createResponse;
-            console.log('✅ Gift created, TipLink:', tiplink_public_key);
-
-            // Step 2: Get Solana wallet
-            const solanaWallet = wallets.find(w => w.walletClientType === 'privy');
-            if (!solanaWallet) {
-                throw new Error('Solana wallet not found');
-            }
-
-            // Step 3: Send SOL to TipLink wallet
-            console.log('💸 Preparing transaction...');
-            const senderPublicKey = new PublicKey(user.wallet_address);
-            const tiplinkPublicKey = new PublicKey(tiplink_public_key);
-
-            const transaction = await createTransferToTipLinkTransaction(
-                senderPublicKey,
-                tiplinkPublicKey,
-                numericAmount
-            );
-
-            console.log('📝 Signing and sending transaction...');
-            
-            // @ts-ignore - Privy types are incomplete
-            const { signature } = await solanaWallet.sendTransaction(transaction);
-            console.log('✅ Transaction sent:', signature);
+            const { tiplink_public_key, tiplink_url, gift_id, signature, new_balance } = createResponse;
+            console.log('✅ Gift created and funded! TipLink:', tiplink_public_key);
+            console.log('✅ Transaction signature:', signature);
+            console.log('💰 New balance:', new_balance);
 
             // Generate QR code for the TipLink
             const qrCodeDataUrl = await QRCode.toDataURL(tiplink_url, {
@@ -269,7 +252,58 @@ const GiftPage: React.FC = () => {
                 <span>Back</span>
             </button>
             <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-8 shadow-lg max-w-lg mx-auto">
-                <h1 className="text-3xl font-bold text-center mb-6">Send a Gift</h1>
+                <h1 className="text-3xl font-bold text-center mb-4">Send a Gift</h1>
+                
+                {/* Treasury Balance Display */}
+                <div className="bg-gradient-to-r from-sky-500/10 to-purple-500/10 border border-sky-500/30 rounded-lg p-4 mb-6">
+                    <div className="flex justify-between items-center mb-3">
+                        <span className="text-slate-300 text-sm">Gifting Balance:</span>
+                        <span className="text-2xl font-bold text-white">{user?.balance || 0} SOL</span>
+                    </div>
+                    {user?.balance === 0 && (
+                        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-3">
+                            <p className="text-yellow-200 text-xs mb-2">
+                                ⚠️ You need to deposit SOL to send gifts. Your wallet has funds but they need to be transferred to the gifting system.
+                            </p>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button
+                                    onClick={() => navigate('/deposit')}
+                                    className="bg-sky-500 hover:bg-sky-600 text-white font-bold py-2 px-4 rounded-lg transition-colors text-sm"
+                                >
+                                    💰 Deposit SOL
+                                </button>
+                                <button
+                                    onClick={async () => {
+                                        try {
+                                            const response = await fetch('/api/treasury/add-test-balance', {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ 
+                                                    privy_did: user.privy_did, 
+                                                    amount: 5 
+                                                })
+                                            });
+                                            const data = await response.json();
+                                            if (data.success) {
+                                                setSuccessMessage(`Added 5 SOL to gifting balance!`);
+                                                // Reload page to refresh balance
+                                                window.location.reload();
+                                            }
+                                        } catch (e) {
+                                            setError('Failed to add balance');
+                                        }
+                                    }}
+                                    className="bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-2 px-4 rounded-lg transition-colors text-sm"
+                                >
+                                    🧪 Test Mode
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    <p className="text-xs text-slate-400">
+                        💡 Deposit SOL from your wallet to send gifts without signing each time.
+                    </p>
+                </div>
                 
                 {isLoadingBalances ? (
                     <div className="flex justify-center items-center h-40"><Spinner /></div>

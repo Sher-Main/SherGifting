@@ -5,6 +5,7 @@ import LoginPage from './pages/LoginPage';
 import HomePage from './pages/HomePage';
 import AddFundsPage from './pages/AddFundsPage';
 import GiftPage from './pages/GiftPage';
+import DepositPage from './pages/DepositPage';
 import HistoryPage from './pages/HistoryPage';
 import ClaimPage from './pages/ClaimPage';
 import Header from './components/Header';
@@ -36,6 +37,7 @@ const AppContent: React.FC = () => {
           <Route path="/login" element={user ? <Navigate to="/" /> : <LoginPage />} />
           <Route path="/" element={user ? <HomePage /> : <Navigate to="/login" />} />
           <Route path="/add-funds" element={user ? <AddFundsPage /> : <Navigate to="/login" />} />
+          <Route path="/deposit" element={user ? <DepositPage /> : <Navigate to="/login" />} />
           <Route path="/gift" element={user ? <GiftPage /> : <Navigate to="/login" />} />
           <Route path="/history" element={user ? <HistoryPage /> : <Navigate to="/login" />} />
           <Route path="/claim/:tipLinkId" element={<ClaimPage />} />
