@@ -42,6 +42,25 @@ const ClaimPage: React.FC = () => {
         fetchGiftInfo();
     }, [giftId]);
 
+    // Auto-claim after user signs up/logs in
+    useEffect(() => {
+        const autoClaimGift = async () => {
+            // Only auto-claim if:
+            // 1. User is authenticated
+            // 2. User data is loaded
+            // 3. Gift info is loaded
+            // 4. Gift hasn't been claimed yet
+            // 5. Not already in the claiming process
+            // 6. Not already successfully claimed
+            if (authenticated && user && giftInfo && giftInfo.status === 'SENT' && !isClaiming && !claimSuccess) {
+                console.log('🎁 Auto-claiming gift for newly signed-in user...');
+                await handleClaim();
+            }
+        };
+
+        autoClaimGift();
+    }, [authenticated, user, giftInfo]); // Trigger when auth state or user changes
+
     const handleLogin = async () => {
         try {
             await login();

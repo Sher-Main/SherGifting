@@ -472,8 +472,24 @@ app.post('/api/gifts/create', async (req, res) => {
     const updatedLamports = await connection.getBalance(treasuryKeypair.publicKey);
     const updatedBalance = updatedLamports / LAMPORTS_PER_SOL;
     
-    // Return claim URL
+    // TODO: Send email notification to recipient
+    // For now, just log the email details
     const claimUrl = `/claim/${giftId}`;
+    const fullClaimUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}${claimUrl}`;
+    
+    console.log('\n📧 EMAIL NOTIFICATION (not sent - implement email service):');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log(`To: ${recipient_email}`);
+    console.log(`Subject: 🎁 You received ${amount} ${tokenInfo.symbol} from ${sender.email}!`);
+    console.log(`\nMessage:`);
+    console.log(`You've received a crypto gift!`);
+    console.log(`Amount: ${amount} ${tokenInfo.symbol}`);
+    console.log(`From: ${sender.email}`);
+    if (message) console.log(`Message: "${message}"`);
+    console.log(`\nClaim your gift here: ${fullClaimUrl}`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    
+    // Return claim URL
     res.status(201).json({ 
       gift_id: newGift.id,
       claim_url: claimUrl,
