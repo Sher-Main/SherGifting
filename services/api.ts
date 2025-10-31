@@ -65,7 +65,7 @@ export const giftService = {
     claim_url: string;
     tiplink_public_key: string;
     signature: string;
-    new_balance: number;
+    treasury_balance: number;
   }> => {
     const response = await apiClient.post('/gifts/create', giftData);
     return response.data;

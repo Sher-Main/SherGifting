@@ -17,6 +17,7 @@ const GiftPage: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
     const [treasuryAddress, setTreasuryAddress] = useState<string>('');
+    const [treasuryBalance, setTreasuryBalance] = useState<number>(0);
     
     const [recipientEmail, setRecipientEmail] = useState('');
     const [amount, setAmount] = useState('');
@@ -58,7 +59,9 @@ const GiftPage: React.FC = () => {
                 const response = await fetch('/api/treasury/info');
                 const data = await response.json();
                 setTreasuryAddress(data.public_key);
+                setTreasuryBalance(data.balance || 0);
                 console.log('📍 Treasury wallet address:', data.public_key);
+                console.log('💰 Treasury balance:', data.balance, 'SOL');
             } catch (e) {
                 console.error('Failed to fetch treasury info:', e);
             }
@@ -86,8 +89,8 @@ const GiftPage: React.FC = () => {
         }
         
         // Check treasury balance
-        if (selectedToken.isNative && numericAmount > user.balance) {
-            setError(`Insufficient treasury balance. You have ${user.balance} SOL available for gifting.`);
+        if (selectedToken.isNative && numericAmount > treasuryBalance) {
+            setError(`Insufficient treasury balance. Treasury has ${treasuryBalance} SOL available.`);
             return;
         }
 
@@ -106,10 +109,13 @@ const GiftPage: React.FC = () => {
                 sender_did: user.privy_did,
             });
 
-            const { claim_url, gift_id, signature, new_balance } = createResponse;
+            const { claim_url, gift_id, signature, treasury_balance } = createResponse;
             console.log('✅ Gift created and funded! Gift ID:', gift_id);
             console.log('✅ Transaction signature:', signature);
-            console.log('💰 New balance:', new_balance);
+            console.log('💰 Treasury balance:', treasury_balance);
+            
+            // Update local treasury balance
+            setTreasuryBalance(treasury_balance);
 
             // Generate QR code for the claim URL
             const fullClaimUrl = `${window.location.origin}${claim_url}`;
@@ -146,19 +152,6 @@ const GiftPage: React.FC = () => {
             setError(err.response?.data?.error || err.message || 'Failed to send gift. Please try again.');
         } finally {
             setIsSending(false);
-        }
-    };
-
-    const handleAddTestBalance = async () => {
-        if (!user) return;
-        
-        try {
-            const result = await treasuryService.addTestBalance(user.privy_did, 5);
-            await refreshUser();
-            setSuccessMessage(`Added 5 SOL test balance! New balance: ${result.new_balance} SOL`);
-            setTimeout(() => setSuccessMessage(null), 3000);
-        } catch (err: any) {
-            setError('Failed to add test balance');
         }
     };
 
@@ -287,17 +280,10 @@ const GiftPage: React.FC = () => {
                 {/* Treasury Balance Info */}
                 <div className="bg-gradient-to-r from-sky-500/10 to-purple-500/10 border border-sky-500/30 rounded-lg p-4 mb-6">
                     <div>
-                        <div className="flex justify-between items-center mb-3">
-                            <div>
-                                <p className="text-slate-400 text-sm">Treasury Balance</p>
-                                <p className="text-2xl font-bold text-white">{user?.balance || 0} SOL</p>
-                            </div>
-                            <button
-                                onClick={handleAddTestBalance}
-                                className="bg-purple-500 hover:bg-purple-600 text-white text-sm px-4 py-2 rounded-lg transition-colors whitespace-nowrap"
-                            >
-                                🧪 Add Test (Mock)
-                            </button>
+                        <div className="mb-3">
+                            <p className="text-slate-400 text-sm">Treasury Balance</p>
+                            <p className="text-2xl font-bold text-white">{treasuryBalance.toFixed(4)} SOL</p>
+                            <p className="text-xs text-slate-500 mt-1">On-chain balance (real-time)</p>
                         </div>
                         {treasuryAddress && (
                             <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
@@ -321,10 +307,10 @@ const GiftPage: React.FC = () => {
                             </div>
                         )}
                     </div>
-                    {user && user.balance === 0 && (
+                    {treasuryBalance === 0 && (
                         <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
                             <p className="text-yellow-200 text-sm">
-                                ⚠️ Your gifting balance is 0. Either add test balance (mock) or fund the treasury wallet with real devnet SOL.
+                                ⚠️ Treasury balance is 0. Fund the treasury wallet with devnet SOL to send gifts.
                             </p>
                         </div>
                     )}
@@ -385,9 +371,9 @@ const GiftPage: React.FC = () => {
                             placeholder="0.00"
                             className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
                         />
-                        {selectedToken?.isNative && user && (
+                        {selectedToken?.isNative && (
                             <p className="text-xs text-slate-400 mt-2">
-                                Available: {user.balance} {selectedToken.symbol}
+                                Available: {treasuryBalance.toFixed(4)} {selectedToken.symbol}
                             </p>
                         )}
                     </div>
@@ -421,7 +407,7 @@ const GiftPage: React.FC = () => {
 
                     <button
                         type="submit"
-                        disabled={isSending || !user || user.balance === 0}
+                        disabled={isSending || !user || treasuryBalance === 0}
                         className="w-full bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-600 hover:to-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 ease-in-out flex items-center justify-center text-lg shadow-lg"
                     >
                         {isSending ? (

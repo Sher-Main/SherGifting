@@ -212,11 +212,23 @@ app.get('/api/tokens', (req, res) => {
 });
 
 // Get treasury wallet info (public key for deposits)
-app.get('/api/treasury/info', (req, res) => {
+app.get('/api/treasury/info', async (req, res) => {
   const publicKey = treasuryKeypair.publicKey.toBase58();
   console.log('📍 Treasury wallet address requested:', publicKey);
+  
+  // Get actual on-chain balance
+  let balance = 0;
+  try {
+    const lamports = await connection.getBalance(treasuryKeypair.publicKey);
+    balance = lamports / LAMPORTS_PER_SOL;
+    console.log(`💰 Treasury on-chain balance: ${balance} SOL`);
+  } catch (error) {
+    console.error('❌ Error fetching treasury balance:', error);
+  }
+  
   res.json({
     public_key: publicKey,
+    balance: balance,
     message: 'Send devnet SOL to this address to fund the treasury'
   });
 });
@@ -339,13 +351,26 @@ app.post('/api/gifts/create', async (req, res) => {
     return res.status(400).json({ error: 'Unsupported token' });
   }
 
-  // Check sender's treasury balance (only for SOL)
-  if (tokenInfo.isNative && sender.balance < amount) {
-    return res.status(400).json({ 
-      error: 'Insufficient treasury balance',
-      required: amount,
-      available: sender.balance
-    });
+  // Check actual on-chain treasury balance (only for SOL)
+  if (tokenInfo.isNative) {
+    try {
+      const treasuryLamports = await connection.getBalance(treasuryKeypair.publicKey);
+      const treasuryBalance = treasuryLamports / LAMPORTS_PER_SOL;
+      
+      console.log(`💰 Treasury on-chain balance: ${treasuryBalance} SOL, required: ${amount} SOL`);
+      
+      if (treasuryBalance < amount) {
+        return res.status(400).json({ 
+          error: 'Insufficient treasury balance',
+          required: amount,
+          available: treasuryBalance,
+          message: 'Please fund the treasury wallet with more devnet SOL'
+        });
+      }
+    } catch (error: any) {
+      console.error('❌ Error checking treasury balance:', error);
+      return res.status(500).json({ error: 'Failed to check treasury balance' });
+    }
   }
 
   try {
@@ -420,13 +445,7 @@ app.post('/api/gifts/create', async (req, res) => {
     
     console.log('✅ TipLink funded! Transaction:', signature);
 
-    // Step 3: Deduct from sender's treasury balance (only for SOL)
-    if (tokenInfo.isNative) {
-      sender.balance -= amount;
-      console.log(`💰 Deducted ${amount} SOL from ${sender.email}. New balance: ${sender.balance}`);
-    }
-
-    // Step 4: Create gift record
+    // Step 3: Create gift record
     const giftId = `gift_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const newGift: Gift = {
       id: giftId,
@@ -449,6 +468,10 @@ app.post('/api/gifts/create', async (req, res) => {
     
     console.log('✅ Gift created successfully:', newGift.id);
     
+    // Get updated treasury balance
+    const updatedLamports = await connection.getBalance(treasuryKeypair.publicKey);
+    const updatedBalance = updatedLamports / LAMPORTS_PER_SOL;
+    
     // Return claim URL
     const claimUrl = `/claim/${giftId}`;
     res.status(201).json({ 
@@ -456,7 +479,7 @@ app.post('/api/gifts/create', async (req, res) => {
       claim_url: claimUrl,
       tiplink_public_key: tiplinkPublicKey.toBase58(),
       signature: signature,
-      new_balance: sender.balance
+      treasury_balance: updatedBalance
     });
   } catch (error: any) {
     console.error('❌ Error creating gift:', error);
