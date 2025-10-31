@@ -45,6 +45,16 @@ const ClaimPage: React.FC = () => {
     // Auto-claim after user signs up/logs in
     useEffect(() => {
         const autoClaimGift = async () => {
+            console.log('🔍 Auto-claim check:', {
+                authenticated,
+                hasUser: !!user,
+                hasWallet: !!user?.wallet_address,
+                hasGiftInfo: !!giftInfo,
+                giftStatus: giftInfo?.status,
+                isClaiming,
+                claimSuccess
+            });
+            
             // Only auto-claim if:
             // 1. User is authenticated
             // 2. User data is loaded
@@ -52,14 +62,23 @@ const ClaimPage: React.FC = () => {
             // 4. Gift hasn't been claimed yet
             // 5. Not already in the claiming process
             // 6. Not already successfully claimed
-            if (authenticated && user && giftInfo && giftInfo.status === 'SENT' && !isClaiming && !claimSuccess) {
+            if (authenticated && user && user.wallet_address && giftInfo && giftInfo.status === 'SENT' && !isClaiming && !claimSuccess) {
                 console.log('🎁 Auto-claiming gift for newly signed-in user...');
-                await handleClaim();
+                console.log('User wallet:', user.wallet_address);
+                console.log('Gift ID:', giftId);
+                handleClaim();
+            } else {
+                console.log('⏸️ Auto-claim conditions not met');
             }
         };
 
-        autoClaimGift();
-    }, [authenticated, user, giftInfo]); // Trigger when auth state or user changes
+        // Small delay to ensure user data is fully loaded
+        const timer = setTimeout(() => {
+            autoClaimGift();
+        }, 1000);
+
+        return () => clearTimeout(timer);
+    }, [authenticated, user, giftInfo, isClaiming, claimSuccess]); // Trigger when auth state or user changes
 
     const handleLogin = async () => {
         try {
@@ -71,7 +90,26 @@ const ClaimPage: React.FC = () => {
     };
 
     const handleClaim = async () => {
+        console.log('🎯 handleClaim called', { 
+            authenticated, 
+            hasUser: !!user, 
+            giftId,
+            userDid: user?.privy_did,
+            userWallet: user?.wallet_address
+        });
+        
         if (!authenticated || !user || !giftId) {
+            console.error('❌ Cannot claim - missing requirements:', {
+                authenticated,
+                hasUser: !!user,
+                giftId
+            });
+            return;
+        }
+
+        if (!user.wallet_address) {
+            console.error('❌ User wallet address not found!');
+            setError('Wallet not ready. Please refresh the page.');
             return;
         }
 
@@ -94,7 +132,8 @@ const ClaimPage: React.FC = () => {
             await refreshUser();
         } catch (err: any) {
             console.error('❌ Error claiming gift:', err);
-            setError(err.response?.data?.error || 'Failed to claim gift. Please try again.');
+            console.error('Error details:', err.response?.data);
+            setError(err.response?.data?.error || err.message || 'Failed to claim gift. Please try again.');
         } finally {
             setIsClaiming(false);
         }

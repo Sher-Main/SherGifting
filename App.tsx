@@ -1,5 +1,5 @@
 import React from 'react';
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import LoginPage from './pages/LoginPage';
 import HomePage from './pages/HomePage';
@@ -15,11 +15,11 @@ const App: React.FC = () => {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <HashRouter>
+        <BrowserRouter>
           <div className="min-h-screen">
             <AppContent />
           </div>
-        </HashRouter>
+        </BrowserRouter>
       </AuthProvider>
     </ErrorBoundary>
   );

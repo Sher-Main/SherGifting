@@ -10,6 +10,8 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    // Enable HTML5 history mode for BrowserRouter
+    historyApiFallback: true,
   },
   define: {
     global: 'globalThis',

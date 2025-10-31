@@ -559,10 +559,17 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
 
   try {
     // Load the TipLink
+    console.log('📦 Loading TipLink from URL:', gift.tiplink_url);
     const tipLink = await TipLink.fromUrl(new URL(gift.tiplink_url));
     console.log('✅ TipLink loaded:', tipLink.keypair.publicKey.toBase58());
+    
+    // Check TipLink balance
+    const tiplinkBalance = await connection.getBalance(tipLink.keypair.publicKey);
+    console.log('💰 TipLink balance:', tiplinkBalance / LAMPORTS_PER_SOL, 'SOL');
 
     const recipientPubkey = new PublicKey(recipient_wallet);
+    console.log('👤 Recipient wallet:', recipientPubkey.toBase58());
+    
     const tokenInfo = SUPPORTED_TOKENS.find(t => t.mint === gift.token_mint);
     
     if (!tokenInfo) {
@@ -576,11 +583,21 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
       // Native SOL transfer
       console.log(`💸 Transferring ${gift.amount} SOL to recipient...`);
       
+      // Reserve some SOL for transaction fee (5000 lamports = 0.000005 SOL)
+      const FEE_RESERVE = 5000;
+      const transferAmount = (gift.amount * LAMPORTS_PER_SOL) - FEE_RESERVE;
+      
+      if (transferAmount <= 0) {
+        throw new Error('Gift amount too small to cover transaction fee');
+      }
+      
+      console.log(`📊 Transfer details: ${transferAmount / LAMPORTS_PER_SOL} SOL (${gift.amount} SOL - ${FEE_RESERVE / LAMPORTS_PER_SOL} SOL fee reserve)`);
+      
       const transaction = new Transaction().add(
         SystemProgram.transfer({
           fromPubkey: tipLink.keypair.publicKey,
           toPubkey: recipientPubkey,
-          lamports: gift.amount * LAMPORTS_PER_SOL,
+          lamports: transferAmount,
         })
       );
 
