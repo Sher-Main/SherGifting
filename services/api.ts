@@ -47,6 +47,13 @@ export const tokenService = {
   },
 };
 
+export const feeService = {
+  getFeeConfig: async (): Promise<{ fee_wallet_address: string | null; fee_percentage: number }> => {
+    const response = await apiClient.get('/fee-config');
+    return response.data;
+  },
+};
+
 export const tiplinkService = {
   create: async (): Promise<{ tiplink_url: string; tiplink_public_key: string }> => {
     const response = await apiClient.post('/tiplink/create');
@@ -64,6 +71,8 @@ export const giftService = {
     tiplink_url: string;
     tiplink_public_key: string;
     funding_signature: string;
+    token_symbol?: string;
+    token_decimals?: number;
   }): Promise<{ 
     gift_id: string;
     claim_url: string;

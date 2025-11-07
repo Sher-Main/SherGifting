@@ -20,8 +20,10 @@ const LoginPage: React.FC = () => {
     } catch (error) {
       console.error('Login error:', error);
       // If user is already logged in, show logout option
-      if (error.message && error.message.includes('already logged in')) {
-        setShowLogout(true);
+      if (error instanceof Error) {
+        if (error.message && error.message.includes('already logged in')) {
+          setShowLogout(true);
+        }
       }
     }
   };
@@ -59,10 +61,10 @@ const LoginPage: React.FC = () => {
     <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 px-4">
       <div className="max-w-md w-full bg-slate-800/50 border border-slate-700 rounded-2xl p-8 shadow-2xl backdrop-blur-sm">
         <h1 className="text-4xl font-bold text-center mb-2 bg-gradient-to-r from-sky-400 to-cyan-300 bg-clip-text text-transparent">
-          Solana Gifting
+          Crypto Gifting App
         </h1>
         <p className="text-slate-300 text-center mb-8">
-          Send crypto gifts to your friends and family
+          Send crypto as gifts to your friends and family
         </p>
 
         {showLogout ? (
@@ -84,12 +86,23 @@ const LoginPage: React.FC = () => {
             onClick={handleLogin}
             className="w-full bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-600 hover:to-cyan-500 text-white font-bold py-4 px-6 rounded-xl transition-all duration-300 ease-in-out transform hover:scale-105 shadow-lg text-lg"
           >
-            Sign In with Privy
+            Sign in
           </button>
         )}
 
         <p className="text-xs text-slate-400 text-center mt-6">
           By signing in, you agree to our Terms of Service and Privacy Policy
+        </p>
+        <p className="text-xs text-slate-500 text-center mt-4">
+          Powered by{' '}
+          <a 
+            href="https://sher.one" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="text-sky-400 hover:text-sky-300 transition-colors"
+          >
+            Sher
+          </a>
         </p>
       </div>
     </div>

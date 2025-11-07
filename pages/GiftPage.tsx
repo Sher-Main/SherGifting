@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePrivy } from '@privy-io/react-auth';
 import { useSignAndSendTransaction, useWallets } from '@privy-io/react-auth/solana';
-import { tokenService, giftService, tiplinkService, heliusService } from '../services/api';
-import { Token } from '../types';
+import { tokenService, giftService, tiplinkService, heliusService, feeService } from '../services/api';
+import { Token, TokenBalance } from '../types';
 import Spinner from '../components/Spinner';
 import { ArrowLeftIcon } from '../components/icons';
 import QRCode from 'qrcode';
@@ -24,11 +24,25 @@ const GiftPage: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
     const [userBalance, setUserBalance] = useState<number>(0);
+    const [walletBalances, setWalletBalances] = useState<TokenBalance[]>([]);
     const [walletReady, setWalletReady] = useState(false);
+    const [feeWalletAddress, setFeeWalletAddress] = useState<string | null>(null);
+    const [feePercentage, setFeePercentage] = useState<number>(0.001); // Default 0.1%
     
     const [recipientEmail, setRecipientEmail] = useState('');
     const [amount, setAmount] = useState('');
     const [message, setMessage] = useState('');
+    
+    // Confirmation modal state
+    const [showConfirmModal, setShowConfirmModal] = useState(false);
+    const [confirmDetails, setConfirmDetails] = useState<{
+        recipient: string;
+        amount: number;
+        fee: number;
+        total: number;
+        token: string;
+        message: string;
+    } | null>(null);
     
     // Success modal state
     const [showSuccessModal, setShowSuccessModal] = useState(false);
@@ -63,38 +77,74 @@ const GiftPage: React.FC = () => {
     }, [wallets, walletsReady, privyUser]);
 
     useEffect(() => {
-        const fetchTokens = async () => {
+        const fetchTokensAndBalances = async () => {
+            if (!user?.wallet_address) return;
             setIsLoadingTokens(true);
             try {
-                const supportedTokens = await tokenService.getSupportedTokens();
-                setTokens(supportedTokens);
-                if (supportedTokens.length > 0) {
-                    setSelectedToken(supportedTokens[0]); // Default to SOL
+                // Fetch all wallet balances (non-zero tokens only)
+                const balances = await heliusService.getTokenBalances(user.wallet_address);
+                setWalletBalances(balances);
+                
+                // Filter to only non-zero tokens and sort alphabetically
+                const nonZeroTokens = balances
+                    .filter(b => b.balance > 0)
+                    .sort((a, b) => a.symbol.localeCompare(b.symbol))
+                    .map(b => ({
+                        mint: b.address,
+                        symbol: b.symbol,
+                        name: b.name,
+                        decimals: b.decimals,
+                        isNative: b.symbol === 'SOL',
+                    }));
+                
+                setTokens(nonZeroTokens);
+                
+                // Set default selected token (first non-zero token, or SOL if available)
+                if (nonZeroTokens.length > 0) {
+                    const defaultToken = nonZeroTokens.find(t => t.symbol === 'SOL') || nonZeroTokens[0];
+                    setSelectedToken(defaultToken);
+                    
+                    // Set initial balance for selected token
+                    const tokenBalance = balances.find(b => b.symbol === defaultToken.symbol);
+                    setUserBalance(tokenBalance?.balance || 0);
                 }
+                
+                console.log(`💰 Found ${nonZeroTokens.length} token(s) with non-zero balance`);
             } catch (e) {
-                setError('Failed to fetch supported tokens.');
+                setError('Failed to fetch tokens and balances.');
                 console.error(e);
             } finally {
                 setIsLoadingTokens(false);
             }
         };
-        fetchTokens();
-    }, []);
+        fetchTokensAndBalances();
+    }, [user]);
+    
+    // Update balance when token is selected
+    useEffect(() => {
+        if (selectedToken && walletBalances.length > 0) {
+            const tokenBalance = walletBalances.find(b => b.symbol === selectedToken.symbol);
+            setUserBalance(tokenBalance?.balance || 0);
+            console.log(`💰 Balance for ${selectedToken.symbol}:`, tokenBalance?.balance || 0);
+        }
+    }, [selectedToken, walletBalances]);
 
     useEffect(() => {
-        const fetchUserBalance = async () => {
-            if (!user?.wallet_address) return;
+        const fetchFeeConfig = async () => {
             try {
-                const balances = await heliusService.getTokenBalances(user.wallet_address);
-                const solBalance = balances.find(b => b.symbol === 'SOL');
-                setUserBalance(solBalance?.balance || 0);
-                console.log('💰 User balance:', solBalance?.balance || 0, 'SOL');
+                const config = await feeService.getFeeConfig();
+                setFeeWalletAddress(config.fee_wallet_address);
+                setFeePercentage(config.fee_percentage);
+                console.log('💼 Fee config loaded:', {
+                    fee_wallet: config.fee_wallet_address,
+                    fee_percentage: config.fee_percentage * 100 + '%'
+                });
             } catch (e) {
-                console.error('Failed to fetch user balance:', e);
+                console.error('Failed to fetch fee config:', e);
             }
         };
-        fetchUserBalance();
-    }, [user]);
+        fetchFeeConfig();
+    }, []);
 
     const handleSendGift = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -130,15 +180,66 @@ const GiftPage: React.FC = () => {
             return;
         }
         
-        // Check user balance
-        if (selectedToken.isNative && numericAmount > userBalance) {
-            setError(`Insufficient balance. You have ${userBalance.toFixed(4)} SOL available.`);
+        // Calculate fee (0.1% of gift amount)
+        const feeAmount = numericAmount * feePercentage;
+        const totalAmount = numericAmount + feeAmount;
+        
+        // Check user balance (including fee)
+        if (selectedToken.isNative && totalAmount > userBalance) {
+            setError(`Insufficient balance. You need ${totalAmount.toFixed(4)} ${selectedToken.symbol} (${numericAmount.toFixed(4)} ${selectedToken.symbol} gift + ${feeAmount.toFixed(4)} ${selectedToken.symbol} fee). You have ${userBalance.toFixed(4)} ${selectedToken.symbol} available.`);
             return;
         }
+        
+        // For SPL tokens, check if user has enough token balance AND enough SOL for fees
+        if (!selectedToken.isNative) {
+            if (totalAmount > userBalance) {
+                setError(`Insufficient ${selectedToken.symbol} balance. You need ${totalAmount.toFixed(4)} ${selectedToken.symbol} (${numericAmount.toFixed(4)} ${selectedToken.symbol} gift + ${feeAmount.toFixed(4)} ${selectedToken.symbol} fee). You have ${userBalance.toFixed(4)} ${selectedToken.symbol} available.`);
+                return;
+            }
+            
+            // Check SOL balance for transaction fees (need at least 0.01 SOL for fees and rent)
+            const solBalance = walletBalances.find(b => b.symbol === 'SOL')?.balance || 0;
+            const MIN_SOL_FOR_FEES = 0.01; // Minimum SOL needed for transaction fees and rent
+            if (solBalance < MIN_SOL_FOR_FEES) {
+                setError(`Insufficient SOL for transaction fees. You need at least ${MIN_SOL_FOR_FEES} SOL to pay for transaction fees and rent. You have ${solBalance.toFixed(4)} SOL available. Please add more SOL to your wallet.`);
+                return;
+            }
+        }
 
+        // Show confirmation modal first
+        setConfirmDetails({
+            recipient: recipientEmail,
+            amount: numericAmount,
+            fee: feeAmount,
+            total: totalAmount,
+            token: selectedToken.symbol,
+            message: message || '',
+        });
+        setShowConfirmModal(true);
+        return;
+    };
+
+    const handleConfirmSend = async () => {
+        if (!confirmDetails) return;
+        
         setIsSending(true);
         setError(null);
         setSuccessMessage(null);
+        setShowConfirmModal(false);
+
+        const numericAmount = confirmDetails.amount;
+        const feeAmount = confirmDetails.fee;
+        const recipientEmail = confirmDetails.recipient;
+        const message = confirmDetails.message;
+        const tokenSymbol = confirmDetails.token;
+        
+        // Find the token from tokens array
+        const currentToken = tokens.find(t => t.symbol === tokenSymbol) || selectedToken;
+        if (!currentToken) {
+            setError('Token not found. Please refresh the page.');
+            setIsSending(false);
+            return;
+        }
 
         try {
             console.log('🎁 Step 1: Creating TipLink...');
@@ -176,14 +277,189 @@ const GiftPage: React.FC = () => {
             // Step 3: Build transaction using @solana/web3.js (compatible with @solana/kit@3.0.0)
             console.log('📝 Step 3: Building transaction...');
             
-            // Create transaction to fund TipLink
-            const transaction = new Transaction().add(
-                SystemProgram.transfer({
-                    fromPubkey: new PublicKey(embeddedWallet.address),
-                    toPubkey: new PublicKey(tiplink_public_key),
-                    lamports: numericAmount * LAMPORTS_PER_SOL,
-                })
-            );
+            const isNative = currentToken.isNative || currentToken.mint === 'So11111111111111111111111111111111111111112';
+            
+            // Create transaction
+            const transaction = new Transaction();
+            
+            // Add memo instruction to show total amount (for Privy modal display)
+            const totalAmount = numericAmount + feeAmount;
+            const memoText = `Total Transfer: ${totalAmount.toFixed(6)} ${currentToken.symbol} (Gift: ${numericAmount.toFixed(6)} + Fee: ${feeAmount.toFixed(6)})`;
+            const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
+            transaction.add({
+                keys: [{ pubkey: new PublicKey(embeddedWallet.address), isSigner: true, isWritable: false }],
+                programId: MEMO_PROGRAM_ID,
+                data: Buffer.from(memoText, 'utf-8'),
+            });
+            
+            const senderPubkey = new PublicKey(embeddedWallet.address);
+            const tipLinkPubkey = new PublicKey(tiplink_public_key);
+            
+            if (isNative) {
+                // Native SOL transfer
+                // Round lamports to integers to avoid floating-point precision errors
+                const giftAmountLamports = Math.round(numericAmount * LAMPORTS_PER_SOL);
+                const feeAmountLamports = Math.round(feeAmount * LAMPORTS_PER_SOL);
+                
+                console.log(`💰 Transaction breakdown (SOL):`);
+                console.log(`  Gift amount: ${numericAmount} ${currentToken.symbol} (${giftAmountLamports} lamports)`);
+                console.log(`  Fee (${feePercentage * 100}%): ${feeAmount} ${currentToken.symbol} (${feeAmountLamports} lamports)`);
+                console.log(`  Total: ${numericAmount + feeAmount} ${currentToken.symbol} (${giftAmountLamports + feeAmountLamports} lamports)`);
+                
+                // Add gift amount transfer to TipLink
+                transaction.add(
+                    SystemProgram.transfer({
+                        fromPubkey: senderPubkey,
+                        toPubkey: tipLinkPubkey,
+                        lamports: giftAmountLamports,
+                    })
+                );
+                
+                // Add fee transfer to fee wallet if configured
+                if (feeWalletAddress && feeAmountLamports > 0) {
+                    console.log(`💼 Adding fee transfer to fee wallet: ${feeWalletAddress}`);
+                    transaction.add(
+                        SystemProgram.transfer({
+                            fromPubkey: senderPubkey,
+                            toPubkey: new PublicKey(feeWalletAddress),
+                            lamports: feeAmountLamports,
+                        })
+                    );
+                } else if (feeAmountLamports > 0) {
+                    console.warn('⚠️ Fee wallet not configured. Fee will not be collected.');
+                }
+            } else {
+                // SPL Token transfer - dynamically import @solana/spl-token to ensure Buffer is available
+                const splToken = await import('@solana/spl-token');
+                const {
+                    getAssociatedTokenAddress,
+                    createTransferInstruction,
+                    createAssociatedTokenAccountInstruction,
+                    TOKEN_PROGRAM_ID,
+                    getAccount
+                } = splToken;
+                
+                const mintPubkey = new PublicKey(currentToken.mint);
+                const decimals = currentToken.decimals || 9;
+                
+                // Convert amount to token's smallest unit (like lamports for SOL)
+                const giftAmountRaw = Math.round(numericAmount * Math.pow(10, decimals));
+                const feeAmountRaw = Math.round(feeAmount * Math.pow(10, decimals));
+                
+                console.log(`💰 Transaction breakdown (SPL Token):`);
+                console.log(`  Gift amount: ${numericAmount} ${currentToken.symbol} (${giftAmountRaw} raw units)`);
+                console.log(`  Fee (${feePercentage * 100}%): ${feeAmount} ${currentToken.symbol} (${feeAmountRaw} raw units)`);
+                console.log(`  Total: ${numericAmount + feeAmount} ${currentToken.symbol} (${giftAmountRaw + feeAmountRaw} raw units)`);
+                
+                // Get associated token addresses (ATAs)
+                const senderATA = await getAssociatedTokenAddress(
+                    mintPubkey,
+                    senderPubkey,
+                    false, // allowOwnerOffCurve
+                    TOKEN_PROGRAM_ID
+                );
+                
+                const tipLinkATA = await getAssociatedTokenAddress(
+                    mintPubkey,
+                    tipLinkPubkey,
+                    true, // allowOwnerOffCurve (TipLink might not have ATA yet)
+                    TOKEN_PROGRAM_ID
+                );
+                
+                // Check if sender ATA exists and has balance
+                try {
+                    const senderAccount = await getAccount(connection, senderATA);
+                    console.log(`✅ Sender ATA exists: ${senderATA.toBase58()}, balance: ${senderAccount.amount.toString()}`);
+                    
+                    if (senderAccount.amount < BigInt(giftAmountRaw + feeAmountRaw)) {
+                        throw new Error(`Insufficient ${currentToken.symbol} balance. Required: ${numericAmount + feeAmount} ${currentToken.symbol}, Available: ${Number(senderAccount.amount) / Math.pow(10, decimals)} ${currentToken.symbol}`);
+                    }
+                } catch (error: any) {
+                    if (error.name === 'TokenAccountNotFoundError') {
+                        throw new Error(`No ${currentToken.symbol} token account found. Please ensure you have ${currentToken.symbol} in your wallet.`);
+                    }
+                    throw error;
+                }
+                
+                // Check if TipLink ATA exists, create if not
+                try {
+                    await getAccount(connection, tipLinkATA);
+                    console.log(`✅ TipLink ATA exists: ${tipLinkATA.toBase58()}`);
+                } catch (error: any) {
+                    if (error.name === 'TokenAccountNotFoundError') {
+                        console.log(`📝 Creating TipLink ATA: ${tipLinkATA.toBase58()}`);
+                        transaction.add(
+                            createAssociatedTokenAccountInstruction(
+                                senderPubkey, // payer
+                                tipLinkATA, // ata
+                                tipLinkPubkey, // owner
+                                mintPubkey, // mint
+                                TOKEN_PROGRAM_ID
+                            )
+                        );
+                    } else {
+                        throw error;
+                    }
+                }
+                
+                // Add gift amount transfer to TipLink
+                transaction.add(
+                    createTransferInstruction(
+                        senderATA, // source
+                        tipLinkATA, // destination
+                        senderPubkey, // owner
+                        BigInt(giftAmountRaw), // amount
+                        [], // multiSigners
+                        TOKEN_PROGRAM_ID
+                    )
+                );
+                
+                // Add fee transfer to fee wallet if configured
+                if (feeWalletAddress && feeAmountRaw > 0) {
+                    console.log(`💼 Adding fee transfer to fee wallet: ${feeWalletAddress}`);
+                    const feeWalletPubkey = new PublicKey(feeWalletAddress);
+                    const feeWalletATA = await getAssociatedTokenAddress(
+                        mintPubkey,
+                        feeWalletPubkey,
+                        true, // allowOwnerOffCurve
+                        TOKEN_PROGRAM_ID
+                    );
+                    
+                    // Check if fee wallet ATA exists, create if not
+                    try {
+                        await getAccount(connection, feeWalletATA);
+                        console.log(`✅ Fee wallet ATA exists: ${feeWalletATA.toBase58()}`);
+                    } catch (error: any) {
+                        if (error.name === 'TokenAccountNotFoundError') {
+                            console.log(`📝 Creating fee wallet ATA: ${feeWalletATA.toBase58()}`);
+                            transaction.add(
+                                createAssociatedTokenAccountInstruction(
+                                    senderPubkey, // payer
+                                    feeWalletATA, // ata
+                                    feeWalletPubkey, // owner
+                                    mintPubkey, // mint
+                                    TOKEN_PROGRAM_ID
+                                )
+                            );
+                        } else {
+                            throw error;
+                        }
+                    }
+                    
+                    transaction.add(
+                        createTransferInstruction(
+                            senderATA, // source
+                            feeWalletATA, // destination
+                            senderPubkey, // owner
+                            BigInt(feeAmountRaw), // amount
+                            [], // multiSigners
+                            TOKEN_PROGRAM_ID
+                        )
+                    );
+                } else if (feeAmountRaw > 0) {
+                    console.warn('⚠️ Fee wallet not configured. Fee will not be collected.');
+                }
+            }
 
             // Get recent blockhash
             const { blockhash } = await connection.getLatestBlockhash();
@@ -242,13 +518,15 @@ const GiftPage: React.FC = () => {
             
             const createResponse = await giftService.createGift({
                 recipient_email: recipientEmail,
-                token_mint: selectedToken.mint,
+                token_mint: currentToken.mint,
                 amount: numericAmount,
                 message: message,
                 sender_did: user.privy_did,
                 tiplink_url,
                 tiplink_public_key,
                 funding_signature: signatureString,
+                token_symbol: currentToken.symbol,
+                token_decimals: currentToken.decimals,
             });
 
             const { claim_url, gift_id } = createResponse;
@@ -302,16 +580,6 @@ const GiftPage: React.FC = () => {
         }
     };
 
-    const shareViaEmail = () => {
-        if (!giftDetails) return;
-        const subject = encodeURIComponent('You received a crypto gift! 🎁');
-        const body = encodeURIComponent(
-            `You've received ${giftDetails.amount} ${giftDetails.token}!\n\n` +
-            `Click here to claim your gift:\n${giftDetails.claim_url}\n\n` +
-            `Happy gifting! 🎉`
-        );
-        window.open(`mailto:${giftDetails.recipient}?subject=${subject}&body=${body}`, '_blank');
-    };
 
     if (isLoadingTokens) {
         return (
@@ -323,82 +591,112 @@ const GiftPage: React.FC = () => {
 
     return (
         <div className="animate-fade-in">
+            {/* Confirmation Modal */}
+            {showConfirmModal && confirmDetails && (
+                <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                    <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 shadow-2xl max-w-md w-full animate-scale-in">
+                        <h2 className="text-2xl font-bold text-white mb-4 text-center">Confirm Transaction</h2>
+                        
+                        <div className="space-y-4 mb-6">
+                            <div className="bg-slate-900/50 rounded-lg p-4">
+                                <div className="flex justify-between text-sm mb-2">
+                                    <span className="text-slate-400">Recipient:</span>
+                                    <span className="text-white">{confirmDetails.recipient}</span>
+                                </div>
+                                <div className="flex justify-between text-sm mb-2">
+                                    <span className="text-slate-400">Gift Amount:</span>
+                                    <span className="text-white">{confirmDetails.amount.toFixed(6)} {confirmDetails.token}</span>
+                                </div>
+                                <div className="flex justify-between text-sm mb-2">
+                                    <span className="text-slate-400">Fee (0.1%):</span>
+                                    <span className="text-slate-300">{confirmDetails.fee.toFixed(6)} {confirmDetails.token}</span>
+                                </div>
+                                <div className="flex justify-between text-sm pt-2 border-t border-slate-700">
+                                    <span className="text-slate-300 font-medium">Total Transfer:</span>
+                                    <span className="text-white font-bold text-lg">{confirmDetails.total.toFixed(6)} {confirmDetails.token}</span>
+                                </div>
+                            </div>
+                            
+                            {confirmDetails.message && (
+                                <div className="bg-slate-900/50 rounded-lg p-4">
+                                    <p className="text-slate-400 text-sm mb-1">Message:</p>
+                                    <p className="text-white text-sm italic">"{confirmDetails.message}"</p>
+                                </div>
+                            )}
+                        </div>
+                        
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => {
+                                    setShowConfirmModal(false);
+                                    setConfirmDetails(null);
+                                }}
+                                className="flex-1 bg-slate-600 hover:bg-slate-500 text-white font-bold py-3 px-4 rounded-lg transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleConfirmSend}
+                                disabled={isSending}
+                                className="flex-1 bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {isSending ? 'Sending...' : 'Confirm & Send'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
             {/* Success Modal */}
             {showSuccessModal && giftDetails && (
                 <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                    <div className="bg-slate-800 border border-slate-700 rounded-2xl p-8 shadow-2xl max-w-md w-full animate-scale-in">
-                        <div className="text-center mb-6">
-                            <div className="w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                                <svg className="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className="bg-slate-800 border border-slate-700 rounded-2xl p-5 shadow-2xl max-w-md w-full animate-scale-in">
+                        <div className="text-center mb-4">
+                            <div className="w-14 h-14 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-3">
+                                <svg className="w-7 h-7 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                                 </svg>
                             </div>
-                            <h2 className="text-2xl font-bold text-white mb-2">Gift Sent Successfully! 🎁</h2>
-                            <p className="text-slate-400">
+                            <h2 className="text-xl font-bold text-white mb-1">Gift Sent Successfully! 🎁</h2>
+                            <p className="text-slate-400 text-sm">
                                 {giftDetails.amount} {giftDetails.token} sent to {giftDetails.recipient}
                             </p>
                         </div>
 
                         {/* QR Code */}
-                        <div className="bg-white p-4 rounded-lg mb-6">
+                        <div className="bg-white p-3 rounded-lg mb-4">
                             <img src={giftDetails.qrCode} alt="Gift QR Code" className="w-full" />
                         </div>
 
                         {/* Gift Link */}
-                        <div className="mb-6">
+                        <div className="mb-4">
                             <label className="block text-sm font-medium text-slate-300 mb-2">Gift Link</label>
                             <div className="flex gap-2">
                                 <input
                                     type="text"
                                     value={giftDetails.claim_url}
                                     readOnly
-                                    className="flex-1 bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2 text-white text-sm"
+                                    className="flex-1 bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-2 text-white text-xs"
                                 />
                                 <button
                                     onClick={() => copyToClipboard(giftDetails.claim_url)}
-                                    className="bg-sky-500 hover:bg-sky-600 text-white px-4 py-2 rounded-lg transition-colors"
+                                    className="bg-sky-500 hover:bg-sky-600 text-white px-3 py-2 rounded-lg transition-colors text-sm"
                                 >
                                     Copy
                                 </button>
                             </div>
                         </div>
 
-                        {/* Transaction Details */}
-                        <div className="bg-slate-900/50 rounded-lg p-4 mb-6 space-y-2">
-                            <div className="flex justify-between text-sm">
-                                <span className="text-slate-400">Transaction:</span>
-                                <a
-                                    href={`https://explorer.solana.com/tx/${giftDetails.signature}?cluster=devnet`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-sky-400 hover:text-sky-300 font-mono"
-                                >
-                                    {giftDetails.signature.slice(0, 8)}...{giftDetails.signature.slice(-8)}
-                                </a>
-                            </div>
-                        </div>
-
-                        {/* Action Buttons */}
-                        <div className="space-y-3">
-                            <button
-                                onClick={shareViaEmail}
-                                className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 flex items-center justify-center gap-2"
-                            >
-                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                                </svg>
-                                Send via Email
-                            </button>
-                            <button
-                                onClick={() => {
-                                    setShowSuccessModal(false);
-                                    setGiftDetails(null);
-                                }}
-                                className="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 px-4 rounded-lg transition-colors"
-                            >
-                                Done
-                            </button>
-                        </div>
+                        {/* Action Button */}
+                        <button
+                            onClick={() => {
+                                setShowSuccessModal(false);
+                                setGiftDetails(null);
+                            }}
+                            className="w-full bg-sky-500 hover:bg-sky-600 text-white font-bold py-2.5 px-4 rounded-lg transition-colors"
+                        >
+                            Done
+                        </button>
                     </div>
                 </div>
             )}
@@ -417,12 +715,14 @@ const GiftPage: React.FC = () => {
                 {/* User Balance Info */}
                 <div className="bg-gradient-to-r from-sky-500/10 to-purple-500/10 border border-sky-500/30 rounded-lg p-4 mb-6">
                     <p className="text-slate-400 text-sm">Your Balance</p>
-                    <p className="text-2xl font-bold text-white">{userBalance.toFixed(4)} SOL</p>
+                    <p className="text-2xl font-bold text-white">
+                        {userBalance.toFixed(4)} {selectedToken?.symbol || 'SOL'}
+                    </p>
                     <p className="text-xs text-slate-500 mt-1">Available for gifting</p>
                     {userBalance < 0.01 && (
                         <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
                             <p className="text-yellow-200 text-sm">
-                                ⚠️ Low balance. Add SOL to your wallet in the "Add Funds" page.
+                                ⚠️ Low balance. Add {selectedToken?.symbol || 'tokens'} to your wallet in the "Add Funds" page.
                             </p>
                         </div>
                     )}
@@ -488,6 +788,27 @@ const GiftPage: React.FC = () => {
                                 Available: {userBalance.toFixed(4)} {selectedToken.symbol}
                             </p>
                         )}
+                        {amount && !isNaN(parseFloat(amount)) && parseFloat(amount) > 0 && feeWalletAddress && (() => {
+                            const displayAmount = parseFloat(amount);
+                            const displayFee = displayAmount * feePercentage;
+                            const displayTotal = displayAmount + displayFee;
+                            return (
+                                <div className="mt-3 p-3 bg-slate-900/30 border border-slate-700 rounded-lg">
+                                    <div className="flex justify-between text-sm mb-1">
+                                        <span className="text-slate-400">Gift Amount:</span>
+                                        <span className="text-white">{displayAmount.toFixed(6)} {selectedToken?.symbol}</span>
+                                    </div>
+                                    <div className="flex justify-between text-sm mb-1">
+                                        <span className="text-slate-400">Fee ({feePercentage * 100}%):</span>
+                                        <span className="text-slate-300">{displayFee.toFixed(6)} {selectedToken?.symbol}</span>
+                                    </div>
+                                    <div className="flex justify-between text-sm pt-2 border-t border-slate-700">
+                                        <span className="text-slate-300 font-medium">Total:</span>
+                                        <span className="text-white font-medium">{displayTotal.toFixed(6)} {selectedToken?.symbol}</span>
+                                    </div>
+                                </div>
+                            );
+                        })()}
                     </div>
 
                     {/* Message */}

@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { TipLink } from '@tiplink/api';
 import { Connection, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import 'dotenv/config';
 import QRCode from 'qrcode';
 import { authenticateToken, AuthRequest } from './authMiddleware';
@@ -51,6 +51,8 @@ const PORT = process.env.PORT || 3001;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const PRIVY_APP_ID = process.env.PRIVY_APP_ID;
 const PRIVY_APP_SECRET = process.env.PRIVY_APP_SECRET;
+const FEE_WALLET_ADDRESS = process.env.FEE_WALLET_ADDRESS;
+const FEE_PERCENTAGE = 0.001; // 0.1% fee
 let FAKE_AUTHENTICATED_USER_DID = '';
 const users: User[] = [];
 const gifts: Gift[] = [];
@@ -90,6 +92,29 @@ const connection = new Connection(RPC_URL, 'confirmed');
 
 // ✅ FIX: Remove TipLink initialization - we'll use the static create() method instead
 // TipLink doesn't need to be initialized with a client, we use it directly
+
+// --- KNOWN TOKEN METADATA (fallback for API failures) ---
+const KNOWN_TOKENS: Record<string, { symbol: string; name: string; logoURI?: string }> = {
+  // Devnet tokens
+  'Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr': {
+    symbol: 'USDC',
+    name: 'USD Coin',
+    logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png'
+  },
+  // Another USDC devnet mint address
+  '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU': {
+    symbol: 'USDC',
+    name: 'USD Coin',
+    logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png'
+  },
+  // Mainnet USDC (in case it's used)
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': {
+    symbol: 'USDC',
+    name: 'USD Coin',
+    logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png'
+  },
+  // Add more known tokens as needed
+};
 
 // --- SUPPORTED TOKENS ---
 const SUPPORTED_TOKENS = [
@@ -149,21 +174,116 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
   console.log('🔍 Fetching balance for:', address);
 
   try {
-    // ✅ Now connection is always defined
+    const balances: any[] = [];
+    
+    // ✅ Fetch SOL balance
     const solBalance = await connection.getBalance(new PublicKey(address));
     const solAmount = solBalance / LAMPORTS_PER_SOL;
     
-    console.log('💰 Balance:', solAmount, 'SOL');
-
-    res.json([{
-      address: 'So11111111111111111111111111111111111111112',
-      symbol: 'SOL',
-      name: 'Solana',
-      logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
-      decimals: 9,
-      balance: solAmount,
-      usdValue: solAmount * 150 // Mock USD price
-    }]);
+    if (solAmount > 0) {
+      balances.push({
+        address: 'So11111111111111111111111111111111111111112',
+        symbol: 'SOL',
+        name: 'Solana',
+        logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
+        decimals: 9,
+        balance: solAmount,
+        usdValue: solAmount * 150 // Mock USD price
+      });
+    }
+    
+    // ✅ Fetch SPL token balances using Solana RPC
+    try {
+      const walletPubkey = new PublicKey(address);
+      
+      // Get all token accounts for this wallet
+      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(walletPubkey, {
+        programId: TOKEN_PROGRAM_ID,
+      });
+      
+      console.log(`🔍 Found ${tokenAccounts.value.length} token account(s)`);
+      
+      // Process each token account
+      for (const accountInfo of tokenAccounts.value) {
+        const parsedInfo = accountInfo.account.data.parsed.info;
+        const mintAddress = parsedInfo.mint;
+        const tokenAmount = parsedInfo.tokenAmount;
+        
+        // Only include tokens with non-zero balance
+        if (tokenAmount.uiAmount > 0) {
+          // Initialize with known token metadata or defaults
+          const mintAddressStr = mintAddress;
+          console.log(`🔍 Processing token: ${mintAddressStr}, balance: ${tokenAmount.uiAmount}`);
+          
+          // Check known tokens first
+          const knownToken = KNOWN_TOKENS[mintAddressStr];
+          let tokenSymbol = knownToken?.symbol || 'UNKNOWN';
+          let tokenName = knownToken?.name || 'Unknown Token';
+          let tokenDecimals = tokenAmount.decimals;
+          let tokenLogo = knownToken?.logoURI || `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${mintAddressStr}/logo.png`;
+          
+          if (knownToken) {
+            console.log(`✅ Found in known tokens: ${tokenSymbol} - ${tokenName}`);
+          } else {
+            console.log(`⚠️ Token ${mintAddressStr} not in known tokens, trying Helius API...`);
+          }
+          
+          // Try Helius API for token metadata if API key is available and not in known tokens
+          if (HELIUS_API_KEY && !knownToken) {
+            try {
+              const heliusUrl = `https://api.helius.xyz/v0/token-metadata?api-key=${HELIUS_API_KEY}`;
+              const heliusResponse = await fetch(heliusUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mintAccounts: [mintAddressStr] }),
+              });
+              
+              if (heliusResponse.ok) {
+                const heliusData = await heliusResponse.json();
+                if (heliusData && heliusData.length > 0 && heliusData[0]) {
+                  const metadata = heliusData[0];
+                  tokenSymbol = metadata.symbol || tokenSymbol;
+                  tokenName = metadata.name || tokenName;
+                  if (metadata.image) {
+                    tokenLogo = metadata.image;
+                  }
+                  console.log(`✅ Fetched metadata for ${mintAddressStr}: ${tokenSymbol} - ${tokenName}`);
+                } else {
+                  console.log(`⚠️ Helius returned empty data for ${mintAddressStr}`);
+                }
+              } else {
+                const errorText = await heliusResponse.text();
+                console.log(`⚠️ Helius API error for ${mintAddressStr}: ${heliusResponse.status} - ${errorText}`);
+              }
+            } catch (heliusError: any) {
+              console.log(`⚠️ Could not fetch metadata for ${mintAddressStr}: ${heliusError?.message || heliusError}`);
+            }
+          } else if (KNOWN_TOKENS[mintAddressStr]) {
+            console.log(`✅ Using known token metadata for ${mintAddressStr}: ${tokenSymbol}`);
+          }
+          
+          balances.push({
+            address: mintAddress,
+            symbol: tokenSymbol,
+            name: tokenName,
+            logoURI: tokenLogo,
+            decimals: tokenDecimals,
+            balance: tokenAmount.uiAmount,
+            usdValue: tokenAmount.uiAmount * 0 // TODO: Add USD price lookup
+          });
+        }
+      }
+    } catch (splError) {
+      console.warn('⚠️ Error fetching SPL tokens:', splError);
+      // Continue with SOL balance only
+    }
+    
+    // Sort by symbol alphabetically
+    balances.sort((a, b) => a.symbol.localeCompare(b.symbol));
+    
+    console.log(`💰 Found ${balances.length} token(s) with non-zero balance`);
+    
+    res.json(balances);
   } catch (error) {
     console.error('❌ Error fetching balance:', error);
     res.status(500).json({ error: 'Failed to fetch balance' });
@@ -174,6 +294,14 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
 // Get supported tokens
 app.get('/api/tokens', (req, res) => {
   res.json({ tokens: SUPPORTED_TOKENS });
+});
+
+// Get fee configuration
+app.get('/api/fee-config', (req, res) => {
+  res.json({
+    fee_wallet_address: FEE_WALLET_ADDRESS || null,
+    fee_percentage: FEE_PERCENTAGE, // 0.1% = 0.001
+  });
 });
 
 // Create TipLink (Step 1 of gift creation)
@@ -198,9 +326,9 @@ app.post('/api/tiplink/create', authenticateToken, async (req: AuthRequest, res)
 
 // Create gift - Frontend has already funded the TipLink, backend creates the gift record
 app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) => {
-  const { sender_did, recipient_email, token_mint, amount, message, tiplink_url, tiplink_public_key, funding_signature } = req.body;
+  const { sender_did, recipient_email, token_mint, amount, message, tiplink_url, tiplink_public_key, funding_signature, token_symbol, token_decimals } = req.body;
 
-  console.log('🎁 Creating gift record:', { sender_did, recipient_email, token_mint, amount });
+  console.log('🎁 Creating gift record:', { sender_did, recipient_email, token_mint, amount, token_symbol, token_decimals });
 
   // Verify the authenticated user matches the sender
   if (req.user?.id !== sender_did) {
@@ -217,10 +345,64 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
     return res.status(404).json({ error: 'User not found' });
   }
 
-  // Find token info
-  const tokenInfo = SUPPORTED_TOKENS.find(t => t.mint === token_mint);
+  // Get token info - use provided info or fetch from SUPPORTED_TOKENS or fetch dynamically
+  let tokenInfo: { symbol: string; decimals: number; isNative?: boolean } | null = null;
+  
+  // First, try to use provided token info from frontend
+  if (token_symbol && token_decimals) {
+    tokenInfo = {
+      symbol: token_symbol,
+      decimals: token_decimals,
+      isNative: token_mint === 'So11111111111111111111111111111111111111112'
+    };
+    console.log(`✅ Using provided token info: ${token_symbol} (${token_decimals} decimals)`);
+  } else {
+    // Fallback to SUPPORTED_TOKENS
+    const supportedToken = SUPPORTED_TOKENS.find(t => t.mint === token_mint);
+    if (supportedToken) {
+      tokenInfo = {
+        symbol: supportedToken.symbol,
+        decimals: supportedToken.decimals,
+        isNative: supportedToken.isNative
+      };
+      console.log(`✅ Using supported token info: ${tokenInfo.symbol}`);
+    } else {
+      // Try to fetch token info dynamically from token account
+      try {
+        const mintPubkey = new PublicKey(token_mint);
+        // For native SOL
+        if (token_mint === 'So11111111111111111111111111111111111111112') {
+          tokenInfo = {
+            symbol: 'SOL',
+            decimals: 9,
+            isNative: true
+          };
+        } else {
+          // For SPL tokens, try to get decimals from mint account
+          const mintInfo = await connection.getParsedAccountInfo(mintPubkey);
+          if (mintInfo.value && 'parsed' in mintInfo.value.data) {
+            const parsedData = mintInfo.value.data.parsed.info;
+            const decimals = parsedData.decimals || 9;
+            const knownToken = KNOWN_TOKENS[token_mint];
+            tokenInfo = {
+              symbol: knownToken?.symbol || 'UNKNOWN',
+              decimals: decimals,
+              isNative: false
+            };
+            console.log(`✅ Fetched token info dynamically: ${tokenInfo.symbol} (${decimals} decimals)`);
+          } else {
+            return res.status(400).json({ error: 'Could not fetch token info. Please provide token_symbol and token_decimals.' });
+          }
+        }
+      } catch (fetchError) {
+        console.error('❌ Error fetching token info:', fetchError);
+        return res.status(400).json({ error: 'Could not fetch token info. Please provide token_symbol and token_decimals.' });
+      }
+    }
+  }
+  
   if (!tokenInfo) {
-    return res.status(400).json({ error: 'Unsupported token' });
+    return res.status(400).json({ error: 'Could not determine token info' });
   }
 
   try {
@@ -398,10 +580,51 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
     const recipientPubkey = new PublicKey(recipient_wallet);
     console.log('👤 Recipient wallet:', recipientPubkey.toBase58());
     
-    const tokenInfo = SUPPORTED_TOKENS.find(t => t.mint === gift.token_mint);
+    // Get token info - use gift's stored info or fetch from SUPPORTED_TOKENS
+    let tokenInfo: { symbol: string; decimals: number; isNative?: boolean } | null = null;
+    
+    // Use stored token info from gift (most reliable)
+    if (gift.token_symbol && gift.token_decimals) {
+      tokenInfo = {
+        symbol: gift.token_symbol,
+        decimals: gift.token_decimals,
+        isNative: gift.token_mint === 'So11111111111111111111111111111111111111112'
+      };
+      console.log(`✅ Using stored token info: ${tokenInfo.symbol} (${tokenInfo.decimals} decimals)`);
+    } else {
+      // Fallback to SUPPORTED_TOKENS
+      const supportedToken = SUPPORTED_TOKENS.find(t => t.mint === gift.token_mint);
+      if (supportedToken) {
+        tokenInfo = {
+          symbol: supportedToken.symbol,
+          decimals: supportedToken.decimals,
+          isNative: supportedToken.isNative
+        };
+        console.log(`✅ Using supported token info: ${tokenInfo.symbol}`);
+      } else {
+        // Try to fetch dynamically or use defaults
+        if (gift.token_mint === 'So11111111111111111111111111111111111111112') {
+          tokenInfo = { symbol: 'SOL', decimals: 9, isNative: true };
+        } else {
+          const knownToken = KNOWN_TOKENS[gift.token_mint];
+          tokenInfo = {
+            symbol: knownToken?.symbol || gift.token_symbol || 'UNKNOWN',
+            decimals: gift.token_decimals || 9,
+            isNative: false
+          };
+          console.log(`✅ Using fallback token info: ${tokenInfo.symbol} (${tokenInfo.decimals} decimals)`);
+        }
+      }
+    }
     
     if (!tokenInfo) {
-      return res.status(400).json({ error: 'Invalid token' });
+      // Use defaults if we can't determine token info
+      tokenInfo = {
+        symbol: gift.token_symbol || 'UNKNOWN',
+        decimals: gift.token_decimals || 9,
+        isNative: gift.token_mint === 'So11111111111111111111111111111111111111112'
+      };
+      console.warn(`⚠️ Using default token info: ${tokenInfo.symbol} (${tokenInfo.decimals} decimals)`);
     }
 
     let signature: string;
@@ -409,7 +632,7 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
     // Transfer from TipLink → Recipient
     if (tokenInfo.isNative) {
       // Native SOL transfer
-      console.log(`💸 Transferring ${gift.amount} SOL to recipient...`);
+      console.log(`💸 Transferring ${gift.amount} ${gift.token_symbol} to recipient...`);
       
       // Reserve some SOL for transaction fee (5000 lamports = 0.000005 SOL)
       const FEE_RESERVE = 5000;
@@ -419,7 +642,7 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
         throw new Error('Gift amount too small to cover transaction fee');
       }
       
-      console.log(`📊 Transfer details: ${transferAmount / LAMPORTS_PER_SOL} SOL (${gift.amount} SOL - ${FEE_RESERVE / LAMPORTS_PER_SOL} SOL fee reserve)`);
+      console.log(`📊 Transfer details: ${transferAmount / LAMPORTS_PER_SOL} ${gift.token_symbol} (${gift.amount} ${gift.token_symbol} - ${FEE_RESERVE / LAMPORTS_PER_SOL} ${gift.token_symbol} fee reserve)`);
       
       const transaction = new Transaction().add(
         SystemProgram.transfer({

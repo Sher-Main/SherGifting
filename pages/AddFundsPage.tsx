@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { BanknotesIcon, ArrowDownTrayIcon, ArrowLeftIcon } from '../components/icons';
+import QRCode from 'qrcode';
 
 const AddFundsPage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [selectedOption, setSelectedOption] = useState<'bank' | 'wallet' | null>(null);
   const [copied, setCopied] = useState(false);
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
 
   const handleCopy = () => {
     if (user?.wallet_address) {
@@ -16,6 +18,32 @@ const AddFundsPage: React.FC = () => {
       setTimeout(() => setCopied(false), 2000);
     }
   };
+
+  // Generate QR code for wallet address when wallet option is selected
+  useEffect(() => {
+    const generateQRCode = async () => {
+      if (selectedOption === 'wallet' && user?.wallet_address) {
+        try {
+          const qrCode = await QRCode.toDataURL(user.wallet_address, {
+            width: 200,
+            margin: 2,
+            color: {
+              dark: '#000000',
+              light: '#ffffff'
+            }
+          });
+          setQrCodeDataUrl(qrCode);
+        } catch (error) {
+          console.error('Failed to generate QR code:', error);
+          setQrCodeDataUrl(null);
+        }
+      } else {
+        setQrCodeDataUrl(null);
+      }
+    };
+
+    generateQRCode();
+  }, [selectedOption, user?.wallet_address]);
 
   const renderContent = () => {
     if (!selectedOption) {
@@ -56,10 +84,12 @@ const AddFundsPage: React.FC = () => {
                         {copied ? 'Copied!' : 'Copy'}
                     </button>
                 </div>
-                {/* QR Code would be rendered here */}
-                <div className="bg-white p-4 inline-block rounded-lg mb-6">
-                    <p className="text-black">QR Code Placeholder</p>
-                </div>
+                {/* QR Code */}
+                {qrCodeDataUrl && (
+                    <div className="bg-white p-4 inline-block rounded-lg mb-6">
+                        <img src={qrCodeDataUrl} alt="Wallet Address QR Code" className="w-48 h-48" />
+                    </div>
+                )}
                 <br/>
                 <button onClick={() => setSelectedOption(null)} className="bg-slate-600 hover:bg-slate-500 text-white font-bold py-2 px-4 rounded-lg transition-colors">Back</button>
             </div>

@@ -21,7 +21,11 @@ const HomePage: React.FC = () => {
       setError(null);
       try {
         const fetchedBalances = await heliusService.getTokenBalances(user.wallet_address);
-        setBalances(fetchedBalances);
+        // Filter non-zero balances and sort alphabetically (backend already does this, but ensure it here too)
+        const nonZeroBalances = fetchedBalances
+          .filter(b => b.balance > 0)
+          .sort((a, b) => a.symbol.localeCompare(b.symbol));
+        setBalances(nonZeroBalances);
       } catch (e) {
         setError('Failed to fetch token balances.');
         console.error(e);

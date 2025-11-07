@@ -1,10 +1,20 @@
-// ✅ Add Buffer and process polyfills for Privy Solana SDK
+// ✅ Add Buffer and process polyfills for Privy Solana SDK and @solana/spl-token
+// MUST be at the very top before any other imports
 import { Buffer } from 'buffer';
 import process from 'process';
 
-// Make Buffer and process available globally
-globalThis.Buffer = Buffer;
-globalThis.process = process;
+// Make Buffer and process available globally BEFORE any other code runs
+if (typeof globalThis.Buffer === 'undefined') {
+  globalThis.Buffer = Buffer;
+}
+if (typeof globalThis.process === 'undefined') {
+  globalThis.process = process;
+}
+// Also set on window for browser compatibility
+if (typeof window !== 'undefined') {
+  (window as any).Buffer = Buffer;
+  (window as any).process = process;
+}
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
