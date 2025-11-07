@@ -1,32 +1,52 @@
 import { Resend } from 'resend';
+import 'dotenv/config';
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const FROM_EMAIL = process.env.FROM_EMAIL || 'onboarding@resend.dev'; // Default Resend test email
+const FROM_EMAIL = process.env.FROM_EMAIL;
 
 if (!RESEND_API_KEY) {
   console.warn('⚠️ Warning: RESEND_API_KEY not set. Email notifications will not be sent.');
+}
+
+if (!FROM_EMAIL) {
+  console.warn('⚠️ Warning: FROM_EMAIL not set in environment variables. Email notifications will not be sent.');
 }
 
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
 
 interface GiftNotificationParams {
   recipientEmail: string;
-  senderEmail: string;
+  senderEmail: string;      // User's email (for display only)
+  senderName?: string;       // User's name (optional)
   amount: number;
   tokenSymbol: string;
   claimUrl: string;
+  qrCode?: string;           // QR code data URL (optional)
   message?: string;
 }
 
-export async function sendGiftNotification(params: GiftNotificationParams): Promise<{ success: boolean; error?: string }> {
+export async function sendGiftNotification(params: GiftNotificationParams): Promise<{ success: boolean; error?: string; emailId?: string }> {
   if (!resend) {
     console.log('📧 Email not sent: Resend API key not configured');
     return { success: false, error: 'Email service not configured' };
   }
 
-  const { recipientEmail, senderEmail, amount, tokenSymbol, claimUrl, message } = params;
+  if (!FROM_EMAIL) {
+    console.log('📧 Email not sent: FROM_EMAIL not configured');
+    return { success: false, error: 'FROM_EMAIL not set in environment variables' };
+  }
+
+  const { recipientEmail, senderEmail, senderName, amount, tokenSymbol, claimUrl, qrCode, message } = params;
+
+  // Validate email addresses
+  if (!senderEmail || !recipientEmail) {
+    return { success: false, error: 'Missing sender or recipient email' };
+  }
 
   try {
+    // ✅ Display sender name in subject (use name or email username)
+    const senderDisplay = senderName || senderEmail.split('@')[0];
+
     const htmlContent = `
 <!DOCTYPE html>
 <html lang="en">
@@ -54,8 +74,10 @@ export async function sendGiftNotification(params: GiftNotificationParams): Prom
                 Hello!
               </p>
               
+              <!-- ✅ Highlight sender name -->
               <p style="margin: 0 0 20px; color: #374151; font-size: 16px; line-height: 1.5;">
-                <strong style="color: #0ea5e9;">${senderEmail}</strong> has sent you a crypto gift!
+                <strong style="color: #0ea5e9; font-size: 18px;">${senderDisplay}</strong> 
+                <span style="color: #6b7280;">has sent you a crypto gift!</span>
               </p>
               
               <!-- Gift Amount Box -->
@@ -63,6 +85,11 @@ export async function sendGiftNotification(params: GiftNotificationParams): Prom
                 <p style="margin: 0 0 10px; color: #64748b; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">Gift Amount</p>
                 <p style="margin: 0; color: #0ea5e9; font-size: 36px; font-weight: bold;">${amount} ${tokenSymbol}</p>
               </div>
+              
+              <!-- ✅ Show sender's email in smaller text -->
+              <p style="margin: 0 0 20px; color: #9ca3af; font-size: 13px; text-align: center;">
+                From: <span style="font-family: monospace; color: #6b7280;">${senderEmail}</span>
+              </p>
               
               ${message ? `
               <div style="background-color: #f9fafb; border-left: 4px solid #0ea5e9; padding: 16px 20px; margin: 20px 0;">
@@ -85,6 +112,18 @@ export async function sendGiftNotification(params: GiftNotificationParams): Prom
                   </td>
                 </tr>
               </table>
+              
+              ${qrCode ? `
+              <!-- QR Code Section -->
+              <div style="margin: 30px 0; text-align: center;">
+                <p style="margin: 0 0 16px; color: #6b7280; font-size: 14px; font-weight: 600;">
+                  Or scan this QR code:
+                </p>
+                <div style="display: inline-block; padding: 16px; background-color: #ffffff; border: 2px solid #e5e7eb; border-radius: 12px;">
+                  <img src="${qrCode}" alt="Gift QR Code" style="width: 200px; height: 200px; display: block;" />
+                </div>
+              </div>
+              ` : ''}
               
               <p style="margin: 20px 0 0; color: #9ca3af; font-size: 14px; line-height: 1.5;">
                 If the button doesn't work, copy and paste this link into your browser:<br>
@@ -115,7 +154,9 @@ export async function sendGiftNotification(params: GiftNotificationParams): Prom
     const textContent = `
 You Received a Crypto Gift!
 
-${senderEmail} has sent you ${amount} ${tokenSymbol}!
+${senderDisplay} has sent you ${amount} ${tokenSymbol}!
+
+From: ${senderEmail}
 
 ${message ? `Personal Message: "${message}"\n` : ''}
 
@@ -126,19 +167,56 @@ This gift link is secure and can only be claimed once.
 Powered by Crypto Gifting • Solana Blockchain
     `.trim();
 
-    const result = await resend.emails.send({
-      from: FROM_EMAIL,
+    console.log('📧 Attempting to send email...');
+    console.log('  From:', FROM_EMAIL);
+    console.log('  To:', recipientEmail);
+    console.log('  Reply-To:', senderEmail);
+    console.log('  Subject:', `🎁 ${senderDisplay} sent you ${amount} ${tokenSymbol}!`);
+
+    // Resend API uses { data, error } structure
+    const { data, error } = await resend.emails.send({
+      from: FROM_EMAIL,  // ✅ Always your domain
       to: recipientEmail,
-      subject: `🎁 You received ${amount} ${tokenSymbol} from ${senderEmail}!`,
+      replyTo: senderEmail, // ✅ Always set Reply-To to sender's email so recipients can reply
+      subject: `🎁 ${senderDisplay} sent you ${amount} ${tokenSymbol}!`,  // ✅ Sender's name in subject
       html: htmlContent,
       text: textContent,
     });
 
-    console.log('✅ Email sent successfully:', result);
-    return { success: true };
+    if (error) {
+      console.error('❌ Resend API Error:', error);
+      console.error('Error details:', JSON.stringify(error, null, 2));
+      return { 
+        success: false, 
+        error: `Resend error: ${error.message || JSON.stringify(error)}` 
+      };
+    }
+
+    if (!data) {
+      console.error('❌ No data returned from Resend');
+      return { 
+        success: false, 
+        error: 'No response data from email service' 
+      };
+    }
+
+    console.log('✅ Email sent successfully!');
+    console.log('📧 Email ID:', data.id);
+    console.log('📧 Full response:', JSON.stringify(data, null, 2));
+
+    return { 
+      success: true, 
+      emailId: data.id 
+    };
+
   } catch (error: any) {
-    console.error('❌ Error sending email:', error);
-    return { success: false, error: error?.message || 'Failed to send email' };
+    console.error('❌ Exception in sendGiftNotification:', error);
+    console.error('Error message:', error?.message);
+    console.error('Error stack:', error?.stack);
+    
+    return { 
+      success: false, 
+      error: error?.message || 'Failed to send email' 
+    };
   }
 }
-

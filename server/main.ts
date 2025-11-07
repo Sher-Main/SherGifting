@@ -4,6 +4,7 @@ import { TipLink } from '@tiplink/api';
 import { Connection, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction } from '@solana/spl-token';
 import 'dotenv/config';
+import QRCode from 'qrcode';
 import { authenticateToken, AuthRequest } from './authMiddleware';
 import { sendGiftNotification } from './emailService';
 
@@ -278,6 +279,24 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
     const claimUrl = `/claim/${giftId}`;
     const fullClaimUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}${claimUrl}`;
     
+    // Generate QR code from claim URL
+    console.log('📱 Generating QR code for claim URL...');
+    let qrCodeDataUrl: string | undefined;
+    try {
+      qrCodeDataUrl = await QRCode.toDataURL(fullClaimUrl, {
+        width: 300,
+        margin: 2,
+        color: {
+          dark: '#0c4a6e',
+          light: '#ffffff'
+        }
+      });
+      console.log('✅ QR code generated successfully');
+    } catch (error) {
+      console.error('⚠️ Failed to generate QR code:', error);
+      // Continue without QR code - email will still be sent
+    }
+    
     console.log('📧 Sending email notification to recipient...');
     const emailResult = await sendGiftNotification({
       recipientEmail: recipient_email,
@@ -285,6 +304,7 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       amount,
       tokenSymbol: tokenInfo.symbol,
       claimUrl: fullClaimUrl,
+      qrCode: qrCodeDataUrl,
       message: message || undefined,
     });
 
