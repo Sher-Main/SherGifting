@@ -1,3 +1,11 @@
+// ✅ Add Buffer and process polyfills for Privy Solana SDK
+import { Buffer } from 'buffer';
+import process from 'process';
+
+// Make Buffer and process available globally
+globalThis.Buffer = Buffer;
+globalThis.process = process;
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { PrivyProvider } from '@privy-io/react-auth';

@@ -1,14 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { tokenService, giftService, treasuryService } from '../services/api';
+import { usePrivy } from '@privy-io/react-auth';
+import { useSignAndSendTransaction, useWallets } from '@privy-io/react-auth/solana';
+import { tokenService, giftService, tiplinkService, heliusService } from '../services/api';
 import { Token } from '../types';
 import Spinner from '../components/Spinner';
 import { ArrowLeftIcon } from '../components/icons';
 import QRCode from 'qrcode';
+import { Connection, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
+import bs58 from 'bs58';
 
 const GiftPage: React.FC = () => {
     const { user, refreshUser } = useAuth();
+    const { ready, authenticated, user: privyUser } = usePrivy();
+    const { signAndSendTransaction } = useSignAndSendTransaction();
+    const { wallets, ready: walletsReady } = useWallets();
     const navigate = useNavigate();
     const [tokens, setTokens] = useState<Token[]>([]);
     const [selectedToken, setSelectedToken] = useState<Token | null>(null);
@@ -16,8 +23,8 @@ const GiftPage: React.FC = () => {
     const [isSending, setIsSending] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
-    const [treasuryAddress, setTreasuryAddress] = useState<string>('');
-    const [treasuryBalance, setTreasuryBalance] = useState<number>(0);
+    const [userBalance, setUserBalance] = useState<number>(0);
+    const [walletReady, setWalletReady] = useState(false);
     
     const [recipientEmail, setRecipientEmail] = useState('');
     const [amount, setAmount] = useState('');
@@ -33,6 +40,27 @@ const GiftPage: React.FC = () => {
         signature: string;
         qrCode: string;
     } | null>(null);
+
+    // Solana connection
+    const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+
+    // Monitor wallets array for changes
+    useEffect(() => {
+        if (walletsReady && wallets.length > 0) {
+            const solanaWallet = wallets.find(w => {
+                const isSolanaAddress = w.address && !w.address.startsWith('0x');
+                return isSolanaAddress;
+            });
+            if (solanaWallet) {
+                setWalletReady(true);
+                console.log('✅ Wallet ready:', solanaWallet.address);
+            }
+        } else if (privyUser?.wallet && privyUser.wallet.chainType === 'solana') {
+            // Wallet exists in privyUser even if useWallets is empty
+            setWalletReady(true);
+            console.log('✅ Wallet ready from privyUser:', privyUser.wallet.address);
+        }
+    }, [wallets, walletsReady, privyUser]);
 
     useEffect(() => {
         const fetchTokens = async () => {
@@ -54,26 +82,40 @@ const GiftPage: React.FC = () => {
     }, []);
 
     useEffect(() => {
-        const fetchTreasuryInfo = async () => {
+        const fetchUserBalance = async () => {
+            if (!user?.wallet_address) return;
             try {
-                const response = await fetch('/api/treasury/info');
-                const data = await response.json();
-                setTreasuryAddress(data.public_key);
-                setTreasuryBalance(data.balance || 0);
-                console.log('📍 Treasury wallet address:', data.public_key);
-                console.log('💰 Treasury balance:', data.balance, 'SOL');
+                const balances = await heliusService.getTokenBalances(user.wallet_address);
+                const solBalance = balances.find(b => b.symbol === 'SOL');
+                setUserBalance(solBalance?.balance || 0);
+                console.log('💰 User balance:', solBalance?.balance || 0, 'SOL');
             } catch (e) {
-                console.error('Failed to fetch treasury info:', e);
+                console.error('Failed to fetch user balance:', e);
             }
         };
-        fetchTreasuryInfo();
-    }, []);
+        fetchUserBalance();
+    }, [user]);
 
     const handleSendGift = async (e: React.FormEvent) => {
         e.preventDefault();
         
         if (!user) {
             setError("Please log in first");
+            return;
+        }
+
+        if (!ready || !authenticated) {
+            setError("Please wait for authentication to complete.");
+            return;
+        }
+
+        if (!user.wallet_address) {
+            setError("Wallet address not found. Please refresh the page.");
+            return;
+        }
+
+        if (!walletReady && !privyUser?.wallet) {
+            setError("Wallet is not ready yet. Please wait a moment and try again.");
             return;
         }
 
@@ -88,9 +130,9 @@ const GiftPage: React.FC = () => {
             return;
         }
         
-        // Check treasury balance
-        if (selectedToken.isNative && numericAmount > treasuryBalance) {
-            setError(`Insufficient treasury balance. Treasury has ${treasuryBalance} SOL available.`);
+        // Check user balance
+        if (selectedToken.isNative && numericAmount > userBalance) {
+            setError(`Insufficient balance. You have ${userBalance.toFixed(4)} SOL available.`);
             return;
         }
 
@@ -99,7 +141,104 @@ const GiftPage: React.FC = () => {
         setSuccessMessage(null);
 
         try {
-            console.log('🎁 Creating and funding gift via treasury...');
+            console.log('🎁 Step 1: Creating TipLink...');
+            
+            // Step 1: Create TipLink on backend
+            const { tiplink_url, tiplink_public_key } = await tiplinkService.create();
+            console.log('✅ TipLink created:', tiplink_public_key);
+
+            // Step 2: Fund TipLink from user's Privy wallet
+            console.log('💸 Step 2: Funding TipLink from your wallet...');
+            
+            // Check if wallets are ready
+            if (!walletsReady) {
+                throw new Error('Wallets are not ready yet. Please wait a moment and try again.');
+            }
+
+            // Find embedded Privy wallet by name (reliable method)
+            const embeddedWallet = wallets.find(
+                (w) => w.standardWallet?.name === 'Privy'
+            );
+
+            if (!embeddedWallet) {
+                console.error('❌ No Privy embedded wallet found');
+                console.error('Available wallets:', wallets.map(w => ({
+                    address: w.address,
+                    name: w.standardWallet?.name
+                })));
+                throw new Error(
+                    `No Privy embedded wallet found. Available: ${wallets.map(w => w.standardWallet?.name || 'unknown').join(', ')}`
+                );
+            }
+
+            console.log('✅ Found embedded Privy wallet:', embeddedWallet.address);
+
+            // Step 3: Build transaction using @solana/web3.js (compatible with @solana/kit@3.0.0)
+            console.log('📝 Step 3: Building transaction...');
+            
+            // Create transaction to fund TipLink
+            const transaction = new Transaction().add(
+                SystemProgram.transfer({
+                    fromPubkey: new PublicKey(embeddedWallet.address),
+                    toPubkey: new PublicKey(tiplink_public_key),
+                    lamports: numericAmount * LAMPORTS_PER_SOL,
+                })
+            );
+
+            // Get recent blockhash
+            const { blockhash } = await connection.getLatestBlockhash();
+            transaction.recentBlockhash = blockhash;
+            transaction.feePayer = new PublicKey(embeddedWallet.address);
+
+            // Serialize transaction to Uint8Array (required by Privy's signAndSendTransaction)
+            const serializedTransaction = transaction.serialize({
+                requireAllSignatures: false,
+                verifySignatures: false,
+            });
+
+            console.log('✅ Transaction built and serialized successfully');
+
+            // Step 4: Sign and send transaction using Privy's Solana hook
+            console.log('📝 Step 4: Signing and sending transaction...');
+            
+            const result = await signAndSendTransaction({
+                transaction: serializedTransaction,
+                wallet: embeddedWallet,
+                chain: 'solana:devnet',
+            });
+
+            // Convert signature from base64 to base58 (Solana expects base58)
+            let signatureString: string;
+            const signature = result.signature as string | Uint8Array;
+            
+            if (typeof signature === 'string') {
+                // Check if it's base64 or base58
+                if (signature.includes('/') || signature.includes('+') || signature.includes('=')) {
+                    // It's base64, convert to base58
+                    console.log('🔄 Converting signature from base64 to base58...');
+                    const signatureBytes = Buffer.from(signature, 'base64');
+                    signatureString = bs58.encode(signatureBytes);
+                } else {
+                    // Already base58
+                    signatureString = signature;
+                }
+            } else if (signature instanceof Uint8Array) {
+                // Convert Uint8Array to base58
+                console.log('🔄 Converting signature from Uint8Array to base58...');
+                signatureString = bs58.encode(signature);
+            } else {
+                throw new Error(`Unknown signature format: ${typeof signature}`);
+            }
+            
+            console.log('✅ Transaction sent:', signatureString);
+            console.log('⏳ Waiting for confirmation...');
+
+            // Wait for confirmation with the correct base58 signature
+            await connection.confirmTransaction(signatureString, 'confirmed');
+            console.log('✅ Transaction confirmed!');
+
+            // Step 3: Create gift record on backend
+            console.log('🎁 Step 3: Creating gift record...');
             
             const createResponse = await giftService.createGift({
                 recipient_email: recipientEmail,
@@ -107,15 +246,13 @@ const GiftPage: React.FC = () => {
                 amount: numericAmount,
                 message: message,
                 sender_did: user.privy_did,
+                tiplink_url,
+                tiplink_public_key,
+                funding_signature: signatureString,
             });
 
-            const { claim_url, gift_id, signature, treasury_balance } = createResponse;
-            console.log('✅ Gift created and funded! Gift ID:', gift_id);
-            console.log('✅ Transaction signature:', signature);
-            console.log('💰 Treasury balance:', treasury_balance);
-            
-            // Update local treasury balance
-            setTreasuryBalance(treasury_balance);
+            const { claim_url, gift_id } = createResponse;
+            console.log('✅ Gift created! Gift ID:', gift_id);
 
             // Generate QR code for the claim URL
             const fullClaimUrl = `${window.location.origin}${claim_url}`;
@@ -134,7 +271,7 @@ const GiftPage: React.FC = () => {
                 amount: numericAmount.toString(),
                 token: selectedToken.symbol,
                 recipient: recipientEmail,
-                signature,
+                signature: signatureString,
                 qrCode: qrCodeDataUrl
             });
             setShowSuccessModal(true);
@@ -148,7 +285,7 @@ const GiftPage: React.FC = () => {
             setMessage('');
             
         } catch (err: any) {
-            console.error('❌ Error creating gift:', err);
+            console.error('❌ Error sending gift:', err);
             setError(err.response?.data?.error || err.message || 'Failed to send gift. Please try again.');
         } finally {
             setIsSending(false);
@@ -277,40 +414,15 @@ const GiftPage: React.FC = () => {
             <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-8 shadow-lg">
                 <h1 className="text-3xl font-bold text-center mb-6">Send a Gift 🎁</h1>
                 
-                {/* Treasury Balance Info */}
+                {/* User Balance Info */}
                 <div className="bg-gradient-to-r from-sky-500/10 to-purple-500/10 border border-sky-500/30 rounded-lg p-4 mb-6">
-                    <div>
-                        <div className="mb-3">
-                            <p className="text-slate-400 text-sm">Treasury Balance</p>
-                            <p className="text-2xl font-bold text-white">{treasuryBalance.toFixed(4)} SOL</p>
-                            <p className="text-xs text-slate-500 mt-1">On-chain balance (real-time)</p>
-                        </div>
-                        {treasuryAddress && (
-                            <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-                                <p className="text-blue-200 text-xs mb-2">
-                                    💡 <strong>For REAL transactions:</strong> Send devnet SOL to the treasury wallet:
-                                </p>
-                                <div className="flex gap-2 items-center">
-                                    <code className="flex-1 bg-slate-900/50 px-2 py-1 rounded text-white text-xs break-all">
-                                        {treasuryAddress}
-                                    </code>
-                                    <button
-                                        onClick={() => copyToClipboard(treasuryAddress)}
-                                        className="bg-sky-500 hover:bg-sky-600 text-white px-2 py-1 rounded text-xs whitespace-nowrap"
-                                    >
-                                        Copy
-                                    </button>
-                                </div>
-                                <p className="text-blue-200 text-xs mt-2">
-                                    Get devnet SOL: <a href="https://faucet.solana.com" target="_blank" rel="noopener noreferrer" className="underline">faucet.solana.com</a>
-                                </p>
-                            </div>
-                        )}
-                    </div>
-                    {treasuryBalance === 0 && (
+                    <p className="text-slate-400 text-sm">Your Balance</p>
+                    <p className="text-2xl font-bold text-white">{userBalance.toFixed(4)} SOL</p>
+                    <p className="text-xs text-slate-500 mt-1">Available for gifting</p>
+                    {userBalance < 0.01 && (
                         <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
                             <p className="text-yellow-200 text-sm">
-                                ⚠️ Treasury balance is 0. Fund the treasury wallet with devnet SOL to send gifts.
+                                ⚠️ Low balance. Add SOL to your wallet in the "Add Funds" page.
                             </p>
                         </div>
                     )}
@@ -373,7 +485,7 @@ const GiftPage: React.FC = () => {
                         />
                         {selectedToken?.isNative && (
                             <p className="text-xs text-slate-400 mt-2">
-                                Available: {treasuryBalance.toFixed(4)} {selectedToken.symbol}
+                                Available: {userBalance.toFixed(4)} {selectedToken.symbol}
                             </p>
                         )}
                     </div>
@@ -407,7 +519,7 @@ const GiftPage: React.FC = () => {
 
                     <button
                         type="submit"
-                        disabled={isSending || !user || treasuryBalance === 0}
+                        disabled={isSending || !user || userBalance < 0.001}
                         className="w-full bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-600 hover:to-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 ease-in-out flex items-center justify-center text-lg shadow-lg"
                     >
                         {isSending ? (

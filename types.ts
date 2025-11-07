@@ -3,7 +3,6 @@ export interface User {
   privy_did: string;
   wallet_address: string;
   email: string;
-  balance: number; // Treasury balance for gifting
 }
 
 export interface Token {

@@ -11,7 +11,10 @@
   },
   "dependencies": {
     "@privy-io/react-auth": "^3.4.1",
-    "@solana/kit": "^3.0.3",
+    "@solana/kit": "^3.0.0",
+    "@solana-program/system": "^0.8.0",
+    "@solana-program/token": "^0.8.0",
+    "@solana-program/memo": "^0.8.0",
     "@solana/web3.js": "^1.98.4",
     "@tiplink/api": "^0.2.1",
     "@types/qrcode": "^1.5.6",

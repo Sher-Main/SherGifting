@@ -48,8 +48,8 @@ const AddFundsPage: React.FC = () => {
     if (selectedOption === 'wallet' && user) {
         return (
              <div className="text-center max-w-md mx-auto">
-                <h3 className="text-2xl font-bold mb-4">Your Solana Wallet Address</h3>
-                <p className="text-slate-400 mb-6">Only send SOL or SPL tokens on the Solana network to this address. Sending tokens from other networks may result in a permanent loss of funds.</p>
+                <h3 className="text-2xl font-bold mb-4">Your Gifting Wallet Address</h3>
+                <p className="text-slate-400 mb-6">This is your personal gifting wallet. Send SOL or SPL tokens on the Solana network to this address to fund your gifts. Sending tokens from other networks may result in a permanent loss of funds.</p>
                 <div className="bg-slate-900/50 p-4 rounded-lg mb-4 break-all font-mono text-sm text-slate-300 relative">
                     {user.wallet_address}
                     <button onClick={handleCopy} className="absolute top-2 right-2 bg-sky-500 hover:bg-sky-600 text-white text-xs font-bold py-1 px-2 rounded">

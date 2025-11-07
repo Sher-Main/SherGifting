@@ -13,13 +13,14 @@ export default defineConfig({
     // Enable HTML5 history mode for BrowserRouter
     historyApiFallback: true,
   },
-  define: {
-    global: 'globalThis',
-  },
   resolve: {
     alias: {
       buffer: 'buffer',
     },
+  },
+  define: {
+    global: 'globalThis',
+    'process.env': {},
   },
   optimizeDeps: {
     esbuildOptions: {

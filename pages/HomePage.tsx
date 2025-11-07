@@ -42,14 +42,6 @@ const HomePage: React.FC = () => {
 
   return (
     <div className="space-y-8 animate-fade-in">
-      {/* Treasury Info Banner */}
-      <div className="bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/30 rounded-lg p-4">
-        <h3 className="text-white font-semibold mb-2">💰 Treasury Balance: {user?.balance || 0} SOL</h3>
-        <p className="text-slate-300 text-sm">
-          This is your gifting balance. Use "Add Test Balance" button in the Send Gift page to add devnet SOL for testing.
-        </p>
-      </div>
-
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         
         {/* Left Column: Summary and Actions */}

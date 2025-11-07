@@ -1,13 +1,11 @@
 import express from 'express';
 import cors from 'cors';
 import { TipLink } from '@tiplink/api';
-import { Connection, LAMPORTS_PER_SOL, PublicKey, Keypair, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { Connection, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction } from '@solana/spl-token';
 import 'dotenv/config';
 import { authenticateToken, AuthRequest } from './authMiddleware';
-import bs58 from 'bs58';
-import fs from 'fs';
-import path from 'path';
+import { sendGiftNotification } from './emailService';
 
 
 // --- Types (duplicated from frontend for simplicity) ---
@@ -21,7 +19,6 @@ interface User {
   privy_did: string;
   wallet_address: string;
   email: string;
-  balance: number; // SOL balance in treasury (not their wallet balance)
 }
 
 interface Gift {
@@ -51,56 +48,17 @@ app.use(cors());
 // --- ENV VARS & MOCKS ---
 const PORT = process.env.PORT || 3001;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
-const TREASURY_PRIVATE_KEY = process.env.TREASURY_PRIVATE_KEY; // Treasury wallet private key
+const PRIVY_APP_ID = process.env.PRIVY_APP_ID;
+const PRIVY_APP_SECRET = process.env.PRIVY_APP_SECRET;
 let FAKE_AUTHENTICATED_USER_DID = '';
 const users: User[] = [];
 const gifts: Gift[] = [];
 
-// Initialize treasury wallet
-let treasuryKeypair: Keypair;
-if (TREASURY_PRIVATE_KEY) {
-  try {
-    treasuryKeypair = Keypair.fromSecretKey(bs58.decode(TREASURY_PRIVATE_KEY));
-    console.log('✅ Treasury wallet loaded:', treasuryKeypair.publicKey.toBase58());
-  } catch (error) {
-    console.error('❌ Invalid TREASURY_PRIVATE_KEY format');
-    process.exit(1);
-  }
-} else {
-  // Generate a new treasury wallet and auto-save to .env
-  treasuryKeypair = Keypair.generate();
-  const privateKeyBase58 = bs58.encode(treasuryKeypair.secretKey);
-  
-  console.log('⚠️ No TREASURY_PRIVATE_KEY found. Generated new treasury wallet:');
-  console.log('Public Key:', treasuryKeypair.publicKey.toBase58());
-  console.log('💾 Auto-saving to server/.env...');
-  
-  try {
-    const envPath = path.join(__dirname, '.env');
-    let envContent = '';
-    
-    // Read existing .env if it exists
-    if (fs.existsSync(envPath)) {
-      envContent = fs.readFileSync(envPath, 'utf-8');
-    }
-    
-    // Add or update TREASURY_PRIVATE_KEY
-    if (envContent.includes('TREASURY_PRIVATE_KEY=')) {
-      envContent = envContent.replace(/TREASURY_PRIVATE_KEY=.*/, `TREASURY_PRIVATE_KEY=${privateKeyBase58}`);
-    } else {
-      envContent += `\nTREASURY_PRIVATE_KEY=${privateKeyBase58}\n`;
-    }
-    
-    fs.writeFileSync(envPath, envContent);
-    console.log('✅ Treasury private key saved to .env file');
-    console.log('🔄 Please restart the server for changes to take effect');
-    console.log('🚰 Fund this wallet with devnet SOL: https://faucet.solana.com');
-    console.log('📍 Treasury address:', treasuryKeypair.publicKey.toBase58());
-  } catch (error) {
-    console.error('❌ Failed to save to .env:', error);
-    console.log('⚠️ Please manually add this to server/.env:');
-    console.log(`TREASURY_PRIVATE_KEY=${privateKeyBase58}`);
-  }
+// Validate required environment variables
+if (!PRIVY_APP_ID || !PRIVY_APP_SECRET) {
+  console.error('❌ Missing required environment variables: PRIVY_APP_ID and PRIVY_APP_SECRET');
+  console.error('📝 Please add them to server/.env file');
+  process.exit(1);
 }
 
 if (!HELIUS_API_KEY) {
@@ -154,10 +112,15 @@ const SUPPORTED_TOKENS = [
 
 // --- ROUTES ---
 
-app.post('/api/user/sync', (req, res) => {  // ✅ NO authenticateToken here
+app.post('/api/user/sync', authenticateToken, (req: AuthRequest, res) => {
   const { privy_did, wallet_address, email } = req.body;
   
   console.log('✅ Received user sync request:', { privy_did, wallet_address, email });
+  
+  // Verify the authenticated user matches the request
+  if (req.user?.id !== privy_did) {
+    return res.status(403).json({ error: 'Unauthorized: User ID mismatch' });
+  }
   
   if (!privy_did || !wallet_address || !email) {
     return res.status(400).json({ error: 'Missing required fields' });
@@ -165,12 +128,13 @@ app.post('/api/user/sync', (req, res) => {  // ✅ NO authenticateToken here
 
   let user = users.find(u => u.privy_did === privy_did);
   if (!user) {
-    user = { privy_did, wallet_address, email, balance: 0 }; // Initialize with 0 balance
+    user = { privy_did, wallet_address, email };
     users.push(user);
     console.log('✅ Created new user:', user);
   } else {
-    // Update wallet address if changed
+    // Update wallet address and email if changed
     user.wallet_address = wallet_address;
+    user.email = email;
     console.log('✅ Found existing user:', user);
   }
 
@@ -211,131 +175,38 @@ app.get('/api/tokens', (req, res) => {
   res.json({ tokens: SUPPORTED_TOKENS });
 });
 
-// Get treasury wallet info (public key for deposits)
-app.get('/api/treasury/info', async (req, res) => {
-  const publicKey = treasuryKeypair.publicKey.toBase58();
-  console.log('📍 Treasury wallet address requested:', publicKey);
-  
-  // Get actual on-chain balance
-  let balance = 0;
+// Create TipLink (Step 1 of gift creation)
+app.post('/api/tiplink/create', authenticateToken, async (req: AuthRequest, res) => {
   try {
-    const lamports = await connection.getBalance(treasuryKeypair.publicKey);
-    balance = lamports / LAMPORTS_PER_SOL;
-    console.log(`💰 Treasury on-chain balance: ${balance} SOL`);
-  } catch (error) {
-    console.error('❌ Error fetching treasury balance:', error);
-  }
-  
-  res.json({
-    public_key: publicKey,
-    balance: balance,
-    message: 'Send devnet SOL to this address to fund the treasury'
-  });
-});
-
-// Get user's treasury balance
-app.get('/api/treasury/balance', authenticateToken, (req: AuthRequest, res) => {
-  const sender_did = req.user?.privy_did;
-  if (!sender_did) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  const user = users.find(u => u.privy_did === sender_did);
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-
-  res.json({ balance: user.balance });
-});
-
-// Add test balance (development only - remove in production!)
-app.post('/api/treasury/add-test-balance', async (req, res) => {
-  const { privy_did, amount } = req.body;
-  
-  if (!privy_did || !amount) {
-    return res.status(400).json({ error: 'Missing required fields' });
-  }
-
-  const user = users.find(u => u.privy_did === privy_did);
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-
-  user.balance += amount;
-  console.log(`🧪 Test: Added ${amount} SOL to ${user.email}. New balance: ${user.balance}`);
-
-  res.json({ success: true, new_balance: user.balance });
-});
-
-// Deposit funds (user sends SOL to treasury, we credit their balance)
-app.post('/api/treasury/deposit', authenticateToken, async (req: AuthRequest, res) => {
-  const sender_did = req.user?.privy_did;
-  const { amount, signature } = req.body; // Transaction signature as proof
-
-  if (!sender_did || !amount || !signature) {
-    return res.status(400).json({ error: 'Missing required fields' });
-  }
-
-  const user = users.find(u => u.privy_did === sender_did);
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-
-  try {
-    // Verify the transaction on-chain
-    console.log('🔍 Verifying deposit transaction:', signature);
-    const tx = await connection.getTransaction(signature, {
-      maxSupportedTransactionVersion: 0
-    });
-
-    if (!tx || !tx.meta) {
-      return res.status(400).json({ error: 'Transaction not found or not confirmed' });
-    }
-
-    // Check if transaction was successful
-    if (tx.meta.err) {
-      return res.status(400).json({ error: 'Transaction failed on-chain' });
-    }
-
-    // Verify the transaction sent SOL to treasury wallet
-    const treasuryPubkey = treasuryKeypair.publicKey.toBase58();
-    const accountIndex = tx.transaction.message.staticAccountKeys.findIndex(
-      key => key.toBase58() === treasuryPubkey
-    );
-
-    if (accountIndex === -1) {
-      return res.status(400).json({ error: 'Transaction does not involve treasury wallet' });
-    }
-
-    // Get the amount received (postBalance - preBalance)
-    const preBalance = tx.meta.preBalances[accountIndex];
-    const postBalance = tx.meta.postBalances[accountIndex];
-    const receivedLamports = postBalance - preBalance;
-    const receivedSOL = receivedLamports / LAMPORTS_PER_SOL;
-
-    console.log(`✅ Deposit verified: ${receivedSOL} SOL from ${user.email}`);
-
-    // Credit user's balance
-    user.balance += receivedSOL;
-
+    const newTipLink = await TipLink.create();
+    const tiplinkUrl = newTipLink.url.toString();
+    const tiplinkPublicKey = newTipLink.keypair.publicKey.toBase58();
+    
+    console.log('✅ TipLink created:', tiplinkPublicKey, 'for user:', req.user?.id);
+    
     res.json({
-      success: true,
-      balance: user.balance,
-      deposited: receivedSOL
+      tiplink_url: tiplinkUrl,
+      tiplink_public_key: tiplinkPublicKey
     });
   } catch (error: any) {
-    console.error('❌ Error processing deposit:', error);
-    res.status(500).json({ error: 'Failed to process deposit', details: error?.message });
+    console.error('❌ Error creating TipLink:', error);
+    res.status(500).json({ error: 'Failed to create TipLink', details: error?.message });
   }
 });
 
-// Create and fund gift (treasury does everything)
-app.post('/api/gifts/create', async (req, res) => {
-  const { sender_did, recipient_email, token_mint, amount, message } = req.body;
 
-  console.log('🎁 Creating gift:', { sender_did, recipient_email, token_mint, amount });
+// Create gift - Frontend has already funded the TipLink, backend creates the gift record
+app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) => {
+  const { sender_did, recipient_email, token_mint, amount, message, tiplink_url, tiplink_public_key, funding_signature } = req.body;
 
-  if (!recipient_email || !token_mint || !amount || !sender_did) {
+  console.log('🎁 Creating gift record:', { sender_did, recipient_email, token_mint, amount });
+
+  // Verify the authenticated user matches the sender
+  if (req.user?.id !== sender_did) {
+    return res.status(403).json({ error: 'Unauthorized: Sender ID mismatch' });
+  }
+
+  if (!recipient_email || !token_mint || !amount || !sender_did || !tiplink_url || !tiplink_public_key || !funding_signature) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
@@ -351,101 +222,36 @@ app.post('/api/gifts/create', async (req, res) => {
     return res.status(400).json({ error: 'Unsupported token' });
   }
 
-  // Check actual on-chain treasury balance (only for SOL)
-  if (tokenInfo.isNative) {
-    try {
-      const treasuryLamports = await connection.getBalance(treasuryKeypair.publicKey);
-      const treasuryBalance = treasuryLamports / LAMPORTS_PER_SOL;
-      
-      console.log(`💰 Treasury on-chain balance: ${treasuryBalance} SOL, required: ${amount} SOL`);
-      
-      if (treasuryBalance < amount) {
-        return res.status(400).json({ 
-          error: 'Insufficient treasury balance',
-          required: amount,
-          available: treasuryBalance,
-          message: 'Please fund the treasury wallet with more devnet SOL'
-        });
-      }
-    } catch (error: any) {
-      console.error('❌ Error checking treasury balance:', error);
-      return res.status(500).json({ error: 'Failed to check treasury balance' });
-    }
-  }
-
   try {
-    // Step 1: Create TipLink
-    const newTipLink = await TipLink.create();
-    const tiplinkUrl = newTipLink.url.toString();
-    const tiplinkPublicKey = newTipLink.keypair.publicKey;
+    // Verify the funding transaction
+    console.log('🔍 Verifying funding transaction:', funding_signature);
     
-    console.log('✅ TipLink created:', tiplinkPublicKey.toBase58());
+    const tx = await connection.getTransaction(funding_signature, {
+      maxSupportedTransactionVersion: 0,
+      commitment: 'confirmed'
+    });
 
-    let signature: string;
-
-    // Step 2: Fund TipLink from treasury wallet
-    if (tokenInfo.isNative) {
-      // Native SOL transfer
-      console.log(`💸 Funding TipLink with ${amount} SOL from treasury...`);
-      const transaction = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: treasuryKeypair.publicKey,
-          toPubkey: tiplinkPublicKey,
-          lamports: amount * LAMPORTS_PER_SOL,
-        })
-      );
-
-      signature = await sendAndConfirmTransaction(
-        connection,
-        transaction,
-        [treasuryKeypair],
-        { commitment: 'confirmed' }
-      );
-    } else {
-      // SPL Token transfer
-      console.log(`💸 Funding TipLink with ${amount} ${tokenInfo.symbol} from treasury...`);
-      
-      const mintPubkey = new PublicKey(token_mint);
-      const treasuryATA = await getAssociatedTokenAddress(mintPubkey, treasuryKeypair.publicKey);
-      const tiplinkATA = await getAssociatedTokenAddress(mintPubkey, tiplinkPublicKey);
-
-      const instructions = [];
-      
-      // Create TipLink's associated token account if it doesn't exist
-      const tiplinkAccountInfo = await connection.getAccountInfo(tiplinkATA);
-      if (!tiplinkAccountInfo) {
-        instructions.push(
-          createAssociatedTokenAccountInstruction(
-            treasuryKeypair.publicKey,
-            tiplinkATA,
-            tiplinkPublicKey,
-            mintPubkey
-          )
-        );
-      }
-
-      // Transfer SPL tokens
-      instructions.push(
-        createTransferInstruction(
-          treasuryATA,
-          tiplinkATA,
-          treasuryKeypair.publicKey,
-          amount * (10 ** tokenInfo.decimals)
-        )
-      );
-
-      const transaction = new Transaction().add(...instructions);
-      signature = await sendAndConfirmTransaction(
-        connection,
-        transaction,
-        [treasuryKeypair],
-        { commitment: 'confirmed' }
-      );
+    if (!tx || !tx.meta) {
+      return res.status(400).json({ error: 'Funding transaction not found or not confirmed. Please wait a moment and try again.' });
     }
-    
-    console.log('✅ TipLink funded! Transaction:', signature);
 
-    // Step 3: Create gift record
+    if (tx.meta.err) {
+      return res.status(400).json({ error: 'Funding transaction failed on-chain' });
+    }
+
+    // Verify the transaction sent funds to the TipLink address
+    const tiplinkPubkey = new PublicKey(tiplink_public_key);
+    const accountIndex = tx.transaction.message.staticAccountKeys.findIndex(
+      key => key.toBase58() === tiplinkPubkey.toBase58()
+    );
+
+    if (accountIndex === -1) {
+      return res.status(400).json({ error: 'Transaction does not involve the TipLink address' });
+    }
+
+    console.log('✅ Funding transaction verified!');
+
+    // Create gift record
     const giftId = `gift_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const newGift: Gift = {
       id: giftId,
@@ -458,9 +264,9 @@ app.post('/api/gifts/create', async (req, res) => {
       amount,
       message: message || '',
       status: GiftStatus.SENT,
-      tiplink_url: tiplinkUrl,
-      tiplink_public_key: tiplinkPublicKey.toBase58(),
-      transaction_signature: signature,
+      tiplink_url,
+      tiplink_public_key,
+      transaction_signature: funding_signature,
       created_at: new Date().toISOString()
     };
 
@@ -468,34 +274,33 @@ app.post('/api/gifts/create', async (req, res) => {
     
     console.log('✅ Gift created successfully:', newGift.id);
     
-    // Get updated treasury balance
-    const updatedLamports = await connection.getBalance(treasuryKeypair.publicKey);
-    const updatedBalance = updatedLamports / LAMPORTS_PER_SOL;
-    
-    // TODO: Send email notification to recipient
-    // For now, just log the email details
+    // Send email notification to recipient
     const claimUrl = `/claim/${giftId}`;
     const fullClaimUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}${claimUrl}`;
     
-    console.log('\n📧 EMAIL NOTIFICATION (not sent - implement email service):');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log(`To: ${recipient_email}`);
-    console.log(`Subject: 🎁 You received ${amount} ${tokenInfo.symbol} from ${sender.email}!`);
-    console.log(`\nMessage:`);
-    console.log(`You've received a crypto gift!`);
-    console.log(`Amount: ${amount} ${tokenInfo.symbol}`);
-    console.log(`From: ${sender.email}`);
-    if (message) console.log(`Message: "${message}"`);
-    console.log(`\nClaim your gift here: ${fullClaimUrl}`);
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    console.log('📧 Sending email notification to recipient...');
+    const emailResult = await sendGiftNotification({
+      recipientEmail: recipient_email,
+      senderEmail: sender.email,
+      amount,
+      tokenSymbol: tokenInfo.symbol,
+      claimUrl: fullClaimUrl,
+      message: message || undefined,
+    });
+
+    if (emailResult.success) {
+      console.log('✅ Email sent successfully to:', recipient_email);
+    } else {
+      console.error('⚠️ Failed to send email:', emailResult.error);
+      // Don't fail the gift creation if email fails
+    }
     
-    // Return claim URL
+    // Return success
     res.status(201).json({ 
       gift_id: newGift.id,
       claim_url: claimUrl,
-      tiplink_public_key: tiplinkPublicKey.toBase58(),
-      signature: signature,
-      treasury_balance: updatedBalance
+      tiplink_public_key,
+      signature: funding_signature
     });
   } catch (error: any) {
     console.error('❌ Error creating gift:', error);
@@ -505,8 +310,11 @@ app.post('/api/gifts/create', async (req, res) => {
 
 
 
-app.get('/api/gifts/history', /* authenticateToken, */ (req: AuthRequest, res) => {
-  const sender_did = req.userId!;
+app.get('/api/gifts/history', authenticateToken, (req: AuthRequest, res) => {
+  const sender_did = req.user?.id;
+  if (!sender_did) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
   const userGifts = gifts.filter(g => g.sender_did === sender_did);
   res.json(userGifts);
 });

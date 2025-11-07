@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { User } from '../types';
-import { userService } from '../services/api';
+import { userService, setAuthToken } from '../services/api';
 
 interface AuthContextType {
   user: User | null;
@@ -15,7 +15,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const { ready, authenticated, user: privyUser, login: privyLogin, logout: privyLogout } = usePrivy();
+  const { ready, authenticated, user: privyUser, login: privyLogin, logout: privyLogout, getAccessToken } = usePrivy();
   const { wallets, ready: walletsReady } = useWallets();
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -68,6 +68,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
             if (email && walletAddress) {
               try {
+                // Fetch and set auth token before making API call
+                console.log('🔑 Fetching auth token...');
+                const token = await getAccessToken();
+                setAuthToken(token);
+                console.log('✅ Auth token set for API requests');
+                
                 console.log('📡 Creating/fetching backend user with wallet from linkedAccounts...');
                 const backendUser = await userService.getOrCreateUser({
                   privy_did: privyUser.id,
@@ -160,11 +166,29 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setRetryCount(0);
       setIsLoading(false);
     }
-  }, [ready, walletsReady, authenticated, privyUser, wallets, retryCount]);
+  }, [ready, walletsReady, authenticated, privyUser, wallets, retryCount, getAccessToken]);
 
   useEffect(() => {
     syncUser();
   }, [syncUser]);
+
+  // Set auth token when user is authenticated
+  useEffect(() => {
+    const setToken = async () => {
+      if (authenticated && privyUser) {
+        try {
+          const token = await getAccessToken();
+          setAuthToken(token);
+          console.log('✅ Auth token set for API requests');
+        } catch (error) {
+          console.error('❌ Error getting auth token:', error);
+        }
+      } else {
+        setAuthToken(null);
+      }
+    };
+    setToken();
+  }, [authenticated, privyUser, getAccessToken]);
 
   const handleLogin = async () => {
     try {

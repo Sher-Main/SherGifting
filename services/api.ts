@@ -8,6 +8,15 @@ const apiClient = axios.create({
   },
 });
 
+// Function to set auth token for API requests
+export const setAuthToken = (token: string | null) => {
+  if (token) {
+    apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+  } else {
+    delete apiClient.defaults.headers.common['Authorization'];
+  }
+};
+
 export const userService = {
   getOrCreateUser: async (userData: { 
     privy_did: string; 
@@ -38,17 +47,9 @@ export const tokenService = {
   },
 };
 
-export const treasuryService = {
-  getBalance: async (): Promise<{ balance: number }> => {
-    const response = await apiClient.get('/treasury/balance');
-    return response.data;
-  },
-
-  addTestBalance: async (privyDid: string, amount: number): Promise<{ success: boolean; new_balance: number }> => {
-    const response = await apiClient.post('/treasury/add-test-balance', {
-      privy_did: privyDid,
-      amount,
-    });
+export const tiplinkService = {
+  create: async (): Promise<{ tiplink_url: string; tiplink_public_key: string }> => {
+    const response = await apiClient.post('/tiplink/create');
     return response.data;
   },
 };
@@ -60,12 +61,14 @@ export const giftService = {
     amount: number;
     message?: string;
     sender_did: string;
+    tiplink_url: string;
+    tiplink_public_key: string;
+    funding_signature: string;
   }): Promise<{ 
     gift_id: string;
     claim_url: string;
     tiplink_public_key: string;
     signature: string;
-    treasury_balance: number;
   }> => {
     const response = await apiClient.post('/gifts/create', giftData);
     return response.data;
