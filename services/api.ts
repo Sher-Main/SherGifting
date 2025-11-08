@@ -1,8 +1,11 @@
 import axios from 'axios';
 import { TokenBalance, Gift, GiftInfo, Token } from '../types';
 
+// Use environment variable for backend URL in production, fallback to /api for local dev
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '/api';
+
 const apiClient = axios.create({
-  baseURL: '/api',
+  baseURL: BACKEND_URL,
   headers: {
     'Content-Type': 'application/json',
   },
