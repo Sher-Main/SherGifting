@@ -459,10 +459,20 @@ const GiftPage: React.FC = () => {
                 }
             }
 
-            // Get recent blockhash
-            const { blockhash } = await connection.getLatestBlockhash();
+            // ✅ CRITICAL: Get fresh blockhash RIGHT BEFORE signing (prevents expiration)
+            console.log('🔄 Getting fresh blockhash for transaction...');
+            const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
+            
+            // Set transaction properties
             transaction.recentBlockhash = blockhash;
             transaction.feePayer = new PublicKey(embeddedWallet.address);
+            
+            // ✅ Set last valid block height to prevent expiration
+            if (lastValidBlockHeight) {
+                transaction.lastValidBlockHeight = lastValidBlockHeight;
+            }
+            
+            console.log(`✅ Transaction blockhash: ${blockhash.substring(0, 8)}... (valid until block ${lastValidBlockHeight})`);
 
             // Serialize transaction to Uint8Array (required by Privy's signAndSendTransaction)
             const serializedTransaction = transaction.serialize({
@@ -475,41 +485,108 @@ const GiftPage: React.FC = () => {
             // Step 4: Sign and send transaction using Privy's Solana hook
             console.log('📝 Step 4: Signing and sending transaction...');
             
-            const result = await signAndSendTransaction({
-                transaction: serializedTransaction,
-                wallet: embeddedWallet,
-                chain: 'solana:mainnet',
-            });
-
-            // Convert signature from base64 to base58 (Solana expects base58)
             let signatureString: string;
-            const signature = result.signature as string | Uint8Array;
-            
-            if (typeof signature === 'string') {
-                // Check if it's base64 or base58
-                if (signature.includes('/') || signature.includes('+') || signature.includes('=')) {
-                    // It's base64, convert to base58
-                    console.log('🔄 Converting signature from base64 to base58...');
-                    const signatureBytes = Buffer.from(signature, 'base64');
-                    signatureString = bs58.encode(signatureBytes);
+            let result: any;
+
+            try {
+                // ✅ Send transaction immediately after building (prevents blockhash expiration)
+                result = await signAndSendTransaction({
+                    transaction: serializedTransaction,
+                    wallet: embeddedWallet,
+                    chain: 'solana:mainnet',
+                });
+                
+                // Normal success path
+                const signature = result.signature as string | Uint8Array;
+                
+                if (typeof signature === 'string') {
+                    if (signature.includes('/') || signature.includes('+') || signature.includes('=')) {
+                        const signatureBytes = Buffer.from(signature, 'base64');
+                        signatureString = bs58.encode(signatureBytes);
+                    } else {
+                        signatureString = signature;
+                    }
+                } else if (signature instanceof Uint8Array) {
+                    signatureString = bs58.encode(signature);
                 } else {
-                    // Already base58
-                    signatureString = signature;
+                    throw new Error(`Unknown signature format: ${typeof signature}`);
                 }
-            } else if (signature instanceof Uint8Array) {
-                // Convert Uint8Array to base58
-                console.log('🔄 Converting signature from Uint8Array to base58...');
-                signatureString = bs58.encode(signature);
-            } else {
-                throw new Error(`Unknown signature format: ${typeof signature}`);
+                
+                console.log('✅ Transaction sent (success path):', signatureString);
+                
+            } catch (error: any) {
+                // Privy sometimes throws even when transaction succeeds, but user confirmed it failed
+                console.error('❌ Transaction failed:', error);
+                
+                // Check if error contains useful information
+                if (error?.message) {
+                    console.error('Error message:', error.message);
+                }
+                if (error?.code) {
+                    console.error('Error code:', error.code);
+                }
+                if (error?.transaction) {
+                    console.error('Transaction in error:', error.transaction);
+                }
+                
+                // Check if error contains a signature (unlikely if transaction failed)
+                if (error?.signature) {
+                    console.log('⚠️ Found signature in error object, checking if transaction succeeded...');
+                    const sig = error.signature;
+                    
+                    if (typeof sig === 'string') {
+                        signatureString = sig.includes('/') || sig.includes('+') || sig.includes('=')
+                            ? bs58.encode(Buffer.from(sig, 'base64'))
+                            : sig;
+                    } else if (sig instanceof Uint8Array) {
+                        signatureString = bs58.encode(sig);
+                    } else {
+                        throw new Error('Could not extract signature from error');
+                    }
+                    
+                    // Verify transaction actually succeeded
+                    try {
+                        const tx = await connection.getTransaction(signatureString, {
+                            commitment: 'confirmed',
+                        });
+                        
+                        if (tx && tx.meta?.err === null) {
+                            console.log('✅ Transaction actually succeeded despite error!');
+                            // Continue with success flow
+                        } else {
+                            throw new Error(`Transaction failed on-chain: ${tx?.meta?.err || 'Transaction not found'}`);
+                        }
+                    } catch (verifyError) {
+                        throw new Error(`Transaction failed: ${error.message || 'Unknown error'}`);
+                    }
+                } else {
+                    // Transaction definitely failed
+                    throw new Error(`Transaction failed: ${error.message || error.code || 'Unknown error'}. Please check your balance and try again.`);
+                }
             }
-            
-            console.log('✅ Transaction sent:', signatureString);
+
+            console.log('✅ Transaction signature:', signatureString);
             console.log('⏳ Waiting for confirmation...');
 
-            // Wait for confirmation with the correct base58 signature
-            await connection.confirmTransaction(signatureString, 'confirmed');
-            console.log('✅ Transaction confirmed!');
+            // Wait for confirmation - this will verify the transaction actually succeeded
+            try {
+                const confirmation = await connection.confirmTransaction(signatureString, 'confirmed');
+                console.log('✅ Transaction confirmed!', confirmation);
+            } catch (confirmError: any) {
+                // If confirmation fails, check if transaction exists on-chain
+                console.log('⚠️ Confirmation failed, checking if transaction exists on-chain...');
+                const tx = await connection.getTransaction(signatureString, {
+                    commitment: 'confirmed',
+                });
+                
+                if (tx && tx.meta?.err === null) {
+                    console.log('✅ Transaction found on-chain and succeeded!');
+                } else if (tx) {
+                    throw new Error(`Transaction failed on-chain: ${tx.meta?.err}`);
+                } else {
+                    throw new Error('Transaction not found on-chain. Please check your wallet and try again.');
+                }
+            }
 
             // Step 3: Create gift record on backend
             console.log('🎁 Step 3: Creating gift record...');
