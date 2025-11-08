@@ -191,7 +191,7 @@ const ClaimPage: React.FC = () => {
                             <div className="bg-slate-900/50 rounded-lg p-4 mb-6">
                                 <p className="text-slate-400 text-sm mb-2">Transaction:</p>
                                 <a
-                                    href={`https://explorer.solana.com/tx/${claimSignature}?cluster=devnet`}
+                                    href={`https://explorer.solana.com/tx/${claimSignature}?cluster=mainnet-beta`}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="text-sky-400 hover:text-sky-300 text-sm font-mono break-all"

@@ -53,12 +53,12 @@ root.render(
         // ✅ Configure Solana RPC endpoints
         solana: {
           rpcs: {
-            'solana:devnet': {
+            'solana:mainnet-beta': {
               rpc: createSolanaRpc(
-                `https://devnet.helius-rpc.com/?api-key=${heliusApiKey}`
+                `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`
               ),
               rpcSubscriptions: createSolanaRpcSubscriptions(
-                `wss://devnet.helius-rpc.com/?api-key=${heliusApiKey}`
+                `wss://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`
               ),
             },
           },

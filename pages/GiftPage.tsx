@@ -8,7 +8,8 @@ import { Token, TokenBalance } from '../types';
 import Spinner from '../components/Spinner';
 import { ArrowLeftIcon } from '../components/icons';
 import QRCode from 'qrcode';
-import { Connection, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
+import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
+import { connection } from '../services/solana';
 import bs58 from 'bs58';
 
 const GiftPage: React.FC = () => {
@@ -54,9 +55,6 @@ const GiftPage: React.FC = () => {
         signature: string;
         qrCode: string;
     } | null>(null);
-
-    // Solana connection
-    const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
 
     // Monitor wallets array for changes
     useEffect(() => {
@@ -480,7 +478,7 @@ const GiftPage: React.FC = () => {
             const result = await signAndSendTransaction({
                 transaction: serializedTransaction,
                 wallet: embeddedWallet,
-                chain: 'solana:devnet',
+                chain: 'solana:mainnet-beta',
             });
 
             // Convert signature from base64 to base58 (Solana expects base58)

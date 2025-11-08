@@ -7,6 +7,7 @@ import 'dotenv/config';
 import QRCode from 'qrcode';
 import { authenticateToken, AuthRequest } from './authMiddleware';
 import { sendGiftNotification } from './emailService';
+import { insertGift, getGiftsBySender, getGiftById, updateGiftClaim } from './database';
 
 
 // --- Types (duplicated from frontend for simplicity) ---
@@ -55,6 +56,7 @@ const FEE_WALLET_ADDRESS = process.env.FEE_WALLET_ADDRESS;
 const FEE_PERCENTAGE = 0.001; // 0.1% fee
 let FAKE_AUTHENTICATED_USER_DID = '';
 const users: User[] = [];
+// Keep in-memory array as fallback if database is not available
 const gifts: Gift[] = [];
 
 // Validate required environment variables
@@ -65,17 +67,17 @@ if (!PRIVY_APP_ID || !PRIVY_APP_SECRET) {
 }
 
 if (!HELIUS_API_KEY) {
-  console.warn("⚠️ Warning: Missing HELIUS_API_KEY. Using public devnet RPC (rate limited).");
+  console.warn("⚠️ Warning: Missing HELIUS_API_KEY. Using public mainnet RPC (rate limited).");
 }
 
 // ✅ FIXED: Always create connection (don't make it null)
-// Use Helius devnet if API key exists, otherwise use public devnet RPC
-// Helius format: https://mainnet.helius-rpc.com/?api-key=YOUR_KEY (change mainnet to devnet)
+// Use Helius mainnet if API key exists, otherwise use public mainnet RPC
+// Helius format: https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
 const RPC_URL = HELIUS_API_KEY
-  ? `https://devnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`
-  : 'https://api.devnet.solana.com';
+  ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`
+  : 'https://api.mainnet.solana.com';
 
-console.log('🌐 Connecting to Solana Devnet RPC:', RPC_URL.replace(HELIUS_API_KEY || '', '***'));
+console.log('🌐 Connecting to Solana Mainnet RPC:', RPC_URL.replace(HELIUS_API_KEY || '', '***'));
 
 const connection = new Connection(RPC_URL, 'confirmed');
 
@@ -83,7 +85,7 @@ const connection = new Connection(RPC_URL, 'confirmed');
 (async () => {
   try {
     const version = await connection.getVersion();
-    console.log('✅ Successfully connected to Solana Devnet. Version:', version['solana-core']);
+    console.log('✅ Successfully connected to Solana Mainnet. Version:', version['solana-core']);
   } catch (error: any) {
     console.error('❌ Failed to connect to Solana RPC:', error?.message || error);
     console.error('🔧 Please check your HELIUS_API_KEY in server/.env file');
@@ -93,30 +95,66 @@ const connection = new Connection(RPC_URL, 'confirmed');
 // ✅ FIX: Remove TipLink initialization - we'll use the static create() method instead
 // TipLink doesn't need to be initialized with a client, we use it directly
 
-// --- KNOWN TOKEN METADATA (fallback for API failures) ---
+// --- TOKEN METADATA FETCHING ---
+interface TokenMetadata {
+  mint: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  logo: string;
+}
+
+// Function to fetch token metadata from Helius API (batch)
+async function fetchTokenMetadata(
+  mintAddresses: string[],
+  heliusApiKey: string
+): Promise<TokenMetadata[]> {
+  if (!heliusApiKey || mintAddresses.length === 0) {
+    return [];
+  }
+
+  try {
+    const response = await fetch(
+      `https://api.helius.xyz/v0/token-metadata?api-key=${heliusApiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mintAccounts: mintAddresses }),
+      }
+    );
+
+    if (!response.ok) {
+      console.error(`Helius API error: ${response.status}`);
+      return [];
+    }
+
+    const metadata = await response.json();
+    return metadata.map((token: any) => ({
+      mint: token.mint,
+      symbol: token.symbol || 'UNKNOWN',
+      name: token.name || 'Unknown Token',
+      decimals: token.decimals || 0,
+      logo: token.image || '',
+    }));
+  } catch (error) {
+    console.error('Error fetching token metadata:', error);
+    return [];
+  }
+}
+
+// --- KNOWN TOKEN METADATA (minimal fallback for API failures) ---
+// Minimal fallback for tokens without metadata. Token discovery is now dynamic via Helius API.
 const KNOWN_TOKENS: Record<string, { symbol: string; name: string; logoURI?: string }> = {
-  // Devnet tokens
-  'Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr': {
-    symbol: 'USDC',
-    name: 'USD Coin',
-    logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png'
-  },
-  // Another USDC devnet mint address
-  '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU': {
-    symbol: 'USDC',
-    name: 'USD Coin',
-    logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png'
-  },
-  // Mainnet USDC (in case it's used)
+  // Mainnet USDC (fallback only)
   'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': {
     symbol: 'USDC',
     name: 'USD Coin',
     logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png'
   },
-  // Add more known tokens as needed
 };
 
 // --- SUPPORTED TOKENS ---
+// Token filtering now happens dynamically via wallet balances. This list is kept for legacy compatibility only.
 const SUPPORTED_TOKENS = [
   {
     mint: 'So11111111111111111111111111111111111111112', // Native SOL (wrapped)
@@ -125,13 +163,6 @@ const SUPPORTED_TOKENS = [
     decimals: 9,
     isNative: true
   },
-  {
-    mint: 'Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr', // Devnet USDC
-    symbol: 'USDC',
-    name: 'USD Coin (Devnet)',
-    decimals: 6,
-    isNative: false
-  }
 ];
 
 // --- ROUTES ---
@@ -203,7 +234,10 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
       
       console.log(`🔍 Found ${tokenAccounts.value.length} token account(s)`);
       
-      // Process each token account
+      // Collect all mint addresses with non-zero balances
+      const tokenData: Array<{ mint: string; balance: number; decimals: number }> = [];
+      const mintAddresses: string[] = [];
+      
       for (const accountInfo of tokenAccounts.value) {
         const parsedInfo = accountInfo.account.data.parsed.info;
         const mintAddress = parsedInfo.mint;
@@ -211,67 +245,45 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
         
         // Only include tokens with non-zero balance
         if (tokenAmount.uiAmount > 0) {
-          // Initialize with known token metadata or defaults
-          const mintAddressStr = mintAddress;
-          console.log(`🔍 Processing token: ${mintAddressStr}, balance: ${tokenAmount.uiAmount}`);
-          
-          // Check known tokens first
-          const knownToken = KNOWN_TOKENS[mintAddressStr];
-          let tokenSymbol = knownToken?.symbol || 'UNKNOWN';
-          let tokenName = knownToken?.name || 'Unknown Token';
-          let tokenDecimals = tokenAmount.decimals;
-          let tokenLogo = knownToken?.logoURI || `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${mintAddressStr}/logo.png`;
-          
-          if (knownToken) {
-            console.log(`✅ Found in known tokens: ${tokenSymbol} - ${tokenName}`);
-          } else {
-            console.log(`⚠️ Token ${mintAddressStr} not in known tokens, trying Helius API...`);
-          }
-          
-          // Try Helius API for token metadata if API key is available and not in known tokens
-          if (HELIUS_API_KEY && !knownToken) {
-            try {
-              const heliusUrl = `https://api.helius.xyz/v0/token-metadata?api-key=${HELIUS_API_KEY}`;
-              const heliusResponse = await fetch(heliusUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ mintAccounts: [mintAddressStr] }),
-              });
-              
-              if (heliusResponse.ok) {
-                const heliusData = await heliusResponse.json();
-                if (heliusData && heliusData.length > 0 && heliusData[0]) {
-                  const metadata = heliusData[0];
-                  tokenSymbol = metadata.symbol || tokenSymbol;
-                  tokenName = metadata.name || tokenName;
-                  if (metadata.image) {
-                    tokenLogo = metadata.image;
-                  }
-                  console.log(`✅ Fetched metadata for ${mintAddressStr}: ${tokenSymbol} - ${tokenName}`);
-                } else {
-                  console.log(`⚠️ Helius returned empty data for ${mintAddressStr}`);
-                }
-              } else {
-                const errorText = await heliusResponse.text();
-                console.log(`⚠️ Helius API error for ${mintAddressStr}: ${heliusResponse.status} - ${errorText}`);
-              }
-            } catch (heliusError: any) {
-              console.log(`⚠️ Could not fetch metadata for ${mintAddressStr}: ${heliusError?.message || heliusError}`);
-            }
-          } else if (KNOWN_TOKENS[mintAddressStr]) {
-            console.log(`✅ Using known token metadata for ${mintAddressStr}: ${tokenSymbol}`);
-          }
-          
-          balances.push({
-            address: mintAddress,
-            symbol: tokenSymbol,
-            name: tokenName,
-            logoURI: tokenLogo,
-            decimals: tokenDecimals,
+          mintAddresses.push(mintAddress);
+          tokenData.push({
+            mint: mintAddress,
             balance: tokenAmount.uiAmount,
-            usdValue: tokenAmount.uiAmount * 0 // TODO: Add USD price lookup
+            decimals: tokenAmount.decimals,
           });
         }
+      }
+      
+      // Batch fetch metadata for all tokens
+      let metadataMap = new Map<string, TokenMetadata>();
+      if (mintAddresses.length > 0 && HELIUS_API_KEY) {
+        console.log(`📊 Fetching metadata for ${mintAddresses.length} token(s)...`);
+        const metadataList = await fetchTokenMetadata(mintAddresses, HELIUS_API_KEY);
+        
+        // Create a map for quick lookup
+        metadataMap = new Map(metadataList.map((m) => [m.mint, m]));
+        console.log(`✅ Fetched metadata for ${metadataList.length} token(s)`);
+      }
+      
+      // Combine token data with metadata
+      for (const token of tokenData) {
+        const metadata = metadataMap.get(token.mint);
+        const knownToken = KNOWN_TOKENS[token.mint];
+        
+        // Use metadata from Helius if available, otherwise fallback to known tokens, then defaults
+        let tokenSymbol = metadata?.symbol || knownToken?.symbol || 'UNKNOWN';
+        let tokenName = metadata?.name || knownToken?.name || 'Unknown Token';
+        let tokenLogo = metadata?.logo || knownToken?.logoURI || `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${token.mint}/logo.png`;
+        
+        balances.push({
+          address: token.mint,
+          symbol: tokenSymbol,
+          name: tokenName,
+          logoURI: tokenLogo,
+          decimals: token.decimals,
+          balance: token.balance,
+          usdValue: token.balance * 0 // TODO: Add USD price lookup
+        });
       }
     } catch (splError) {
       console.warn('⚠️ Error fetching SPL tokens:', splError);
@@ -281,7 +293,7 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
     // Sort by symbol alphabetically
     balances.sort((a, b) => a.symbol.localeCompare(b.symbol));
     
-    console.log(`💰 Found ${balances.length} token(s) with non-zero balance`);
+    console.log(`💰 Returning ${balances.length} token(s) with non-zero balance`);
     
     res.json(balances);
   } catch (error) {
@@ -453,7 +465,15 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       created_at: new Date().toISOString()
     };
 
-    gifts.push(newGift);
+    // Save to database (persistent storage)
+    try {
+      await insertGift(newGift);
+      console.log('✅ Gift saved to database:', newGift.id);
+    } catch (dbError: any) {
+      console.error('⚠️ Failed to save gift to database, using in-memory storage:', dbError?.message);
+      // Fallback to in-memory storage if database fails
+      gifts.push(newGift);
+    }
     
     console.log('✅ Gift created successfully:', newGift.id);
     
@@ -512,13 +532,22 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
 
 
 
-app.get('/api/gifts/history', authenticateToken, (req: AuthRequest, res) => {
+app.get('/api/gifts/history', authenticateToken, async (req: AuthRequest, res) => {
   const sender_did = req.user?.id;
   if (!sender_did) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  const userGifts = gifts.filter(g => g.sender_did === sender_did);
-  res.json(userGifts);
+  
+  try {
+    // Try to get from database first
+    const userGifts = await getGiftsBySender(sender_did);
+    res.json(userGifts);
+  } catch (dbError: any) {
+    console.error('⚠️ Failed to fetch gifts from database, using in-memory storage:', dbError?.message);
+    // Fallback to in-memory storage if database fails
+    const userGifts = gifts.filter(g => g.sender_did === sender_did);
+    res.json(userGifts);
+  }
 });
 
 // ============================================
@@ -526,23 +555,35 @@ app.get('/api/gifts/history', authenticateToken, (req: AuthRequest, res) => {
 // ============================================
 
 // Get gift info by ID (public - for claim page)
-app.get('/api/gifts/:giftId', (req, res) => {
+app.get('/api/gifts/:giftId', async (req, res) => {
   const { giftId } = req.params;
-  const gift = gifts.find(g => g.id === giftId);
   
-  if (!gift) {
-    return res.status(404).json({ error: 'Gift not found' });
-  }
+  try {
+    // Try to get from database first
+    let gift = await getGiftById(giftId);
+    
+    // Fallback to in-memory storage if not found in database
+    if (!gift) {
+      gift = gifts.find(g => g.id === giftId) || null;
+    }
+    
+    if (!gift) {
+      return res.status(404).json({ error: 'Gift not found' });
+    }
 
-  // Return public info only (hide sensitive data)
-  res.json({
-    amount: gift.amount,
-    token_symbol: gift.token_symbol,
-    sender_email: gift.sender_email,
-    message: gift.message,
-    status: gift.status,
-    created_at: gift.created_at
-  });
+    // Return public info only (hide sensitive data)
+    res.json({
+      amount: gift.amount,
+      token_symbol: gift.token_symbol,
+      sender_email: gift.sender_email,
+      message: gift.message,
+      status: gift.status,
+      created_at: gift.created_at
+    });
+  } catch (error: any) {
+    console.error('❌ Error fetching gift:', error);
+    res.status(500).json({ error: 'Failed to fetch gift' });
+  }
 });
 
 // Claim a gift (requires Privy authentication via recipient)
@@ -557,7 +598,18 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
   }
 
   // Find the gift
-  const gift = gifts.find(g => g.id === giftId);
+  let gift = null;
+  try {
+    gift = await getGiftById(giftId);
+    // Fallback to in-memory storage if not found in database
+    if (!gift) {
+      gift = gifts.find(g => g.id === giftId) || null;
+    }
+  } catch (dbError: any) {
+    console.error('⚠️ Failed to fetch gift from database, using in-memory storage:', dbError?.message);
+    gift = gifts.find(g => g.id === giftId) || null;
+  }
+  
   if (!gift) {
     return res.status(404).json({ error: 'Gift not found' });
   }
@@ -702,11 +754,18 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
 
     console.log('✅ Gift claimed! Transaction:', signature);
 
-    // Update gift status
-    gift.status = GiftStatus.CLAIMED;
-    gift.claimed_at = new Date().toISOString();
-    gift.claimed_by = recipient_did;
-    gift.claim_signature = signature;
+    // Update gift status in database
+    try {
+      await updateGiftClaim(giftId, recipient_did, signature);
+      console.log('✅ Gift claim status updated in database');
+    } catch (dbError: any) {
+      console.error('⚠️ Failed to update gift claim status in database, using in-memory storage:', dbError?.message);
+      // Fallback to in-memory storage if database fails
+      gift.status = GiftStatus.CLAIMED;
+      gift.claimed_at = new Date().toISOString();
+      gift.claimed_by = recipient_did;
+      gift.claim_signature = signature;
+    }
 
     res.json({
       success: true,
