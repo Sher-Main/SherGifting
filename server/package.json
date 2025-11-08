@@ -4,7 +4,10 @@
   "description": "Backend server for the Solana Gifting application",
   "main": "main.ts",
   "scripts": {
-    "dev": "ts-node-dev main.ts"
+    "dev": "ts-node-dev main.ts",
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "preview": "node dist/main.js"
   },
   "keywords": [],
   "author": "",
