@@ -36,6 +36,22 @@ if (!privyAppId) {
   throw new Error("VITE_PRIVY_APP_ID is not set in environment variables");
 }
 
+// ✅ Fallback to public mainnet RPC if Helius API key is not provided
+const rpcUrl = heliusApiKey 
+  ? `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`
+  : 'https://api.mainnet-beta.solana.com';
+  
+const rpcSubscriptionsUrl = heliusApiKey
+  ? `wss://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`
+  : 'wss://api.mainnet-beta.solana.com';
+
+// ✅ Debug: Log RPC configuration (without exposing API key)
+console.log('🔧 Privy Solana RPC Config:', {
+  hasHeliusKey: !!heliusApiKey,
+  rpcUrl: rpcUrl.replace(heliusApiKey || '', '***'),
+  rpcSubscriptionsUrl: rpcSubscriptionsUrl.replace(heliusApiKey || '', '***'),
+});
+
 const root = ReactDOM.createRoot(rootElement);
 
 root.render(
@@ -50,19 +66,23 @@ root.render(
           showWalletLoginFirst: false,
           walletChainType: 'solana-only', // ✅ Forces Solana-only wallet creation
         },
-        // ✅ Configure Solana RPC endpoints
+        // ✅ Configure Solana RPC endpoints - support both chain identifiers
         solana: {
           rpcs: {
+            // ✅ Use 'solana:mainnet' (Privy's standard identifier)
+            'solana:mainnet': {
+              rpc: createSolanaRpc(rpcUrl),
+              rpcSubscriptions: createSolanaRpcSubscriptions(rpcSubscriptionsUrl),
+            },
+            // ✅ Also support 'solana:mainnet-beta' for compatibility
             'solana:mainnet-beta': {
-              rpc: createSolanaRpc(
-                `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`
-              ),
-              rpcSubscriptions: createSolanaRpcSubscriptions(
-                `wss://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`
-              ),
+              rpc: createSolanaRpc(rpcUrl),
+              rpcSubscriptions: createSolanaRpcSubscriptions(rpcSubscriptionsUrl),
             },
           },
         },
+        // ✅ Set default chain
+        defaultChain: 'solana:mainnet',
         // ✅ CRITICAL: Create Solana embedded wallets for all users
         embeddedWallets: {
           createOnLogin: 'all-users',
