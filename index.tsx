@@ -66,16 +66,10 @@ root.render(
           showWalletLoginFirst: false,
           walletChainType: 'solana-only', // ✅ Forces Solana-only wallet creation
         },
-        // ✅ Privy v3 Solana configuration - use rpcs with createSolanaRpc
+        // ✅ Privy v3 Solana configuration - use 'solana:mainnet' (NOT 'solana:mainnet-beta')
         solana: {
           rpcs: {
-            // ✅ Use 'solana:mainnet' (Privy's standard identifier)
             'solana:mainnet': {
-              rpc: createSolanaRpc(rpcUrl),
-              rpcSubscriptions: createSolanaRpcSubscriptions(rpcSubscriptionsUrl),
-            },
-            // ✅ Also support 'solana:mainnet-beta' for compatibility
-            'solana:mainnet-beta': {
               rpc: createSolanaRpc(rpcUrl),
               rpcSubscriptions: createSolanaRpcSubscriptions(rpcSubscriptionsUrl),
             },

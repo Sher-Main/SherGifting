@@ -478,7 +478,7 @@ const GiftPage: React.FC = () => {
             const result = await signAndSendTransaction({
                 transaction: serializedTransaction,
                 wallet: embeddedWallet,
-                chain: 'solana:mainnet-beta',
+                chain: 'solana:mainnet',
             });
 
             // Convert signature from base64 to base58 (Solana expects base58)
