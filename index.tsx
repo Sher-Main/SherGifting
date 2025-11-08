@@ -19,7 +19,6 @@ if (typeof window !== 'undefined') {
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { PrivyProvider } from '@privy-io/react-auth';
-import { solana } from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
 import App from './App';
 import './index.css';
@@ -67,11 +66,7 @@ root.render(
           showWalletLoginFirst: false,
           walletChainType: 'solana-only', // ✅ Forces Solana-only wallet creation
         },
-        // ✅ Add Solana to supported chains
-        supportedChains: [solana],
-        // ✅ Set default chain
-        defaultChain: solana,
-        // ✅ Configure Solana RPC endpoints - support both chain identifiers
+        // ✅ Privy v3 Solana configuration - use rpcs with createSolanaRpc
         solana: {
           rpcs: {
             // ✅ Use 'solana:mainnet' (Privy's standard identifier)
