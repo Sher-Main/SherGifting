@@ -2,7 +2,11 @@ import axios from 'axios';
 import { TokenBalance, Gift, GiftInfo, Token } from '../types';
 
 // Use environment variable for backend URL in production, fallback to /api for local dev
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '/api';
+// If VITE_BACKEND_URL is set but doesn't end with /api, append it
+let BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '/api';
+if (BACKEND_URL !== '/api' && !BACKEND_URL.endsWith('/api')) {
+  BACKEND_URL = `${BACKEND_URL}/api`;
+}
 
 const apiClient = axios.create({
   baseURL: BACKEND_URL,
