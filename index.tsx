@@ -19,6 +19,7 @@ if (typeof window !== 'undefined') {
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { PrivyProvider } from '@privy-io/react-auth';
+import { solana } from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
 import App from './App';
 import './index.css';
@@ -66,6 +67,10 @@ root.render(
           showWalletLoginFirst: false,
           walletChainType: 'solana-only', // ✅ Forces Solana-only wallet creation
         },
+        // ✅ Add Solana to supported chains
+        supportedChains: [solana],
+        // ✅ Set default chain
+        defaultChain: solana,
         // ✅ Configure Solana RPC endpoints - support both chain identifiers
         solana: {
           rpcs: {
@@ -81,8 +86,6 @@ root.render(
             },
           },
         },
-        // ✅ Set default chain
-        defaultChain: 'solana:mainnet',
         // ✅ CRITICAL: Create Solana embedded wallets for all users
         embeddedWallets: {
           createOnLogin: 'all-users',
