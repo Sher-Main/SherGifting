@@ -1,5 +1,5 @@
 {
-  "name": "Solana Crypto Gifting",
+  "name": "Crypto Gifting App",
   "description": "A web application built on the Solana network that allows users to easily gift cryptocurrency to others via email. It simplifies the crypto experience by integrating user-friendly services for wallet creation, fiat on-ramping, token swapping, and crypto gifting.",
   "requestFramePermissions": []
 }

@@ -24,7 +24,7 @@ const Header: React.FC = () => {
           <div className="flex items-center space-x-4">
              <NavLink to="/" className="flex items-center gap-2 text-sky-400 hover:text-sky-300 transition-colors">
                  <GiftIcon className="w-8 h-8" />
-                 <span className="text-xl font-bold">Solana Gifting</span>
+                 <span className="text-xl font-bold">Crypto Gifting App</span>
              </NavLink>
             <nav className="hidden md:flex items-center space-x-2 bg-slate-900/50 p-1 rounded-lg">
                 <NavLink to="/" end style={({ isActive }) => isActive ? activeLinkStyle : {}} className="px-3 py-2 rounded-md text-sm font-medium text-slate-300 hover:bg-slate-700 transition-colors flex items-center gap-2"><WalletIcon className="w-4 h-4" /> Portfolio</NavLink>
