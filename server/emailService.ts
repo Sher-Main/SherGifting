@@ -21,7 +21,7 @@ interface GiftNotificationParams {
   amount: number;
   tokenSymbol: string;
   claimUrl: string;
-  qrCode?: string;           // QR code data URL (optional)
+  qrCodeUrl?: string;        // QR code public URL (optional)
   message?: string;
 }
 
@@ -36,7 +36,7 @@ export async function sendGiftNotification(params: GiftNotificationParams): Prom
     return { success: false, error: 'FROM_EMAIL not set in environment variables' };
   }
 
-  const { recipientEmail, senderEmail, senderName, amount, tokenSymbol, claimUrl, qrCode, message } = params;
+  const { recipientEmail, senderEmail, senderName, amount, tokenSymbol, claimUrl, qrCodeUrl, message } = params;
 
   // Validate email addresses
   if (!senderEmail || !recipientEmail) {
@@ -46,26 +46,6 @@ export async function sendGiftNotification(params: GiftNotificationParams): Prom
   try {
     // ✅ Display sender name in subject (use name or email username)
     const senderDisplay = senderName || senderEmail.split('@')[0];
-
-    // ✅ CONVERT QR CODE DATA URL TO ATTACHMENT
-    let qrAttachment: { filename: string; content: Buffer; cid: string } | undefined;
-    if (qrCode) {
-      try {
-        // Remove "data:image/png;base64," prefix
-        const base64Data = qrCode.replace(/^data:image\/\w+;base64,/, '');
-        const buffer = Buffer.from(base64Data, 'base64');
-        
-        qrAttachment = {
-          filename: 'gift-qr-code.png',
-          content: buffer,
-          cid: 'qr-code-image' // Content-ID for inline image (referenced in HTML as cid:qr-code-image)
-        };
-        console.log('  📎 QR code converted to attachment');
-      } catch (error) {
-        console.error('⚠️ Failed to convert QR code to attachment:', error);
-        // Continue without QR attachment - email will still be sent
-      }
-    }
 
     const htmlContent = `
 <!DOCTYPE html>
@@ -133,14 +113,14 @@ export async function sendGiftNotification(params: GiftNotificationParams): Prom
                 </tr>
               </table>
               
-              ${qrAttachment ? `
+              ${qrCodeUrl ? `
               <!-- QR Code Section -->
               <div style="margin: 30px 0; text-align: center;">
                 <p style="margin: 0 0 16px; color: #6b7280; font-size: 14px; font-weight: 600;">
                   Or scan this QR code:
                 </p>
                 <div style="display: inline-block; padding: 16px; background-color: #ffffff; border: 2px solid #e5e7eb; border-radius: 12px;">
-                  <img src="cid:qr-code-image" alt="Gift QR Code" style="width: 200px; height: 200px; display: block;" />
+                  <img src="${qrCodeUrl}" alt="Gift QR Code" style="width: 250px; height: 250px; display: block;" />
                 </div>
               </div>
               ` : ''}
@@ -193,24 +173,15 @@ Powered by Crypto Gifting • Solana Blockchain
     console.log('  Reply-To:', senderEmail);
     console.log('  Subject:', `🎁 ${senderDisplay} sent you ${amount} ${tokenSymbol}!`);
 
-    // Build email data object
-    const emailData: any = {
+    // Resend API uses { data, error } structure
+    const { data, error } = await resend.emails.send({
       from: FROM_EMAIL,  // ✅ Always your domain
       to: recipientEmail,
       replyTo: senderEmail, // ✅ Always set Reply-To to sender's email so recipients can reply
       subject: `🎁 ${senderDisplay} sent you ${amount} ${tokenSymbol}!`,  // ✅ Sender's name in subject
       html: htmlContent,
       text: textContent,
-    };
-
-    // ✅ ADD QR CODE AS ATTACHMENT
-    if (qrAttachment) {
-      emailData.attachments = [qrAttachment];
-      console.log('  📎 QR code attached');
-    }
-
-    // Resend API uses { data, error } structure
-    const { data, error } = await resend.emails.send(emailData);
+    });
 
     if (error) {
       console.error('❌ Resend API Error:', error);

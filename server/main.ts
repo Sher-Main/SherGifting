@@ -5,6 +5,8 @@ import { Connection, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, se
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import 'dotenv/config';
 import QRCode from 'qrcode';
+import fs from 'fs';
+import path from 'path';
 import { authenticateToken, AuthRequest } from './authMiddleware';
 import { sendGiftNotification } from './emailService';
 import { insertGift, getGiftsBySender, getGiftById, updateGiftClaim } from './database';
@@ -45,6 +47,16 @@ interface Gift {
 
 const app = express();
 app.use(express.json());
+
+// ✅ Create public/qrcodes directory if it doesn't exist
+const qrCodesDir = path.join(__dirname, '../public/qrcodes');
+if (!fs.existsSync(qrCodesDir)) {
+  fs.mkdirSync(qrCodesDir, { recursive: true });
+  console.log('📁 Created QR codes directory:', qrCodesDir);
+}
+
+// ✅ Serve QR code images from public/qrcodes directory
+app.use('/qrcodes', express.static(path.join(__dirname, '../public/qrcodes')));
 
 // ✅ CORS configuration - allow Vercel frontend and localhost
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -512,11 +524,14 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
     const claimUrl = `/claim/${giftId}`;
     const fullClaimUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}${claimUrl}`;
     
-    // Generate QR code from claim URL
+    // Generate QR code from claim URL and save to file
     console.log('📱 Generating QR code for claim URL...');
-    let qrCodeDataUrl: string | undefined;
+    let qrCodeUrl: string | undefined;
     try {
-      qrCodeDataUrl = await QRCode.toDataURL(fullClaimUrl, {
+      const qrCodeFileName = `${giftId}.png`;
+      const qrCodePath = path.join(qrCodesDir, qrCodeFileName);
+      
+      await QRCode.toFile(qrCodePath, fullClaimUrl, {
         width: 300,
         margin: 2,
         color: {
@@ -524,7 +539,11 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
           light: '#ffffff'
         }
       });
-      console.log('✅ QR code generated successfully');
+      
+      // Generate public URL for the QR code
+      const BACKEND_URL = process.env.BACKEND_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+      qrCodeUrl = `${BACKEND_URL}/qrcodes/${qrCodeFileName}`;
+      console.log('✅ QR code generated and saved:', qrCodeUrl);
     } catch (error) {
       console.error('⚠️ Failed to generate QR code:', error);
       // Continue without QR code - email will still be sent
@@ -537,7 +556,7 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       amount,
       tokenSymbol: tokenInfo.symbol,
       claimUrl: fullClaimUrl,
-      qrCode: qrCodeDataUrl,
+      qrCodeUrl: qrCodeUrl,
       message: message || undefined,
     });
 
