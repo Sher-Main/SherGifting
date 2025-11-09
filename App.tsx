@@ -10,6 +10,7 @@ import ClaimPage from './pages/ClaimPage';
 import Header from './components/Header';
 import ErrorBoundary from './components/ErrorBoundary';
 import NotFoundPage from './pages/NotFoundPage';
+import { ProgressLoader } from './components/ProgressLoader';
 
 const App: React.FC = () => {
   return (
@@ -26,7 +27,12 @@ const App: React.FC = () => {
 };
 
 const AppContent: React.FC = () => {
-  const { user } = useAuth();
+  const { user, isLoading, loadingStage } = useAuth();
+
+  // Show loading screen during initial auth/wallet setup
+  if (isLoading) {
+    return <ProgressLoader stage={loadingStage} />;
+  }
 
   return (
     <>

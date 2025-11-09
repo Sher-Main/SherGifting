@@ -5,10 +5,11 @@ import { usePrivy } from '@privy-io/react-auth';
 import { giftService } from '../services/api';
 import { GiftInfo } from '../types';
 import Spinner from '../components/Spinner';
+import { ProgressLoader } from '../components/ProgressLoader';
 
 const ClaimPage: React.FC = () => {
     const { giftId } = useParams<{ giftId: string }>();
-    const { user, refreshUser } = useAuth();
+    const { user, refreshUser, isLoading: authLoading, loadingStage } = useAuth();
     const { ready, authenticated, login } = usePrivy();
     const navigate = useNavigate();
     
@@ -139,12 +140,14 @@ const ClaimPage: React.FC = () => {
         }
     };
 
+    // Show progress loader during auth loading
+    if (authLoading) {
+        return <ProgressLoader stage={loadingStage} />;
+    }
+
+    // Show progress loader while loading gift data
     if (!ready || isLoadingGift) {
-        return (
-            <div className="flex justify-center items-center h-screen">
-                <Spinner />
-            </div>
-        );
+        return <ProgressLoader stage="preparing" message="Loading your gift..." />;
     }
 
     if (error && !giftInfo) {
@@ -225,6 +228,11 @@ const ClaimPage: React.FC = () => {
         return null;
     }
 
+    // Show progress loader during claiming
+    if (isClaiming) {
+        return <ProgressLoader stage="preparing" message="Claiming your gift..." />;
+    }
+
     // Check if gift is already claimed
     if (giftInfo.status === 'CLAIMED') {
         return (
@@ -253,7 +261,7 @@ const ClaimPage: React.FC = () => {
     }
 
     return (
-        <div className="min-h-screen flex items-center justify-center p-4">
+        <div className="min-h-screen flex items-center justify-center p-4 fade-in">
             <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-8 shadow-lg max-w-md w-full">
                 {/* Gift Preview */}
                 <div className="text-center mb-8">

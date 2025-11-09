@@ -9,6 +9,7 @@ interface AuthContextType {
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   isLoading: boolean;
+  loadingStage: 'authenticating' | 'setting-up' | 'preparing' | 'ready';
   isAuthenticated: boolean;
 }
 
@@ -18,7 +19,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const { ready, authenticated, user: privyUser, login: privyLogin, logout: privyLogout, getAccessToken } = usePrivy();
   const { wallets, ready: walletsReady } = useWallets();
   const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadingStage, setLoadingStage] = useState<'authenticating' | 'setting-up' | 'preparing' | 'ready'>('authenticating');
   const [retryCount, setRetryCount] = useState(0);
 
   const syncUser = useCallback(async () => {
@@ -26,25 +28,30 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     
     if (!ready || !walletsReady) {
       console.log('⏸️ Not ready yet');
+      setLoadingStage('authenticating');
+      setIsLoading(true);
       return;
     }
 
     if (authenticated && privyUser) {
       // If no wallets yet, retry a few times before giving up
       if (wallets.length === 0) {
-        if (retryCount < 10) {
-          console.log(`⏳ No wallets found yet (attempt ${retryCount + 1}/10), waiting for automatic creation...`);
+        if (retryCount < 3) {
+          console.log(`⏳ Setting up your account (attempt ${retryCount + 1}/3)...`);
+          setLoadingStage('setting-up');
           setIsLoading(true);
           
-          // Wait 1 second and then increment retry count to trigger a re-check
+          // Wait 500ms and then increment retry count to trigger a re-check
           setTimeout(() => {
             setRetryCount(prev => prev + 1);
-          }, 1000);
+          }, 500);
           return;
         } else {
-          // After 10 attempts, check the Privy user object directly for wallet info
+          // After 3 attempts, check the Privy user object directly for wallet info
           console.log('⚠️ Wallet not appearing in useWallets(), checking privyUser object...');
           console.log('Privy user object:', privyUser);
+          
+          setLoadingStage('preparing');
           
           // Check if wallet exists in the linkedAccounts
           const walletAccount = privyUser.linkedAccounts?.find(
@@ -82,7 +89,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 });
                 console.log('✅ Backend user synced:', backendUser);
                 setUser(backendUser);
-                setIsLoading(false);
+                setLoadingStage('ready');
+                // Small delay to show "ready" state
+                setTimeout(() => {
+                  setIsLoading(false);
+                }, 300);
                 return;
               } catch (error) {
                 console.error('❌ Error syncing user:', error);
@@ -92,7 +103,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             }
           }
           
-          console.error('❌ No wallet found after 10 attempts. Please refresh the page.');
+          console.error('❌ No wallet found after 3 attempts. Please refresh the page.');
           setIsLoading(false);
           return;
         }
@@ -104,6 +115,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
 
       console.log('📦 Wallets found:', wallets.length);
+      setLoadingStage('preparing');
       setIsLoading(true);
       
       try {
@@ -155,9 +167,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
         console.log('✅ Backend user synced:', backendUser);
         setUser(backendUser);
+        setLoadingStage('ready');
+        // Small delay to show "ready" state
+        setTimeout(() => {
+          setIsLoading(false);
+        }, 300);
       } catch (error) {
         console.error('❌ Sync error:', error);
-      } finally {
         setIsLoading(false);
       }
     } else {
@@ -211,7 +227,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     login: handleLogin,
     logout: privyLogout,
     refreshUser: syncUser,
-    isLoading: !ready || !walletsReady || isLoading,
+    isLoading: isLoading,
+    loadingStage: loadingStage,
     isAuthenticated: !!(user && authenticated),
   };
 
