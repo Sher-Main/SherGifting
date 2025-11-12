@@ -61,6 +61,18 @@ export const feeService = {
   },
 };
 
+export const priceService = {
+  getTokenPrice: async (mint: string): Promise<{ 
+    price: number; 
+    symbol: string; 
+    source: string;
+    timestamp: number;
+  }> => {
+    const response = await apiClient.get(`/tokens/${mint}/price`);
+    return response.data;
+  },
+};
+
 export const tiplinkService = {
   create: async (): Promise<{ tiplink_url: string; tiplink_public_key: string }> => {
     const response = await apiClient.post('/tiplink/create');

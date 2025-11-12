@@ -21,7 +21,6 @@ interface GiftNotificationParams {
   amount: number;
   tokenSymbol: string;
   claimUrl: string;
-  qrCodeUrl?: string;        // QR code public URL (optional)
   message?: string;
 }
 
@@ -36,7 +35,7 @@ export async function sendGiftNotification(params: GiftNotificationParams): Prom
     return { success: false, error: 'FROM_EMAIL not set in environment variables' };
   }
 
-  const { recipientEmail, senderEmail, senderName, amount, tokenSymbol, claimUrl, qrCodeUrl, message } = params;
+  const { recipientEmail, senderEmail, senderName, amount, tokenSymbol, claimUrl, message } = params;
 
   // Validate email addresses
   if (!senderEmail || !recipientEmail) {
@@ -112,18 +111,6 @@ export async function sendGiftNotification(params: GiftNotificationParams): Prom
                   </td>
                 </tr>
               </table>
-              
-              ${qrCodeUrl ? `
-              <!-- QR Code Section -->
-              <div style="margin: 30px 0; text-align: center;">
-                <p style="margin: 0 0 16px; color: #6b7280; font-size: 14px; font-weight: 600;">
-                  Or scan this QR code:
-                </p>
-                <div style="display: inline-block; padding: 16px; background-color: #ffffff; border: 2px solid #e5e7eb; border-radius: 12px;">
-                  <img src="${qrCodeUrl}" alt="Gift QR Code" style="width: 250px; height: 250px; display: block;" />
-                </div>
-              </div>
-              ` : ''}
               
               <p style="margin: 20px 0 0; color: #9ca3af; font-size: 14px; line-height: 1.5;">
                 If the button doesn't work, copy and paste this link into your browser:<br>

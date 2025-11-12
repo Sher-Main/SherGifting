@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePrivy } from '@privy-io/react-auth';
 import { useSignAndSendTransaction, useWallets } from '@privy-io/react-auth/solana';
-import { tokenService, giftService, tiplinkService, heliusService, feeService } from '../services/api';
+import { tokenService, giftService, tiplinkService, heliusService, feeService, priceService } from '../services/api';
 import { Token, TokenBalance } from '../types';
 import Spinner from '../components/Spinner';
 import { ArrowLeftIcon } from '../components/icons';
@@ -33,6 +33,15 @@ const GiftPage: React.FC = () => {
     const [recipientEmail, setRecipientEmail] = useState('');
     const [amount, setAmount] = useState('');
     const [message, setMessage] = useState('');
+    
+    // USD/Token conversion state
+    const [amountMode, setAmountMode] = useState<'token' | 'usd'>('token');
+    const [tokenPrice, setTokenPrice] = useState<number | null>(null);
+    const [priceLastUpdated, setPriceLastUpdated] = useState<number | null>(null);
+    const [usdAmount, setUsdAmount] = useState<string>('');
+    const [tokenAmount, setTokenAmount] = useState<string>('');
+    const [priceLoading, setPriceLoading] = useState(false);
+    const [priceError, setPriceError] = useState<string | null>(null);
     
     // Confirmation modal state
     const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -118,12 +127,42 @@ const GiftPage: React.FC = () => {
         fetchTokensAndBalances();
     }, [user]);
     
+    // Price fetching function
+    const fetchTokenPrice = async (mintAddress: string) => {
+        setPriceLoading(true);
+        setPriceError(null);
+        
+        try {
+            const response = await priceService.getTokenPrice(mintAddress);
+            
+            if (response.price) {
+                setTokenPrice(response.price);
+                setPriceLastUpdated(Date.now());
+                console.log(`💰 Token price fetched: $${response.price} (source: ${response.source})`);
+            } else {
+                throw new Error('Price unavailable');
+            }
+        } catch (error) {
+            console.error('Failed to fetch token price:', error);
+            setPriceError('Unable to fetch current price');
+            setAmountMode('token'); // Force token mode if price fails
+            setTokenPrice(null);
+        } finally {
+            setPriceLoading(false);
+        }
+    };
+    
     // Update balance when token is selected
     useEffect(() => {
         if (selectedToken && walletBalances.length > 0) {
             const tokenBalance = walletBalances.find(b => b.symbol === selectedToken.symbol);
             setUserBalance(tokenBalance?.balance || 0);
             console.log(`💰 Balance for ${selectedToken.symbol}:`, tokenBalance?.balance || 0);
+        }
+        
+        // Fetch price when token is selected
+        if (selectedToken?.mint) {
+            fetchTokenPrice(selectedToken.mint);
         }
     }, [selectedToken, walletBalances]);
 
@@ -143,6 +182,27 @@ const GiftPage: React.FC = () => {
         };
         fetchFeeConfig();
     }, []);
+
+    // Mode switch handler
+    const handleModeSwitch = (newMode: 'token' | 'usd') => {
+        if (!tokenPrice && newMode === 'usd') {
+            setPriceError('Price unavailable - cannot switch to USD mode');
+            return;
+        }
+        
+        if (newMode === 'usd' && tokenAmount) {
+            // Convert current token amount to USD
+            const usd = (parseFloat(tokenAmount) * tokenPrice!).toFixed(2);
+            setUsdAmount(usd);
+        } else if (newMode === 'token' && usdAmount) {
+            // Convert current USD amount to tokens
+            const tokens = (parseFloat(usdAmount) / tokenPrice!).toFixed(6);
+            setTokenAmount(tokens);
+            setAmount(tokens); // Update main amount state
+        }
+        
+        setAmountMode(newMode);
+    };
 
     const handleSendGift = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -167,12 +227,16 @@ const GiftPage: React.FC = () => {
             return;
         }
 
-        if (!selectedToken || !amount || !recipientEmail) {
+        if (!selectedToken || !recipientEmail) {
             setError("Please fill in all required fields.");
             return;
         }
 
-        const numericAmount = parseFloat(amount);
+        // Calculate final amount based on mode
+        const numericAmount = amountMode === 'usd' && tokenPrice
+            ? parseFloat(usdAmount) / tokenPrice
+            : parseFloat(amount || tokenAmount);
+            
         if (isNaN(numericAmount) || numericAmount <= 0) {
             setError("Please enter a valid amount.");
             return;
@@ -635,7 +699,10 @@ const GiftPage: React.FC = () => {
             // Clear form
             setRecipientEmail('');
             setAmount('');
+            setTokenAmount('');
+            setUsdAmount('');
             setMessage('');
+            setAmountMode('token'); // Reset to token mode
             
         } catch (err: any) {
             console.error('❌ Error sending gift:', err);
@@ -815,6 +882,10 @@ const GiftPage: React.FC = () => {
                             onChange={(e) => {
                                 const token = tokens.find(t => t.mint === e.target.value);
                                 setSelectedToken(token || null);
+                                // Reset amount fields when token changes
+                                setAmount('');
+                                setTokenAmount('');
+                                setUsdAmount('');
                             }}
                             className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
                         >
@@ -842,29 +913,124 @@ const GiftPage: React.FC = () => {
                         />
                     </div>
 
-                    {/* Amount */}
+                    {/* Amount Input with Mode Toggle */}
                     <div>
                         <label htmlFor="amount" className="block text-sm font-medium text-slate-300 mb-2">
-                            Amount ({selectedToken?.symbol || 'Token'})
+                            Amount
                         </label>
-                        <input
-                            type="number"
-                            id="amount"
-                            value={amount}
-                            onChange={(e) => setAmount(e.target.value)}
-                            required
-                            min="0"
-                            step="0.000001"
-                            placeholder="0.00"
-                            className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
-                        />
+                        
+                        {/* Mode Toggle */}
+                        <div className="flex gap-2 mb-3">
+                            <button
+                                type="button"
+                                onClick={() => handleModeSwitch('token')}
+                                className={`flex-1 py-2 px-4 rounded-lg font-medium transition-colors ${
+                                    amountMode === 'token'
+                                        ? 'bg-sky-500 text-white'
+                                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                                }`}
+                            >
+                                Token Amount
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => handleModeSwitch('usd')}
+                                disabled={!tokenPrice || priceLoading}
+                                className={`flex-1 py-2 px-4 rounded-lg font-medium transition-colors ${
+                                    amountMode === 'usd'
+                                        ? 'bg-sky-500 text-white'
+                                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                                } disabled:opacity-50 disabled:cursor-not-allowed`}
+                            >
+                                USD Amount
+                            </button>
+                        </div>
+                        
+                        {/* Amount Input */}
+                        {amountMode === 'token' ? (
+                            <input
+                                type="number"
+                                id="amount"
+                                value={tokenAmount}
+                                onChange={(e) => {
+                                    setTokenAmount(e.target.value);
+                                    setAmount(e.target.value); // Keep existing amount state for compatibility
+                                }}
+                                required
+                                min="0"
+                                step="0.000001"
+                                placeholder="0.00"
+                                className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
+                            />
+                        ) : (
+                            <input
+                                type="number"
+                                id="amount"
+                                value={usdAmount}
+                                onChange={(e) => {
+                                    setUsdAmount(e.target.value);
+                                    // Calculate token amount but don't update amount state until submission
+                                    if (tokenPrice) {
+                                        const calculatedTokenAmount = (parseFloat(e.target.value) / tokenPrice).toString();
+                                        setTokenAmount(calculatedTokenAmount);
+                                        setAmount(calculatedTokenAmount);
+                                    }
+                                }}
+                                required
+                                min="0"
+                                step="0.01"
+                                placeholder="0.00"
+                                className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
+                            />
+                        )}
+                        
+                        {/* Conversion Preview */}
+                        {tokenPrice && (
+                            <div className="mt-2 text-sm text-slate-400">
+                                {amountMode === 'token' && tokenAmount && !isNaN(parseFloat(tokenAmount)) ? (
+                                    <span>≈ ${(parseFloat(tokenAmount) * tokenPrice).toFixed(2)} USD</span>
+                                ) : amountMode === 'usd' && usdAmount && !isNaN(parseFloat(usdAmount)) ? (
+                                    <span>≈ {(parseFloat(usdAmount) / tokenPrice).toFixed(6)} {selectedToken?.symbol}</span>
+                                ) : null}
+                            </div>
+                        )}
+                        
+                        {/* Price Status */}
+                        {priceLastUpdated && (
+                            <div className="mt-1 text-xs text-slate-500">
+                                Price updated {Math.floor((Date.now() - priceLastUpdated) / 1000)}s ago
+                            </div>
+                        )}
+                        
+                        {/* Price Error */}
+                        {priceError && (
+                            <div className="mt-2 text-xs text-yellow-400">
+                                {priceError}
+                            </div>
+                        )}
+                        
+                        {/* Loading Indicator */}
+                        {priceLoading && (
+                            <div className="mt-2 text-xs text-slate-400">
+                                Loading price...
+                            </div>
+                        )}
+                        
+                        {/* Available Balance Info */}
                         {selectedToken?.isNative && (
                             <p className="text-xs text-slate-400 mt-2">
                                 Available: {userBalance.toFixed(4)} {selectedToken.symbol}
                             </p>
                         )}
-                        {amount && !isNaN(parseFloat(amount)) && parseFloat(amount) > 0 && feeWalletAddress && (() => {
-                            const displayAmount = parseFloat(amount);
+                        
+                        {/* Fee Breakdown */}
+                        {((amountMode === 'token' && tokenAmount) || (amountMode === 'usd' && usdAmount)) && 
+                         !isNaN(parseFloat(amountMode === 'token' ? tokenAmount : (usdAmount && tokenPrice ? (parseFloat(usdAmount) / tokenPrice).toString() : '0'))) && 
+                         parseFloat(amountMode === 'token' ? tokenAmount : (usdAmount && tokenPrice ? (parseFloat(usdAmount) / tokenPrice).toString() : '0')) > 0 && 
+                         feeWalletAddress && (() => {
+                            const displayAmount = amountMode === 'token' 
+                                ? parseFloat(tokenAmount) 
+                                : (usdAmount && tokenPrice ? parseFloat(usdAmount) / tokenPrice : 0);
                             const displayFee = displayAmount * feePercentage;
                             const displayTotal = displayAmount + displayFee;
                             return (

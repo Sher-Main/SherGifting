@@ -35,3 +35,42 @@ body {
 .fade-in {
   animation: fadeIn 0.5s ease-out;
 }
+
+/* Mobile-specific adjustments for loading tips */
+@media (max-width: 640px) {
+  .loading-tips {
+    max-width: 95%;
+    padding: 16px;
+  }
+  
+  .tip-title {
+    font-size: 18px;
+  }
+  
+  .tip-text {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+}
+
+/* Prevent text scaling issues on mobile */
+.tip-text {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Extra small screens */
+@media (max-width: 375px) {
+  .loading-tips {
+    padding: 12px;
+  }
+  
+  .tip-title {
+    font-size: 16px;
+  }
+  
+  .tip-text {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+}

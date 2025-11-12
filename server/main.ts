@@ -4,9 +4,6 @@ import { TipLink } from '@tiplink/api';
 import { Connection, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import 'dotenv/config';
-import QRCode from 'qrcode';
-import fs from 'fs';
-import path from 'path';
 import { authenticateToken, AuthRequest } from './authMiddleware';
 import { sendGiftNotification } from './emailService';
 import { insertGift, getGiftsBySender, getGiftById, updateGiftClaim } from './database';
@@ -47,16 +44,6 @@ interface Gift {
 
 const app = express();
 app.use(express.json());
-
-// ✅ Create public/qrcodes directory if it doesn't exist
-const qrCodesDir = path.join(__dirname, '../public/qrcodes');
-if (!fs.existsSync(qrCodesDir)) {
-  fs.mkdirSync(qrCodesDir, { recursive: true });
-  console.log('📁 Created QR codes directory:', qrCodesDir);
-}
-
-// ✅ Serve QR code images from public/qrcodes directory
-app.use('/qrcodes', express.static(path.join(__dirname, '../public/qrcodes')));
 
 // ✅ CORS configuration - allow Vercel frontend and localhost
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -359,6 +346,61 @@ app.get('/api/fee-config', (req, res) => {
   });
 });
 
+// Get token price endpoint (Jupiter primary, Helius fallback)
+app.get('/api/tokens/:mint/price', async (req, res) => {
+  const { mint } = req.params;
+  
+  try {
+    // Try Jupiter first
+    const jupResponse = await fetch(`https://price.jup.ag/v4/price?ids=${mint}`);
+    const jupData = await jupResponse.json();
+    
+    if (jupData.data?.[mint]?.price) {
+      return res.json({
+        price: jupData.data[mint].price,
+        symbol: jupData.data[mint].mintSymbol,
+        source: 'jupiter',
+        timestamp: Date.now()
+      });
+    }
+    
+    // Fallback to Helius DAS API
+    if (HELIUS_API_KEY) {
+      const heliusResponse = await fetch(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'price-fetch',
+          method: 'getAsset',
+          params: { id: mint }
+        })
+      });
+      
+      const heliusData = await heliusResponse.json();
+      const priceInfo = heliusData.result?.token_info?.price_info;
+      
+      if (priceInfo?.price_per_token) {
+        return res.json({
+          price: priceInfo.price_per_token,
+          symbol: heliusData.result.token_info.symbol,
+          source: 'helius',
+          timestamp: Date.now()
+        });
+      }
+    }
+    
+    throw new Error('Price not available');
+    
+  } catch (error: any) {
+    console.error('❌ Error fetching token price:', error);
+    res.status(503).json({ 
+      error: 'Price service unavailable',
+      message: error.message 
+    });
+  }
+});
+
 // Create TipLink (Step 1 of gift creation)
 app.post('/api/tiplink/create', authenticateToken, async (req: AuthRequest, res) => {
   try {
@@ -524,31 +566,6 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
     const claimUrl = `/claim/${giftId}`;
     const fullClaimUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}${claimUrl}`;
     
-    // Generate QR code from claim URL and save to file
-    console.log('📱 Generating QR code for claim URL...');
-    let qrCodeUrl: string | undefined;
-    try {
-      const qrCodeFileName = `${giftId}.png`;
-      const qrCodePath = path.join(qrCodesDir, qrCodeFileName);
-      
-      await QRCode.toFile(qrCodePath, fullClaimUrl, {
-        width: 300,
-        margin: 2,
-        color: {
-          dark: '#0c4a6e',
-          light: '#ffffff'
-        }
-      });
-      
-      // Generate public URL for the QR code
-      const BACKEND_URL = process.env.BACKEND_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
-      qrCodeUrl = `${BACKEND_URL}/qrcodes/${qrCodeFileName}`;
-      console.log('✅ QR code generated and saved:', qrCodeUrl);
-    } catch (error) {
-      console.error('⚠️ Failed to generate QR code:', error);
-      // Continue without QR code - email will still be sent
-    }
-    
     console.log('📧 Sending email notification to recipient...');
     const emailResult = await sendGiftNotification({
       recipientEmail: recipient_email,
@@ -556,7 +573,6 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       amount,
       tokenSymbol: tokenInfo.symbol,
       claimUrl: fullClaimUrl,
-      qrCodeUrl: qrCodeUrl,
       message: message || undefined,
     });
 
