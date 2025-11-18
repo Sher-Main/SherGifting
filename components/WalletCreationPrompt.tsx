@@ -1,6 +1,8 @@
 import React from 'react';
 import { useAuth } from '../context/AuthContext';
-import { usePrivy, useWallets } from '@privy-io/react-auth';
+import { usePrivy } from '@privy-io/react-auth';
+// 🔥 Import useWallets from SOLANA package (returns Solana wallets)
+import { useWallets } from '@privy-io/react-auth/solana';
 
 const WalletCreationPrompt: React.FC = () => {
   const { createWallet } = useAuth();

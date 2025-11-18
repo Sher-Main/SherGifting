@@ -64,24 +64,22 @@ root.render(
           theme: 'light',
           accentColor: '#6366f1',
           showWalletLoginFirst: false,
-          walletChainType: 'solana-only', // ✅ Forces Solana-only wallet creation
         },
         // ✅ Privy v3 Solana configuration - use 'solana:mainnet' (NOT 'solana:mainnet-beta')
-        
         embeddedWallets: {
           solana: {
+            createOnLogin: "users-without-wallets", // ✅ Enable Solana wallet creation for new users
+          },
+          // ✅ Explicitly disable Ethereum wallet creation (Solana-only app)
+          ethereum: {
             createOnLogin: "off",
           },
         },
         solana: {
           rpcs: {
             "solana:mainnet": {
-              rpc: createSolanaRpc(
-                "https://mainnet.helius-rpc.com/?api-key=a1c96ec7-818b-4789-ad2c-2bd175df4a95"
-              ),
-              rpcSubscriptions: createSolanaRpcSubscriptions(
-                "wss://api.mainnet-beta.solana.com"
-              ),
+              rpc: createSolanaRpc(rpcUrl),
+              rpcSubscriptions: createSolanaRpcSubscriptions(rpcSubscriptionsUrl),
             },
           },
         },

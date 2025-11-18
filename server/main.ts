@@ -195,7 +195,14 @@ const SUPPORTED_TOKENS = [
   },
 ];
 
-// --- ROUTES ---
+// ✅ Add Solana address validation helper
+const isSolanaAddress = (address: string): boolean => {
+  // Solana addresses are base58, 32-44 characters, don't start with 0x
+  return typeof address === 'string' && 
+         !address.startsWith('0x') && 
+         address.length >= 32 && 
+         address.length <= 44;
+};
 
 // --- ROUTES ---
 
@@ -211,6 +218,16 @@ app.post('/api/user/sync', authenticateToken, (req: AuthRequest, res) => {
   
   if (!privy_did || !wallet_address || !email) {
     return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  // 🔥 Validate it's a Solana address
+  if (!isSolanaAddress(wallet_address)) {
+    console.error('❌ Invalid Solana wallet address:', wallet_address);
+    return res.status(400).json({ 
+      error: 'Invalid Solana wallet address',
+      message: 'Only Solana wallets are supported. Address must be base58 format (32-44 characters, not starting with 0x).',
+      receivedAddress: wallet_address
+    });
   }
 
   let user = users.find(u => u.privy_did === privy_did);

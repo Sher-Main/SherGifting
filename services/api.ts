@@ -15,6 +15,45 @@ const apiClient = axios.create({
   },
 });
 
+// Add request interceptor for debugging
+apiClient.interceptors.request.use(
+  (config) => {
+    console.log('📤 API Request:', {
+      method: config.method,
+      url: config.url,
+      baseURL: config.baseURL,
+      hasAuth: !!config.headers?.Authorization,
+      authHeader: config.headers?.Authorization ? `${config.headers.Authorization.substring(0, 20)}...` : 'none',
+    });
+    return config;
+  },
+  (error) => {
+    console.error('❌ Request error:', error);
+    return Promise.reject(error);
+  }
+);
+
+// Add response interceptor for debugging
+apiClient.interceptors.response.use(
+  (response) => {
+    console.log('✅ API Response:', {
+      status: response.status,
+      url: response.config.url,
+    });
+    return response;
+  },
+  (error) => {
+    console.error('❌ API Error:', {
+      message: error.message,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      url: error.config?.url,
+      data: error.response?.data,
+    });
+    return Promise.reject(error);
+  }
+);
+
 // Function to set auth token for API requests
 export const setAuthToken = (token: string | null) => {
   if (token) {
