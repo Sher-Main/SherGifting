@@ -1,0 +1,37 @@
+warning: in the working copy of 'index.tsx', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/index.tsx b/index.tsx[m
+[1mindex e804ffc..13ab374 100644[m
+[1m--- a/index.tsx[m
+[1m+++ b/index.tsx[m
+[36m@@ -67,18 +67,24 @@[m [mroot.render([m
+           walletChainType: 'solana-only', // ✅ Forces Solana-only wallet creation[m
+         },[m
+         // ✅ Privy v3 Solana configuration - use 'solana:mainnet' (NOT 'solana:mainnet-beta')[m
+[32m+[m[41m        [m
+[32m+[m[32m        embeddedWallets: {[m
+[32m+[m[32m          solana: {[m
+[32m+[m[32m            createOnLogin: "off",[m
+[32m+[m[32m          },[m
+[32m+[m[32m        },[m
+         solana: {[m
+           rpcs: {[m
+[31m-            'solana:mainnet': {[m
+[31m-              rpc: createSolanaRpc(rpcUrl),[m
+[31m-              rpcSubscriptions: createSolanaRpcSubscriptions(rpcSubscriptionsUrl),[m
+[32m+[m[32m            "solana:mainnet": {[m
+[32m+[m[32m              rpc: createSolanaRpc([m
+[32m+[m[32m                "https://mainnet.helius-rpc.com/?api-key=a1c96ec7-818b-4789-ad2c-2bd175df4a95"[m
+[32m+[m[32m              ),[m
+[32m+[m[32m              rpcSubscriptions: createSolanaRpcSubscriptions([m
+[32m+[m[32m                "wss://api.mainnet-beta.solana.com"[m
+[32m+[m[32m              ),[m
+             },[m
+           },[m
+         },[m
+[31m-        // ✅ CRITICAL: Create Solana embedded wallets for all users[m
+[31m-        embeddedWallets: {[m
+[31m-          createOnLogin: 'all-users',[m
+[31m-        },[m
+       }}[m
+     >[m
+       <App />[m

@@ -86,9 +86,9 @@ const AddFundsPage: React.FC = () => {
                 </div>
                 {/* QR Code */}
                 {qrCodeDataUrl && (
-                    <div className="bg-white p-4 inline-block rounded-lg mb-6">
+                <div className="bg-white p-4 inline-block rounded-lg mb-6">
                         <img src={qrCodeDataUrl} alt="Wallet Address QR Code" className="w-48 h-48" />
-                    </div>
+                </div>
                 )}
                 <br/>
                 <button onClick={() => setSelectedOption(null)} className="bg-slate-600 hover:bg-slate-500 text-white font-bold py-2 px-4 rounded-lg transition-colors">Back</button>

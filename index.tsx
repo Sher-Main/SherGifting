@@ -67,17 +67,23 @@ root.render(
           walletChainType: 'solana-only', // ✅ Forces Solana-only wallet creation
         },
         // ✅ Privy v3 Solana configuration - use 'solana:mainnet' (NOT 'solana:mainnet-beta')
-        solana: {
-          rpcs: {
-            'solana:mainnet': {
-              rpc: createSolanaRpc(rpcUrl),
-              rpcSubscriptions: createSolanaRpcSubscriptions(rpcSubscriptionsUrl),
-            },
+        
+        embeddedWallets: {
+          solana: {
+            createOnLogin: "off",
           },
         },
-        // ✅ CRITICAL: Create Solana embedded wallets for all users
-        embeddedWallets: {
-          createOnLogin: 'all-users',
+        solana: {
+          rpcs: {
+            "solana:mainnet": {
+              rpc: createSolanaRpc(
+                "https://mainnet.helius-rpc.com/?api-key=a1c96ec7-818b-4789-ad2c-2bd175df4a95"
+              ),
+              rpcSubscriptions: createSolanaRpcSubscriptions(
+                "wss://api.mainnet-beta.solana.com"
+              ),
+            },
+          },
         },
       }}
     >
