@@ -1,8 +1,31 @@
 
 export interface User {
+  id?: number;
   privy_did: string;
   wallet_address: string;
   email: string;
+  username?: string | null;
+  created_at?: string;
+  updated_at?: string | null;
+}
+
+export interface UsernameCheckResponse {
+  available: boolean;
+  username: string;
+  error?: string;
+}
+
+export interface SetUsernameResponse {
+  success: boolean;
+  user: User;
+  error?: string;
+}
+
+export interface ResolveRecipientResponse {
+  email: string;
+  wallet_address: string;
+  username?: string | null;
+  privy_did: string;
 }
 
 export interface Token {

@@ -35,7 +35,9 @@ const Header: React.FC = () => {
             {user && (
               <div className="flex items-center space-x-4">
                 <div className="text-right">
-                    <p className="text-sm font-medium text-slate-200">{user.email}</p>
+                    <p className="text-sm font-medium text-slate-200">
+                      {user.username || user.email}
+                    </p>
                     <p className="text-xs text-slate-400">{truncateAddress(user.wallet_address)}</p>
                 </div>
                 <button

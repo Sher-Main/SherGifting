@@ -6,7 +6,17 @@ import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, cre
 import 'dotenv/config';
 import { authenticateToken, AuthRequest } from './authMiddleware';
 import { sendGiftNotification } from './emailService';
-import { insertGift, getGiftsBySender, getGiftById, updateGiftClaim } from './database';
+import {
+  insertGift,
+  getGiftsBySender,
+  getGiftById,
+  updateGiftClaim,
+  upsertUser,
+  getUserByPrivyDid,
+  pool,
+  DbUser,
+} from './database';
+import userRoutes from './routes/user';
 
 
 // --- Types (duplicated from frontend for simplicity) ---
@@ -14,12 +24,6 @@ enum GiftStatus {
   SENT = 'SENT',
   CLAIMED = 'CLAIMED',
   EXPIRED = 'EXPIRED'
-}
-
-interface User {
-  privy_did: string;
-  wallet_address: string;
-  email: string;
 }
 
 interface Gift {
@@ -77,6 +81,8 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
+app.use('/api/user', userRoutes);
+
 // --- ENV VARS & MOCKS ---
 const PORT = process.env.PORT || 3001;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
@@ -85,7 +91,6 @@ const PRIVY_APP_SECRET = process.env.PRIVY_APP_SECRET;
 const FEE_WALLET_ADDRESS = process.env.FEE_WALLET_ADDRESS;
 const FEE_PERCENTAGE = 0.001; // 0.1% fee
 let FAKE_AUTHENTICATED_USER_DID = '';
-const users: User[] = [];
 // Keep in-memory array as fallback if database is not available
 const gifts: Gift[] = [];
 
@@ -302,13 +307,18 @@ const isSolanaAddress = (address: string): boolean => {
 
 // --- ROUTES ---
 
-app.post('/api/user/sync', authenticateToken, (req: AuthRequest, res) => {
+app.post('/api/user/sync', authenticateToken, async (req: AuthRequest, res) => {
   const { privy_did, wallet_address, email } = req.body;
+  const authenticatedUserId = req.userId || req.user?.id;
   
   console.log('✅ Received user sync request:', { privy_did, wallet_address, email });
   
+  if (!pool) {
+    return res.status(503).json({ error: 'Database is not configured. Please try again later.' });
+  }
+  
   // Verify the authenticated user matches the request
-  if (req.user?.id !== privy_did) {
+  if (authenticatedUserId && authenticatedUserId !== privy_did) {
     return res.status(403).json({ error: 'Unauthorized: User ID mismatch' });
   }
   
@@ -326,19 +336,20 @@ app.post('/api/user/sync', authenticateToken, (req: AuthRequest, res) => {
     });
   }
 
-  let user = users.find(u => u.privy_did === privy_did);
-  if (!user) {
-    user = { privy_did, wallet_address, email };
-    users.push(user);
-    console.log('✅ Created new user:', user);
-  } else {
-    // Update wallet address and email if changed
-    user.wallet_address = wallet_address;
-    user.email = email;
-    console.log('✅ Found existing user:', user);
-  }
+  try {
+    const normalizedEmail = email.trim().toLowerCase();
+    const syncedUser = await upsertUser({
+      privy_did,
+      wallet_address,
+      email: normalizedEmail,
+    });
 
-  res.status(200).json(user);
+    console.log('✅ User synced with database:', syncedUser.privy_did);
+    res.status(200).json(syncedUser);
+  } catch (error) {
+    console.error('❌ Error syncing user:', error);
+    res.status(500).json({ error: 'Failed to sync user' });
+  }
 });
 
 
@@ -590,7 +601,7 @@ app.post('/api/tiplink/create', authenticateToken, async (req: AuthRequest, res)
     const tiplinkUrl = newTipLink.url.toString();
     const tiplinkPublicKey = newTipLink.keypair.publicKey.toBase58();
     
-    console.log('✅ TipLink created:', tiplinkPublicKey, 'for user:', req.user?.id);
+    console.log('✅ TipLink created:', tiplinkPublicKey, 'for user:', req.userId || req.user?.id);
     
     res.json({
       tiplink_url: tiplinkUrl,
@@ -610,7 +621,7 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
   console.log('🎁 Creating gift record:', { sender_did, recipient_email, token_mint, amount, token_symbol, token_decimals });
 
   // Verify the authenticated user matches the sender
-  if (req.user?.id !== sender_did) {
+  if ((req.userId || req.user?.id) !== sender_did) {
     return res.status(403).json({ error: 'Unauthorized: Sender ID mismatch' });
   }
 
@@ -619,7 +630,12 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
   }
 
   // Find sender
-  const sender = users.find(u => u.privy_did === sender_did);
+  let sender: DbUser | null = null;
+  try {
+    sender = await getUserByPrivyDid(sender_did);
+  } catch (error) {
+    console.error('❌ Error fetching sender from database:', error);
+  }
   if (!sender) {
     return res.status(404).json({ error: 'User not found' });
   }
@@ -781,7 +797,7 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
 
 
 app.get('/api/gifts/history', authenticateToken, async (req: AuthRequest, res) => {
-  const sender_did = req.user?.id;
+  const sender_did = req.userId || req.user?.id;
   if (!sender_did) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -874,8 +890,8 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
     console.log('✅ TipLink loaded:', tipLink.keypair.publicKey.toBase58());
     
     // Check TipLink balance
-    const tiplinkBalance = await connection.getBalance(tipLink.keypair.publicKey);
-    console.log('💰 TipLink balance:', tiplinkBalance / LAMPORTS_PER_SOL, 'SOL');
+    const tiplinkBalanceLamports = await connection.getBalance(tipLink.keypair.publicKey);
+    console.log('💰 TipLink balance:', tiplinkBalanceLamports / LAMPORTS_PER_SOL, 'SOL');
 
     const recipientPubkey = new PublicKey(recipient_wallet);
     console.log('👤 Recipient wallet:', recipientPubkey.toBase58());
@@ -928,27 +944,41 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
     }
 
     let signature: string;
+    let claimedAmount = gift.amount;
 
     // Transfer from TipLink → Recipient
     if (tokenInfo.isNative) {
       // Native SOL transfer
-      console.log(`💸 Transferring ${gift.amount} ${gift.token_symbol} to recipient...`);
+      console.log(`💸 Preparing SOL transfer for gift ${gift.id}...`);
       
       // Reserve some SOL for transaction fee (5000 lamports = 0.000005 SOL)
       const FEE_RESERVE = 5000;
-      const transferAmount = (gift.amount * LAMPORTS_PER_SOL) - FEE_RESERVE;
+      let transferLamports = tiplinkBalanceLamports - FEE_RESERVE;
       
-      if (transferAmount <= 0) {
-        throw new Error('Gift amount too small to cover transaction fee');
+      if (transferLamports <= 0) {
+        throw new Error('Insufficient TipLink balance after reserving transaction fee');
       }
       
-      console.log(`📊 Transfer details: ${transferAmount / LAMPORTS_PER_SOL} ${gift.token_symbol} (${gift.amount} ${gift.token_symbol} - ${FEE_RESERVE / LAMPORTS_PER_SOL} ${gift.token_symbol} fee reserve)`);
+      // Ensure lamports is a whole number (safety against floating point ops)
+      transferLamports = Math.floor(transferLamports);
       
+      console.log('📊 Transfer details:', {
+        totalBalanceLamports: tiplinkBalanceLamports,
+        totalBalanceSOL: (tiplinkBalanceLamports / LAMPORTS_PER_SOL).toFixed(9),
+        feeReserveLamports: FEE_RESERVE,
+        feeReserveSOL: (FEE_RESERVE / LAMPORTS_PER_SOL).toFixed(9),
+        transferLamports,
+        transferSOL: (transferLamports / LAMPORTS_PER_SOL).toFixed(9),
+        isInteger: Number.isInteger(transferLamports),
+      });
+      
+      claimedAmount = transferLamports / LAMPORTS_PER_SOL;
+
       const transaction = new Transaction().add(
         SystemProgram.transfer({
           fromPubkey: tipLink.keypair.publicKey,
           toPubkey: recipientPubkey,
-          lamports: transferAmount,
+          lamports: transferLamports,
         })
       );
 
@@ -1018,7 +1048,7 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
     res.json({
       success: true,
       signature,
-      amount: gift.amount,
+      amount: claimedAmount,
       token_symbol: gift.token_symbol
     });
   } catch (error: any) {

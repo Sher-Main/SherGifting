@@ -41,6 +41,46 @@ if (pool) {
 async function initializeSchema() {
   if (!pool) return;
 
+  // Create users table if it does not exist yet
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      privy_did VARCHAR(255) UNIQUE NOT NULL,
+      wallet_address VARCHAR(255) NOT NULL,
+      email VARCHAR(255) UNIQUE NOT NULL,
+      username VARCHAR(30) UNIQUE,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      CONSTRAINT username_format CHECK (
+        username IS NULL OR username ~ '^@[a-zA-Z0-9_]{3,29}$'
+      )
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_users_username
+    ON users(username)
+    WHERE username IS NOT NULL
+  `);
+
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION update_updated_at_column()
+    RETURNS TRIGGER AS $$
+    BEGIN
+      NEW.updated_at = NOW();
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+  `);
+
+  await pool.query(`
+    DROP TRIGGER IF EXISTS update_users_updated_at ON users;
+    CREATE TRIGGER update_users_updated_at
+    BEFORE UPDATE ON users
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+  `);
+
   // Create gifts table
   await pool.query(`
     CREATE TABLE IF NOT EXISTS gifts (
@@ -95,6 +135,78 @@ export async function query<T extends QueryResultRow = any>(
     console.error('❌ Database query error:', error);
     throw error;
   }
+}
+
+export interface DbUser extends QueryResultRow {
+  id: number;
+  privy_did: string;
+  wallet_address: string;
+  email: string;
+  username: string | null;
+  created_at: Date;
+  updated_at: Date | null;
+}
+
+export async function upsertUser(user: {
+  privy_did: string;
+  wallet_address: string;
+  email: string;
+}): Promise<DbUser> {
+  const [result] = await query<DbUser>(
+    `
+    INSERT INTO users (privy_did, wallet_address, email)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (privy_did)
+    DO UPDATE SET
+      wallet_address = EXCLUDED.wallet_address,
+      email = EXCLUDED.email,
+      updated_at = NOW()
+    RETURNING *
+    `,
+    [user.privy_did, user.wallet_address, user.email]
+  );
+
+  return result;
+}
+
+export async function getUserByPrivyDid(privy_did: string): Promise<DbUser | null> {
+  const results = await query<DbUser>(
+    `SELECT * FROM users WHERE privy_did = $1`,
+    [privy_did]
+  );
+  return results[0] || null;
+}
+
+export async function getUserByEmail(email: string): Promise<DbUser | null> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const results = await query<DbUser>(
+    `SELECT * FROM users WHERE email = $1`,
+    [normalizedEmail]
+  );
+  return results[0] || null;
+}
+
+export async function getUserByUsername(username: string): Promise<DbUser | null> {
+  const results = await query<DbUser>(
+    `SELECT * FROM users WHERE username = $1`,
+    [username]
+  );
+  return results[0] || null;
+}
+
+export async function setUsernameForUser(privy_did: string, username: string): Promise<DbUser | null> {
+  const results = await query<DbUser>(
+    `
+    UPDATE users
+    SET username = $1,
+        updated_at = NOW()
+    WHERE privy_did = $2
+      AND (username IS NULL OR username = $1)
+    RETURNING *
+    `,
+    [username, privy_did]
+  );
+  return results[0] || null;
 }
 
 export async function insertGift(gift: {

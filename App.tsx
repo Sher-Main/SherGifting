@@ -11,6 +11,7 @@ import Header from './components/Header';
 import ErrorBoundary from './components/ErrorBoundary';
 import NotFoundPage from './pages/NotFoundPage';
 import { ProgressLoader } from './components/ProgressLoader';
+import UsernameSetupModal from './components/UsernameSetupModal';
 
 const App: React.FC = () => {
   return (
@@ -27,7 +28,7 @@ const App: React.FC = () => {
 };
 
 const AppContent: React.FC = () => {
-  const { user, isLoading, loadingStage } = useAuth();
+  const { user, isLoading, loadingStage, showUsernameSetup, handleUsernameSetup } = useAuth();
 
   // Show loading screen during initial auth/wallet setup
   if (isLoading) {
@@ -48,6 +49,10 @@ const AppContent: React.FC = () => {
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </main>
+      <UsernameSetupModal
+        isOpen={Boolean(user && showUsernameSetup)}
+        onSuccess={handleUsernameSetup}
+      />
     </>
   );
 };

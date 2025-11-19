@@ -14,6 +14,8 @@ interface AuthContextType {
   isLoading: boolean;
   loadingStage: 'authenticating' | 'setting-up' | 'preparing' | 'ready';
   isAuthenticated: boolean;
+  showUsernameSetup: boolean;
+  handleUsernameSetup: (username: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -25,6 +27,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [isLoading, setIsLoading] = useState(false);
   const [loadingStage, setLoadingStage] = useState<'authenticating' | 'setting-up' | 'preparing' | 'ready'>('authenticating');
   const [retryCount, setRetryCount] = useState(0);
+  const [showUsernameSetup, setShowUsernameSetup] = useState(false);
 
   // 🔥 CRITICAL: Helper to detect Solana wallets robustly
   const isSolanaWallet = useCallback((w: any): boolean => {
@@ -135,15 +138,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           console.log('✅ Using Solana wallet from linkedAccounts:', walletAddress);
           
           // Get email
-          let email = privyUser.email?.address || privyUser.google?.email || undefined;
-          if (!email && privyUser.linkedAccounts) {
-            const emailAccount = privyUser.linkedAccounts.find(
-              (account: any) => account.type === 'email' || account.type === 'google'
-            );
-            if (emailAccount && 'email' in emailAccount) {
-              email = emailAccount.email || undefined;
-            }
-          }
+          const email = privyUser.email?.address || privyUser.google?.email || undefined;
 
           if (email && walletAddress) {
             try {
@@ -214,15 +209,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         });
         
         // Get email
-        let email = privyUser.email?.address || privyUser.google?.email || undefined;
-        if (!email && privyUser.linkedAccounts) {
-          const emailAccount = privyUser.linkedAccounts.find(
-            (account: any) => account.type === 'email' || account.type === 'google'
-          );
-          if (emailAccount && 'email' in emailAccount) {
-            email = emailAccount.email || undefined;
-          }
-        }
+        const email = privyUser.email?.address || privyUser.google?.email || undefined;
 
         if (!email || !walletAddress) {
           console.error('❌ Missing email or wallet address');
@@ -301,6 +288,23 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setToken();
   }, [authenticated, privyUser, getAccessToken]);
 
+  useEffect(() => {
+    if (user && !user.username) {
+      setShowUsernameSetup(true);
+    } else {
+      setShowUsernameSetup(false);
+    }
+  }, [user]);
+
+  const handleUsernameSetup = useCallback(
+    async (username: string) => {
+      setUser((prev) => (prev ? { ...prev, username } : prev));
+      setShowUsernameSetup(false);
+      await syncUser();
+    },
+    [syncUser]
+  );
+
   const handleLogin = async () => {
     try {
       // Check if already authenticated
@@ -325,6 +329,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     isLoading: isLoading,
     loadingStage: loadingStage,
     isAuthenticated: !!(user && authenticated),
+    showUsernameSetup,
+    handleUsernameSetup,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

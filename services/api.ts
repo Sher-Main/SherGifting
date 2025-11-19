@@ -1,5 +1,14 @@
 import axios from 'axios';
-import { TokenBalance, Gift, GiftInfo, Token } from '../types';
+import {
+  TokenBalance,
+  Gift,
+  GiftInfo,
+  Token,
+  User,
+  UsernameCheckResponse,
+  SetUsernameResponse,
+  ResolveRecipientResponse,
+} from '../types';
 
 // Use environment variable for backend URL in production, fallback to /api for local dev
 // If VITE_BACKEND_URL is set but doesn't end with /api, append it
@@ -64,11 +73,11 @@ export const setAuthToken = (token: string | null) => {
 };
 
 export const userService = {
-  getOrCreateUser: async (userData: { 
-    privy_did: string; 
-    wallet_address: string; 
-    email: string; 
-  }) => {
+  getOrCreateUser: async (userData: {
+    privy_did: string;
+    wallet_address: string;
+    email: string;
+  }): Promise<User> => {
     const response = await apiClient.post('/user/sync', userData);
     return response.data;
   },
@@ -96,6 +105,21 @@ export const tokenService = {
 export const feeService = {
   getFeeConfig: async (): Promise<{ fee_wallet_address: string | null; fee_percentage: number }> => {
     const response = await apiClient.get('/fee-config');
+    return response.data;
+  },
+};
+
+export const usernameService = {
+  checkAvailability: async (username: string): Promise<UsernameCheckResponse> => {
+    const response = await apiClient.get(`/user/username/check/${encodeURIComponent(username)}`);
+    return response.data;
+  },
+  setUsername: async (username: string): Promise<SetUsernameResponse> => {
+    const response = await apiClient.post('/user/username/set', { username });
+    return response.data;
+  },
+  resolveRecipient: async (identifier: string): Promise<ResolveRecipientResponse> => {
+    const response = await apiClient.post('/user/resolve-recipient', { identifier });
     return response.data;
   },
 };

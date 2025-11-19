@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePrivy } from '@privy-io/react-auth';
 import { useSignAndSendTransaction, useWallets } from '@privy-io/react-auth/solana';
-import { tokenService, giftService, tiplinkService, heliusService, feeService, priceService } from '../services/api';
-import { Token, TokenBalance } from '../types';
+import { tokenService, giftService, tiplinkService, heliusService, feeService, priceService, usernameService } from '../services/api';
+import { Token, TokenBalance, ResolveRecipientResponse } from '../types';
 import Spinner from '../components/Spinner';
 import { ArrowLeftIcon } from '../components/icons';
 import QRCode from 'qrcode';
@@ -30,9 +30,20 @@ const GiftPage: React.FC = () => {
     const [feeWalletAddress, setFeeWalletAddress] = useState<string | null>(null);
     const [feePercentage, setFeePercentage] = useState<number>(0.001); // Default 0.1%
     
-    const [recipientEmail, setRecipientEmail] = useState('');
+    const [recipientInput, setRecipientInput] = useState('');
+    const [resolvedRecipient, setResolvedRecipient] = useState<ResolveRecipientResponse | null>(null);
+    const [resolvingRecipient, setResolvingRecipient] = useState(false);
+    const [recipientError, setRecipientError] = useState<string | null>(null);
     const [amount, setAmount] = useState('');
     const [message, setMessage] = useState('');
+    const trimmedRecipient = recipientInput.trim();
+    const isUsernameRecipient = trimmedRecipient.startsWith('@');
+    const resolvedRecipientEmail = isUsernameRecipient
+        ? (resolvedRecipient?.email ?? '')
+        : trimmedRecipient.toLowerCase();
+    const recipientDisplayLabel = isUsernameRecipient
+        ? (resolvedRecipient?.username ?? trimmedRecipient)
+        : trimmedRecipient;
     
     // USD/Token conversion state
     const [amountMode, setAmountMode] = useState<'token' | 'usd'>('usd'); // Default to USD
@@ -46,7 +57,8 @@ const GiftPage: React.FC = () => {
     // Confirmation modal state
     const [showConfirmModal, setShowConfirmModal] = useState(false);
     const [confirmDetails, setConfirmDetails] = useState<{
-        recipient: string;
+        recipientLabel: string;
+        recipientEmail: string;
         amount: number;
         fee: number;
         total: number;
@@ -183,6 +195,44 @@ const GiftPage: React.FC = () => {
         fetchFeeConfig();
     }, []);
 
+    useEffect(() => {
+        if (!isUsernameRecipient) {
+            setResolvedRecipient(null);
+            setRecipientError(null);
+            setResolvingRecipient(false);
+            return;
+        }
+
+        if (trimmedRecipient.length < 4) {
+            setResolvedRecipient(null);
+            setRecipientError('Username must be at least 4 characters.');
+            return;
+        }
+
+        setResolvingRecipient(true);
+        setRecipientError(null);
+
+        const timeoutId = setTimeout(async () => {
+            try {
+                const result = await usernameService.resolveRecipient(trimmedRecipient);
+                setResolvedRecipient(result);
+                setRecipientError(null);
+            } catch (err: any) {
+                console.error('❌ Error resolving recipient username:', err);
+                if (err?.response?.status === 404) {
+                    setRecipientError('Username not found.');
+                } else {
+                    setRecipientError('Unable to resolve username.');
+                }
+                setResolvedRecipient(null);
+            } finally {
+                setResolvingRecipient(false);
+            }
+        }, 500);
+
+        return () => clearTimeout(timeoutId);
+    }, [isUsernameRecipient, trimmedRecipient]);
+
     // Mode switch handler
     const handleModeSwitch = (newMode: 'token' | 'usd') => {
         if (!tokenPrice && newMode === 'usd') {
@@ -227,10 +277,32 @@ const GiftPage: React.FC = () => {
             return;
         }
 
-        if (!selectedToken || !recipientEmail) {
+        if (!selectedToken || !trimmedRecipient) {
             setError("Please fill in all required fields.");
             return;
         }
+
+        if (isUsernameRecipient) {
+            if (resolvingRecipient) {
+                setError("Resolving username, please wait a moment.");
+                return;
+            }
+            if (!resolvedRecipientEmail) {
+                setError(recipientError || "Unable to resolve username.");
+                return;
+            }
+        } else if (!trimmedRecipient.includes('@')) {
+            setError("Please enter a valid email address.");
+            return;
+        }
+
+        const recipientEmailValue = resolvedRecipientEmail;
+        if (!recipientEmailValue) {
+            setError("Recipient could not be determined. Please try again.");
+            return;
+        }
+
+        const recipientLabel = recipientDisplayLabel || recipientEmailValue;
 
         // Calculate final amount based on mode
         const numericAmount = amountMode === 'usd' && tokenPrice
@@ -270,7 +342,8 @@ const GiftPage: React.FC = () => {
 
         // Show confirmation modal first
         setConfirmDetails({
-            recipient: recipientEmail,
+            recipientLabel,
+            recipientEmail: recipientEmailValue,
             amount: numericAmount,
             fee: feeAmount,
             total: totalAmount,
@@ -291,7 +364,8 @@ const GiftPage: React.FC = () => {
 
         const numericAmount = confirmDetails.amount;
         const feeAmount = confirmDetails.fee;
-        const recipientEmail = confirmDetails.recipient;
+        const recipientEmail = confirmDetails.recipientEmail;
+        const recipientLabel = confirmDetails.recipientLabel;
         const message = confirmDetails.message;
         const tokenSymbol = confirmDetails.token;
         
@@ -687,7 +761,7 @@ const GiftPage: React.FC = () => {
                 claim_url: fullClaimUrl,
                 amount: numericAmount.toString(),
                 token: selectedToken.symbol,
-                recipient: recipientEmail,
+                recipient: recipientLabel,
                 signature: signatureString,
                 qrCode: qrCodeDataUrl
             });
@@ -697,7 +771,10 @@ const GiftPage: React.FC = () => {
             await refreshUser();
             
             // Clear form
-            setRecipientEmail('');
+            setRecipientInput('');
+            setResolvedRecipient(null);
+            setRecipientError(null);
+            setResolvingRecipient(false);
             setAmount('');
             setTokenAmount('');
             setUsdAmount('');
@@ -743,7 +820,7 @@ const GiftPage: React.FC = () => {
                             <div className="bg-slate-900/50 rounded-lg p-4">
                                 <div className="flex justify-between text-sm mb-2">
                                     <span className="text-slate-400">Recipient:</span>
-                                    <span className="text-white">{confirmDetails.recipient}</span>
+                                    <span className="text-white">{confirmDetails.recipientLabel}</span>
                                 </div>
                                 <div className="flex justify-between text-sm mb-2">
                                     <span className="text-slate-400">Gift Amount:</span>
@@ -897,20 +974,39 @@ const GiftPage: React.FC = () => {
                         </select>
                     </div>
 
-                    {/* Recipient Email */}
+                    {/* Recipient (Email or Username) */}
                     <div>
-                        <label htmlFor="recipientEmail" className="block text-sm font-medium text-slate-300 mb-2">
-                            Recipient Email
+                        <label htmlFor="recipientIdentifier" className="block text-sm font-medium text-slate-300 mb-2">
+                            Recipient Email / @Username
                         </label>
                         <input
-                            type="email"
-                            id="recipientEmail"
-                            value={recipientEmail}
-                            onChange={(e) => setRecipientEmail(e.target.value)}
+                            type="text"
+                            id="recipientIdentifier"
+                            value={recipientInput}
+                            onChange={(e) => setRecipientInput(e.target.value)}
                             required
-                            placeholder="recipient@example.com"
+                            placeholder="recipient@example.com or @username"
                             className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
                         />
+                        <div className="mt-2 text-sm">
+                            {recipientError && (
+                                <p className="text-rose-400">{recipientError}</p>
+                            )}
+                            {isUsernameRecipient ? (
+                                <>
+                                    {resolvingRecipient && (
+                                        <p className="text-slate-400">Resolving username...</p>
+                                    )}
+                                    {!resolvingRecipient && resolvedRecipient && (
+                                        <p className="text-emerald-300">✓ Username linked to {resolvedRecipient.email}</p>
+                                    )}
+                                </>
+                            ) : (
+                                trimmedRecipient && (
+                                    <p className="text-slate-400">Gift will be sent to {trimmedRecipient}</p>
+                                )
+                            )}
+                        </div>
                     </div>
 
                     {/* Amount Input with Mode Toggle */}
