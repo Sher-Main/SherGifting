@@ -35,7 +35,7 @@ const GiftPage: React.FC = () => {
     const [message, setMessage] = useState('');
     
     // USD/Token conversion state
-    const [amountMode, setAmountMode] = useState<'token' | 'usd'>('token');
+    const [amountMode, setAmountMode] = useState<'token' | 'usd'>('usd'); // Default to USD
     const [tokenPrice, setTokenPrice] = useState<number | null>(null);
     const [priceLastUpdated, setPriceLastUpdated] = useState<number | null>(null);
     const [usdAmount, setUsdAmount] = useState<string>('');
@@ -963,25 +963,28 @@ const GiftPage: React.FC = () => {
                                 className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
                             />
                         ) : (
-                            <input
-                                type="number"
-                                id="amount"
-                                value={usdAmount}
-                                onChange={(e) => {
-                                    setUsdAmount(e.target.value);
-                                    // Calculate token amount but don't update amount state until submission
-                                    if (tokenPrice) {
-                                        const calculatedTokenAmount = (parseFloat(e.target.value) / tokenPrice).toString();
-                                        setTokenAmount(calculatedTokenAmount);
-                                        setAmount(calculatedTokenAmount);
-                                    }
-                                }}
-                                required
-                                min="0"
-                                step="0.01"
-                                placeholder="0.00"
-                                className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
-                            />
+                            <div className="relative">
+                                <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-white text-lg font-medium">$</span>
+                                <input
+                                    type="number"
+                                    id="amount"
+                                    value={usdAmount}
+                                    onChange={(e) => {
+                                        setUsdAmount(e.target.value);
+                                        // Calculate token amount but don't update amount state until submission
+                                        if (tokenPrice) {
+                                            const calculatedTokenAmount = (parseFloat(e.target.value) / tokenPrice).toString();
+                                            setTokenAmount(calculatedTokenAmount);
+                                            setAmount(calculatedTokenAmount);
+                                        }
+                                    }}
+                                    required
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="0.00"
+                                    className="w-full bg-slate-900/50 border border-slate-600 rounded-lg pl-8 pr-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
+                                />
+                            </div>
                         )}
                         
                         {/* Conversion Preview */}
@@ -1028,24 +1031,44 @@ const GiftPage: React.FC = () => {
                          !isNaN(parseFloat(amountMode === 'token' ? tokenAmount : (usdAmount && tokenPrice ? (parseFloat(usdAmount) / tokenPrice).toString() : '0'))) && 
                          parseFloat(amountMode === 'token' ? tokenAmount : (usdAmount && tokenPrice ? (parseFloat(usdAmount) / tokenPrice).toString() : '0')) > 0 && 
                          feeWalletAddress && (() => {
-                            const displayAmount = amountMode === 'token' 
+                            const tokenAmountValue = amountMode === 'token' 
                                 ? parseFloat(tokenAmount) 
                                 : (usdAmount && tokenPrice ? parseFloat(usdAmount) / tokenPrice : 0);
-                            const displayFee = displayAmount * feePercentage;
-                            const displayTotal = displayAmount + displayFee;
+                            const tokenFee = tokenAmountValue * feePercentage;
+                            const tokenTotal = tokenAmountValue + tokenFee;
+                            
+                            // Calculate USD values if in USD mode
+                            const usdAmountValue = amountMode === 'usd' && tokenPrice
+                                ? parseFloat(usdAmount)
+                                : (amountMode === 'token' && tokenPrice ? parseFloat(tokenAmount) * tokenPrice : 0);
+                            const usdFee = usdAmountValue * feePercentage;
+                            const usdTotal = usdAmountValue + usdFee;
+                            
                             return (
                                 <div className="mt-3 p-3 bg-slate-900/30 border border-slate-700 rounded-lg">
                                     <div className="flex justify-between text-sm mb-1">
                                         <span className="text-slate-400">Gift Amount:</span>
-                                        <span className="text-white">{displayAmount.toFixed(6)} {selectedToken?.symbol}</span>
+                                        <span className="text-white">
+                                            {amountMode === 'usd' && tokenPrice
+                                                ? `$${usdAmountValue.toFixed(3)}`
+                                                : `${tokenAmountValue.toFixed(6)} ${selectedToken?.symbol}`}
+                                        </span>
                                     </div>
                                     <div className="flex justify-between text-sm mb-1">
                                         <span className="text-slate-400">Fee ({feePercentage * 100}%):</span>
-                                        <span className="text-slate-300">{displayFee.toFixed(6)} {selectedToken?.symbol}</span>
+                                        <span className="text-slate-300">
+                                            {amountMode === 'usd' && tokenPrice
+                                                ? `$${usdFee.toFixed(3)}`
+                                                : `${tokenFee.toFixed(6)} ${selectedToken?.symbol}`}
+                                        </span>
                                     </div>
                                     <div className="flex justify-between text-sm pt-2 border-t border-slate-700">
                                         <span className="text-slate-300 font-medium">Total:</span>
-                                        <span className="text-white font-medium">{displayTotal.toFixed(6)} {selectedToken?.symbol}</span>
+                                        <span className="text-white font-medium">
+                                            {amountMode === 'usd' && tokenPrice
+                                                ? `$${usdTotal.toFixed(3)}`
+                                                : `${tokenTotal.toFixed(6)} ${selectedToken?.symbol}`}
+                                        </span>
                                     </div>
                                 </div>
                             );

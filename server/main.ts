@@ -489,25 +489,56 @@ app.get('/api/fee-config', (req, res) => {
   });
 });
 
-// Get token price endpoint (Jupiter primary, Helius fallback)
+// Get token price endpoint - Uses Jupiter Tokens API V2 (includes price in response)
 app.get('/api/tokens/:mint/price', async (req, res) => {
   const { mint } = req.params;
   
   try {
-    // Try Jupiter first
-    const jupResponse = await fetch(`https://price.jup.ag/v4/price?ids=${mint}`);
-    const jupData = await jupResponse.json();
-    
-    if (jupData.data?.[mint]?.price) {
+    // Check cache first
+    const cachedPrice = getCachedPrice(mint);
+    if (cachedPrice !== null) {
       return res.json({
-        price: jupData.data[mint].price,
-        symbol: jupData.data[mint].mintSymbol,
-        source: 'jupiter',
+        price: cachedPrice,
+        source: 'cache',
         timestamp: Date.now()
       });
     }
     
-    // Fallback to Helius DAS API
+    // Use Jupiter Tokens API V2 (same API we use for token metadata - includes price!)
+    const searchUrl = `https://lite-api.jup.ag/tokens/v2/search?query=${mint}`;
+    const response = await fetch(searchUrl);
+    
+    if (!response.ok) {
+      throw new Error(`Jupiter API returned ${response.status}`);
+    }
+    
+    const result = await response.json();
+    
+    // V2 returns an array of matching tokens
+    if (Array.isArray(result) && result.length > 0) {
+      // Find exact match by mint address
+      const token = result.find(t => 
+        (t.id === mint || t.address === mint)
+      ) || result[0]; // Fallback to first result if no exact match
+      
+      // V2 includes price as usdPrice in the response
+      const priceValue = token.usdPrice;
+      const price: number = (typeof priceValue === 'number') ? priceValue : 0;
+      
+      if (price > 0) {
+        // Cache the price
+        setCachedPrice(mint, price);
+        
+        return res.json({
+          price: price,
+          symbol: token.symbol || 'UNKNOWN',
+          source: 'jupiter-v2',
+          timestamp: Date.now()
+        });
+      }
+    }
+    
+    // Fallback to Helius DAS API if Jupiter doesn't have price
     if (HELIUS_API_KEY) {
       const heliusResponse = await fetch(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`, {
         method: 'POST',
@@ -524,8 +555,16 @@ app.get('/api/tokens/:mint/price', async (req, res) => {
       const priceInfo = heliusData.result?.token_info?.price_info;
       
       if (priceInfo?.price_per_token) {
+        const heliusPrice: number = (typeof priceInfo.price_per_token === 'number') 
+          ? priceInfo.price_per_token 
+          : 0;
+        
+        if (heliusPrice > 0) {
+          setCachedPrice(mint, heliusPrice);
+        }
+        
         return res.json({
-          price: priceInfo.price_per_token,
+          price: heliusPrice,
           symbol: heliusData.result.token_info.symbol,
           source: 'helius',
           timestamp: Date.now()
