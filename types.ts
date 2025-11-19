@@ -17,6 +17,8 @@ export interface TokenBalance extends Token {
   balance: number;
   usdValue?: number;
   logoURI?: string;
+  verified?: boolean;      // Jupiter verification status
+  tags?: string[];         // Token tags from Jupiter
 }
 
 export enum GiftStatus {

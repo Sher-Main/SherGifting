@@ -125,50 +125,119 @@ const connection = new Connection(RPC_URL, 'confirmed');
 // ✅ FIX: Remove TipLink initialization - we'll use the static create() method instead
 // TipLink doesn't need to be initialized with a client, we use it directly
 
-// --- TOKEN METADATA FETCHING ---
-interface TokenMetadata {
+// ========================================
+// JUPITER API INTEGRATION
+// ========================================
+
+interface JupiterTokenInfo {
   mint: string;
   symbol: string;
   name: string;
   decimals: number;
-  logo: string;
+  logoURI: string;
+  price: number;
+  verified: boolean;
+  tags: string[];
 }
 
-// Function to fetch token metadata from Helius API (batch)
-async function fetchTokenMetadata(
-  mintAddresses: string[],
-  heliusApiKey: string
-): Promise<TokenMetadata[]> {
-  if (!heliusApiKey || mintAddresses.length === 0) {
-    return [];
-  }
+/**
+ * Fetches token metadata AND prices from Jupiter Tokens API V2
+ * V2 API includes price in the same response - no separate price API needed!
+ * Uses parallel processing for better performance
+ * @param mintAddresses - Array of token mint addresses
+ * @returns Map of mint address to token info
+ */
+async function fetchJupiterTokenInfo(
+  mintAddresses: string[]
+): Promise<Map<string, JupiterTokenInfo>> {
+  const tokenMap = new Map<string, JupiterTokenInfo>();
+  
+  if (mintAddresses.length === 0) return tokenMap;
 
   try {
-    const response = await fetch(
-      `https://api.helius.xyz/v0/token-metadata?api-key=${heliusApiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mintAccounts: mintAddresses }),
+    console.log(`🔍 Fetching token info from Jupiter Tokens API V2 for ${mintAddresses.length} tokens...`);
+    
+    // 🚀 Fetch all tokens in parallel for better performance
+    const fetchPromises = mintAddresses.map(async (mint) => {
+      try {
+        // 🔥 CORRECT V2 API: lite-api.jup.ag/tokens/v2/search
+        const searchUrl = `https://lite-api.jup.ag/tokens/v2/search?query=${mint}`;
+        const response = await fetch(searchUrl);
+        
+        if (!response.ok) {
+          console.warn(`⚠️ Jupiter API returned ${response.status} for ${mint.substring(0, 8)}...`);
+          return null;
+        }
+        
+        const result = await response.json();
+        
+        // V2 returns an array of matching tokens
+        if (Array.isArray(result) && result.length > 0) {
+          // Find exact match by mint address
+          const token = result.find(t => 
+            (t.id === mint || t.address === mint)
+          ) || result[0]; // Fallback to first result if no exact match
+          
+          // Extract all data from V2 response
+          const symbol = token.symbol || 'UNKNOWN';
+          const name = token.name || 'Unknown Token';
+          const decimals = token.decimals || 0;
+          const logoURI = token.icon || '';
+          const verified = token.isVerified || false;
+          const tags = token.tags || [];
+          
+          // 🔥 V2 INCLUDES PRICE IN THE RESPONSE as usdPrice!
+          const cachedPrice = getCachedPrice(mint);
+          let price: number;
+          
+          if (cachedPrice !== null) {
+            price = cachedPrice;
+          } else {
+            const priceValue = token.usdPrice;
+            price = (typeof priceValue === 'number') ? priceValue : 0;
+            if (price > 0) {
+              setCachedPrice(mint, price);
+            }
+          }
+          
+          console.log(`✅ ${symbol}: $${price.toFixed(6)} ${verified ? '✓ verified' : ''}`);
+          
+          return {
+            mint,
+            symbol,
+            name,
+            decimals,
+            logoURI,
+            price,  // Guaranteed to be a number
+            verified,
+            tags,
+          };
+        }
+        
+        console.warn(`⚠️ No results for ${mint.substring(0, 8)}...`);
+        return null;
+      } catch (error) {
+        console.error(`❌ Error fetching ${mint.substring(0, 8)}...:`, error);
+        return null;
       }
-    );
-
-    if (!response.ok) {
-      console.error(`Helius API error: ${response.status}`);
-      return [];
-    }
-
-    const metadata = await response.json();
-    return metadata.map((token: any) => ({
-      mint: token.mint,
-      symbol: token.symbol || 'UNKNOWN',
-      name: token.name || 'Unknown Token',
-      decimals: token.decimals || 0,
-      logo: token.image || '',
-    }));
+    });
+    
+    // Wait for all requests to complete
+    const results = await Promise.all(fetchPromises);
+    
+    // Build the map from results
+    results.forEach(tokenInfo => {
+      if (tokenInfo) {
+        tokenMap.set(tokenInfo.mint, tokenInfo);
+      }
+    });
+    
+    console.log(`✅ Successfully fetched ${tokenMap.size}/${mintAddresses.length} tokens from Jupiter V2`);
+    
+    return tokenMap;
   } catch (error) {
-    console.error('Error fetching token metadata:', error);
-    return [];
+    console.error('❌ Error in fetchJupiterTokenInfo:', error);
+    return tokenMap;
   }
 }
 
@@ -194,6 +263,33 @@ const SUPPORTED_TOKENS = [
     isNative: true
   },
 ];
+
+// ========================================
+// PRICE CACHING (OPTIONAL - 5 MIN TTL)
+// ========================================
+
+interface CachedPrice {
+  price: number;
+  timestamp: number;
+}
+
+const priceCache = new Map<string, CachedPrice>();
+const PRICE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function getCachedPrice(mint: string): number | null {
+  const cached = priceCache.get(mint);
+  if (cached && Date.now() - cached.timestamp < PRICE_CACHE_TTL) {
+    return cached.price;
+  }
+  return null;
+}
+
+function setCachedPrice(mint: string, price: number): void {
+  priceCache.set(mint, {
+    price,
+    timestamp: Date.now(),
+  });
+}
 
 // ✅ Add Solana address validation helper
 const isSolanaAddress = (address: string): boolean => {
@@ -247,105 +343,135 @@ app.post('/api/user/sync', authenticateToken, (req: AuthRequest, res) => {
 
 
 app.get('/api/wallet/balances/:address', async (req, res) => {
-  const { address } = req.params;
-
-  console.log('🔍 Fetching balance for:', address);
-
   try {
-    const balances: any[] = [];
+    const { address } = req.params;
     
-    // ✅ Fetch SOL balance
-    const solBalance = await connection.getBalance(new PublicKey(address));
-    const solAmount = solBalance / LAMPORTS_PER_SOL;
-    
-    if (solAmount > 0) {
-      balances.push({
-        address: 'So11111111111111111111111111111111111111112',
-        symbol: 'SOL',
-        name: 'Solana',
-        logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
-        decimals: 9,
-        balance: solAmount,
-        usdValue: solAmount * 150 // Mock USD price
-      });
+    if (!address) {
+      return res.status(400).json({ error: 'Wallet address is required' });
     }
+
+    console.log(`📊 Fetching balances for wallet: ${address}`);
+
+    // Get SOL balance
+    const solBalance = await connection.getBalance(new PublicKey(address));
+    const solInLamports = solBalance / LAMPORTS_PER_SOL;
+
+    // Get SOL price from Jupiter Tokens API V2 (same API, includes price!)
+    const solMint = 'So11111111111111111111111111111111111111112';
+    const solSearchUrl = `https://lite-api.jup.ag/tokens/v2/search?query=${solMint}`;
+    const solResponse = await fetch(solSearchUrl);
+    const solData = await solResponse.json();
+    const solToken = Array.isArray(solData) && solData.length > 0 ? solData[0] : null;
     
-    // ✅ Fetch SPL token balances using Solana RPC
-    try {
-      const walletPubkey = new PublicKey(address);
-      
-      // Get all token accounts for this wallet
-      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(walletPubkey, {
-        programId: TOKEN_PROGRAM_ID,
-      });
-      
-      console.log(`🔍 Found ${tokenAccounts.value.length} token account(s)`);
-      
-      // Collect all mint addresses with non-zero balances
-      const tokenData: Array<{ mint: string; balance: number; decimals: number }> = [];
-      const mintAddresses: string[] = [];
-      
-      for (const accountInfo of tokenAccounts.value) {
-        const parsedInfo = accountInfo.account.data.parsed.info;
-        const mintAddress = parsedInfo.mint;
-        const tokenAmount = parsedInfo.tokenAmount;
+    // 🔥 V2 includes price as usdPrice in the response
+    const solPriceValue = solToken?.usdPrice;
+    const solPrice: number = (solToken && typeof solPriceValue === 'number') 
+      ? solPriceValue 
+      : 0;
+
+    console.log(`💰 SOL Balance: ${solInLamports.toFixed(4)} SOL ($${(solInLamports * solPrice).toFixed(2)})`);
+
+    // Get token accounts
+    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+      new PublicKey(address),
+      { programId: TOKEN_PROGRAM_ID }
+    );
+
+    console.log(`🪙 Found ${tokenAccounts.value.length} token accounts`);
+
+    // Extract tokens with balance > 0
+    const tokenData = tokenAccounts.value
+      .map((account) => {
+        const parsed = account.account.data.parsed.info;
+        const amount = parsed.tokenAmount.uiAmount;
         
-        // Only include tokens with non-zero balance
-        if (tokenAmount.uiAmount > 0) {
-          mintAddresses.push(mintAddress);
-          tokenData.push({
-            mint: mintAddress,
-            balance: tokenAmount.uiAmount,
-            decimals: tokenAmount.decimals,
-          });
+        if (amount > 0) {
+          return {
+            mint: parsed.mint,
+            balance: amount,
+            decimals: parsed.tokenAmount.decimals,
+          };
         }
-      }
+        return null;
+      })
+      .filter((token): token is NonNullable<typeof token> => token !== null);
+
+    console.log(`✅ Found ${tokenData.length} tokens with balance > 0`);
+
+    // Fetch ALL token info from Jupiter (metadata + prices)
+    const mintAddresses = tokenData.map(t => t.mint);
+    const jupiterTokenMap = await fetchJupiterTokenInfo(mintAddresses);
+
+    // Build response with SOL first
+    const balances = [
+      {
+        address: solMint,
+        symbol: 'SOL',
+        name: solToken?.name || 'Wrapped SOL',
+        logoURI: solToken?.icon || 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
+        decimals: 9,
+        balance: solInLamports,
+        usdValue: solInLamports * solPrice,
+        verified: true,
+        tags: ['verified'],
+      },
+    ];
+
+    // Add SPL tokens with Jupiter data
+    for (const token of tokenData) {
+      const jupiterInfo = jupiterTokenMap.get(token.mint);
       
-      // Batch fetch metadata for all tokens
-      let metadataMap = new Map<string, TokenMetadata>();
-      if (mintAddresses.length > 0 && HELIUS_API_KEY) {
-        console.log(`📊 Fetching metadata for ${mintAddresses.length} token(s)...`);
-        const metadataList = await fetchTokenMetadata(mintAddresses, HELIUS_API_KEY);
-        
-        // Create a map for quick lookup
-        metadataMap = new Map(metadataList.map((m) => [m.mint, m]));
-        console.log(`✅ Fetched metadata for ${metadataList.length} token(s)`);
-      }
-      
-      // Combine token data with metadata
-      for (const token of tokenData) {
-        const metadata = metadataMap.get(token.mint);
-        const knownToken = KNOWN_TOKENS[token.mint];
-        
-        // Use metadata from Helius if available, otherwise fallback to known tokens, then defaults
-        let tokenSymbol = metadata?.symbol || knownToken?.symbol || 'UNKNOWN';
-        let tokenName = metadata?.name || knownToken?.name || 'Unknown Token';
-        let tokenLogo = metadata?.logo || knownToken?.logoURI || `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${token.mint}/logo.png`;
+      if (jupiterInfo) {
+        // Found in Jupiter - use their data
+        // jupiterInfo.price is guaranteed to be a number from the interface
+        const usdValue: number = token.balance * jupiterInfo.price;
         
         balances.push({
           address: token.mint,
-          symbol: tokenSymbol,
-          name: tokenName,
-          logoURI: tokenLogo,
+          symbol: jupiterInfo.symbol,
+          name: jupiterInfo.name,
+          logoURI: jupiterInfo.logoURI,
           decimals: token.decimals,
           balance: token.balance,
-          usdValue: token.balance * 0 // TODO: Add USD price lookup
+          usdValue: usdValue,
+          verified: jupiterInfo.verified,
+          tags: jupiterInfo.tags,
         });
+        
+        console.log(`📦 ${jupiterInfo.symbol}: ${token.balance.toFixed(4)} ($${usdValue.toFixed(2)}) ${jupiterInfo.verified ? '✓' : ''}`);
+      } else {
+        // Not found in Jupiter - use fallback with truncated mint
+        const shortMint = `${token.mint.substring(0, 4)}...${token.mint.substring(token.mint.length - 4)}`;
+        
+        balances.push({
+          address: token.mint,
+          symbol: shortMint,
+          name: `Unknown ${shortMint}`,
+          logoURI: '',
+          decimals: token.decimals,
+          balance: token.balance,
+          usdValue: 0,  // Explicitly 0 as a number
+          verified: false,
+          tags: ['unknown'],
+        });
+        
+        console.warn(`⚠️ No data found for: ${token.mint}`);
       }
-    } catch (splError) {
-      console.warn('⚠️ Error fetching SPL tokens:', splError);
-      // Continue with SOL balance only
     }
-    
-    // Sort by symbol alphabetically
-    balances.sort((a, b) => a.symbol.localeCompare(b.symbol));
-    
-    console.log(`💰 Returning ${balances.length} token(s) with non-zero balance`);
+
+    // Sort by USD value (highest first)
+    balances.sort((a, b) => b.usdValue - a.usdValue);
+
+    const totalUsdValue: number = balances.reduce((sum, t) => sum + t.usdValue, 0);
+    console.log(`✅ Returning ${balances.length} balances (total: $${totalUsdValue.toFixed(2)})`);
     
     res.json(balances);
   } catch (error) {
-    console.error('❌ Error fetching balance:', error);
-    res.status(500).json({ error: 'Failed to fetch balance' });
+    console.error('❌ Error fetching wallet balances:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch wallet balances',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
   }
 });
 

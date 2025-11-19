@@ -41,7 +41,12 @@ const HomePage: React.FC = () => {
   }, [balances]);
 
   const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+    return new Intl.NumberFormat('en-US', { 
+      style: 'currency', 
+      currency: 'USD',
+      minimumFractionDigits: 3,
+      maximumFractionDigits: 3
+    }).format(value);
   };
 
   return (
