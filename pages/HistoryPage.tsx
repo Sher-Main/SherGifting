@@ -81,7 +81,16 @@ const HistoryPage: React.FC = () => {
                         {gifts.map(gift => (
                             <tr key={gift.id} className="hover:bg-slate-800 transition-colors">
                                 <td className="px-6 py-4 font-medium text-white whitespace-nowrap">{gift.recipient_email}</td>
-                                <td className="px-6 py-4">{gift.amount} {gift.token_symbol}</td>
+                                <td className="px-6 py-4">
+                                    {gift.usd_value !== null && gift.usd_value !== undefined ? (
+                                        <>
+                                            <span className="text-white font-semibold">${gift.usd_value.toFixed(3)} USD</span>
+                                            <span className="text-slate-400 text-sm ml-2">({gift.amount.toFixed(3)} {gift.token_symbol})</span>
+                                        </>
+                                    ) : (
+                                        <span className="text-white">{gift.amount.toFixed(3)} {gift.token_symbol}</span>
+                                    )}
+                                </td>
                                 <td className="px-6 py-4 text-slate-300">{formatDate(gift.created_at)}</td>
                                 <td className="px-6 py-4">{getStatusChip(gift.status)}</td>
                             </tr>

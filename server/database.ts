@@ -92,6 +92,7 @@ async function initializeSchema() {
       token_symbol VARCHAR(50) NOT NULL,
       token_decimals INTEGER NOT NULL,
       amount DECIMAL(20, 9) NOT NULL,
+      usd_value DECIMAL(20, 3),
       message TEXT,
       status VARCHAR(20) NOT NULL DEFAULT 'SENT',
       tiplink_url TEXT NOT NULL,
@@ -103,6 +104,14 @@ async function initializeSchema() {
       claim_signature VARCHAR(255)
     )
   `);
+  
+  // Add usd_value column if it doesn't exist (for existing databases)
+  await pool.query(`
+    ALTER TABLE gifts 
+    ADD COLUMN IF NOT EXISTS usd_value DECIMAL(20, 3)
+  `).catch(() => {
+    // Column might already exist, ignore error
+  });
 
   // Create index on sender_did for faster history queries
   await pool.query(`
@@ -218,6 +227,7 @@ export async function insertGift(gift: {
   token_symbol: string;
   token_decimals: number;
   amount: number;
+  usd_value?: number | null;
   message: string;
   status: string;
   tiplink_url: string;
@@ -228,9 +238,9 @@ export async function insertGift(gift: {
   await query(
     `INSERT INTO gifts (
       id, sender_did, sender_email, recipient_email, token_mint, token_symbol, 
-      token_decimals, amount, message, status, tiplink_url, tiplink_public_key, 
+      token_decimals, amount, usd_value, message, status, tiplink_url, tiplink_public_key, 
       transaction_signature, created_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
     [
       gift.id,
       gift.sender_did,
@@ -240,6 +250,7 @@ export async function insertGift(gift: {
       gift.token_symbol,
       gift.token_decimals,
       gift.amount,
+      gift.usd_value ?? null,
       gift.message || null,
       gift.status,
       gift.tiplink_url,

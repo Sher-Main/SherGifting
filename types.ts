@@ -59,6 +59,7 @@ export interface Gift {
   token_symbol: string;
   token_decimals: number;
   amount: number;
+  usd_value?: number | null;  // USD value at time of gift creation
   message: string;
   status: GiftStatus;
   tiplink_url: string;

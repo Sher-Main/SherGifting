@@ -20,6 +20,8 @@ interface GiftNotificationParams {
   senderName?: string;       // User's name (optional)
   amount: number;
   tokenSymbol: string;
+  tokenName?: string;        // Token name (e.g., "Wrapped SOL")
+  usdValue?: number | null;  // USD value of the gift
   claimUrl: string;
   message?: string;
 }
@@ -35,7 +37,7 @@ export async function sendGiftNotification(params: GiftNotificationParams): Prom
     return { success: false, error: 'FROM_EMAIL not set in environment variables' };
   }
 
-  const { recipientEmail, senderEmail, senderName, amount, tokenSymbol, claimUrl, message } = params;
+  const { recipientEmail, senderEmail, senderName, amount, tokenSymbol, tokenName, usdValue, claimUrl, message } = params;
 
   // Validate email addresses
   if (!senderEmail || !recipientEmail) {
@@ -82,7 +84,12 @@ export async function sendGiftNotification(params: GiftNotificationParams): Prom
               <!-- Gift Amount Box -->
               <div style="background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border: 2px solid #0ea5e9; border-radius: 12px; padding: 24px; margin: 30px 0; text-align: center;">
                 <p style="margin: 0 0 10px; color: #64748b; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">Gift Amount</p>
-                <p style="margin: 0; color: #0ea5e9; font-size: 36px; font-weight: bold;">${amount} ${tokenSymbol}</p>
+                ${usdValue !== null && usdValue !== undefined ? `
+                  <p style="margin: 0; color: #0ea5e9; font-size: 42px; font-weight: bold;">$${usdValue.toFixed(3)} USD</p>
+                  <p style="margin: 8px 0 0; color: #64748b; font-size: 18px; font-weight: 500;">${amount} ${tokenSymbol}${tokenName ? ` (${tokenName})` : ''}</p>
+                ` : `
+                  <p style="margin: 0; color: #0ea5e9; font-size: 36px; font-weight: bold;">${amount} ${tokenSymbol}${tokenName ? ` (${tokenName})` : ''}</p>
+                `}
               </div>
               
               <!-- ✅ Show sender's email in smaller text -->
@@ -141,7 +148,7 @@ export async function sendGiftNotification(params: GiftNotificationParams): Prom
     const textContent = `
 You Received a Crypto Gift!
 
-${senderDisplay} has sent you ${amount} ${tokenSymbol}!
+${senderDisplay} has sent you ${usdValue !== null && usdValue !== undefined ? `$${usdValue.toFixed(3)} USD (${amount} ${tokenSymbol})` : `${amount} ${tokenSymbol}`}!
 
 From: ${senderEmail}
 
@@ -165,7 +172,7 @@ Powered by Crypto Gifting • Solana Blockchain
       from: FROM_EMAIL,  // ✅ Always your domain
       to: recipientEmail,
       replyTo: senderEmail, // ✅ Always set Reply-To to sender's email so recipients can reply
-      subject: `🎁 ${senderDisplay} sent you ${amount} ${tokenSymbol}!`,  // ✅ Sender's name in subject
+      subject: `🎁 ${senderDisplay} sent you ${usdValue !== null && usdValue !== undefined ? `$${usdValue.toFixed(3)} USD` : `${amount} ${tokenSymbol}`}!`,  // ✅ Sender's name in subject
       html: htmlContent,
       text: textContent,
     });

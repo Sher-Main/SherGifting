@@ -63,6 +63,12 @@ const GiftPage: React.FC = () => {
         fee: number;
         total: number;
         token: string;
+        tokenName: string;
+        usdValue: number | null;
+        usdFee: number | null;
+        usdTotal: number | null;
+        remainingBalance: number;
+        remainingBalanceUsd: number | null;
         message: string;
     } | null>(null);
     
@@ -72,6 +78,7 @@ const GiftPage: React.FC = () => {
         claim_url: string;
         amount: string;
         token: string;
+        usdValue: number | null;
         recipient: string;
         signature: string;
         qrCode: string;
@@ -340,6 +347,15 @@ const GiftPage: React.FC = () => {
             }
         }
 
+        // Calculate USD values if price is available
+        const usdValue = tokenPrice ? numericAmount * tokenPrice : null;
+        const usdFee = tokenPrice ? feeAmount * tokenPrice : null;
+        const usdTotal = tokenPrice ? totalAmount * tokenPrice : null;
+        
+        // Calculate remaining balance after transaction
+        const remainingBalance = userBalance - totalAmount;
+        const remainingBalanceUsd = tokenPrice ? remainingBalance * tokenPrice : null;
+        
         // Show confirmation modal first
         setConfirmDetails({
             recipientLabel,
@@ -348,6 +364,12 @@ const GiftPage: React.FC = () => {
             fee: feeAmount,
             total: totalAmount,
             token: selectedToken.symbol,
+            tokenName: selectedToken.name,
+            usdValue,
+            usdFee,
+            usdTotal,
+            remainingBalance,
+            remainingBalanceUsd,
             message: message || '',
         });
         setShowConfirmModal(true);
@@ -420,7 +442,11 @@ const GiftPage: React.FC = () => {
             
             // Add memo instruction to show total amount (for Privy modal display)
             const totalAmount = numericAmount + feeAmount;
-            const memoText = `Total Transfer: ${totalAmount.toFixed(6)} ${currentToken.symbol} (Gift: ${numericAmount.toFixed(6)} + Fee: ${feeAmount.toFixed(6)})`;
+            // Calculate USD value for memo if price is available
+            const memoUsdValue = tokenPrice ? numericAmount * tokenPrice : null;
+            const memoText = memoUsdValue !== null
+                ? `Gift: $${memoUsdValue.toFixed(3)} USD (${numericAmount.toFixed(6)} ${currentToken.symbol}) to ${recipientLabel}`
+                : `Gift: ${numericAmount.toFixed(6)} ${currentToken.symbol} to ${recipientLabel}`;
             const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
             transaction.add({
                 keys: [{ pubkey: new PublicKey(embeddedWallet.address), isSigner: true, isWritable: false }],
@@ -756,11 +782,17 @@ const GiftPage: React.FC = () => {
                 }
             });
 
+            // Use USD value from confirmDetails if available, otherwise calculate from tokenPrice
+            const giftUsdValue = confirmDetails?.usdValue !== null && confirmDetails?.usdValue !== undefined
+                ? confirmDetails.usdValue
+                : (tokenPrice ? numericAmount * tokenPrice : null);
+            
             // Set gift details and show success modal
             setGiftDetails({
                 claim_url: fullClaimUrl,
                 amount: numericAmount.toString(),
                 token: selectedToken.symbol,
+                usdValue: giftUsdValue,
                 recipient: recipientLabel,
                 signature: signatureString,
                 qrCode: qrCodeDataUrl
@@ -817,22 +849,56 @@ const GiftPage: React.FC = () => {
                         <h2 className="text-2xl font-bold text-white mb-4 text-center">Confirm Transaction</h2>
                         
                         <div className="space-y-4 mb-6">
-                            <div className="bg-slate-900/50 rounded-lg p-4">
-                                <div className="flex justify-between text-sm mb-2">
-                                    <span className="text-slate-400">Recipient:</span>
-                                    <span className="text-white">{confirmDetails.recipientLabel}</span>
+                            <div className="bg-slate-900/50 rounded-lg p-4 space-y-3">
+                                {/* What I am sending - Token */}
+                                <div className="pb-3 border-b border-slate-700">
+                                    <p className="text-slate-400 text-xs mb-1">What I am sending</p>
+                                    <p className="text-white font-medium">{confirmDetails.token} - {confirmDetails.tokenName}</p>
                                 </div>
-                                <div className="flex justify-between text-sm mb-2">
-                                    <span className="text-slate-400">Gift Amount:</span>
-                                    <span className="text-white">{confirmDetails.amount.toFixed(6)} {confirmDetails.token}</span>
+                                
+                                {/* Amount being sent - USD value */}
+                                <div className="pb-3 border-b border-slate-700">
+                                    <p className="text-slate-400 text-xs mb-1">Amount being sent</p>
+                                    {confirmDetails.usdValue !== null ? (
+                                        <p className="text-white font-bold text-xl">${confirmDetails.usdValue.toFixed(3)} USD</p>
+                                    ) : (
+                                        <p className="text-white font-bold text-xl">{confirmDetails.amount.toFixed(6)} {confirmDetails.token}</p>
+                                    )}
+                                    {confirmDetails.usdValue !== null && (
+                                        <p className="text-slate-400 text-xs mt-1">{confirmDetails.amount.toFixed(6)} {confirmDetails.token}</p>
+                                    )}
                                 </div>
-                                <div className="flex justify-between text-sm mb-2">
-                                    <span className="text-slate-400">Fee (0.1%):</span>
-                                    <span className="text-slate-300">{confirmDetails.fee.toFixed(6)} {confirmDetails.token}</span>
+                                
+                                {/* Transaction fee - USD */}
+                                <div className="pb-3 border-b border-slate-700">
+                                    <p className="text-slate-400 text-xs mb-1">Transaction fee</p>
+                                    {confirmDetails.usdFee !== null ? (
+                                        <p className="text-slate-300 font-medium">${confirmDetails.usdFee.toFixed(3)} USD</p>
+                                    ) : (
+                                        <p className="text-slate-300 font-medium">{confirmDetails.fee.toFixed(6)} {confirmDetails.token}</p>
+                                    )}
+                                    {confirmDetails.usdFee !== null && (
+                                        <p className="text-slate-500 text-xs mt-1">{confirmDetails.fee.toFixed(6)} {confirmDetails.token}</p>
+                                    )}
                                 </div>
-                                <div className="flex justify-between text-sm pt-2 border-t border-slate-700">
-                                    <span className="text-slate-300 font-medium">Total Transfer:</span>
-                                    <span className="text-white font-bold text-lg">{confirmDetails.total.toFixed(6)} {confirmDetails.token}</span>
+                                
+                                {/* To whom */}
+                                <div className="pb-3 border-b border-slate-700">
+                                    <p className="text-slate-400 text-xs mb-1">To whom</p>
+                                    <p className="text-white font-medium">{confirmDetails.recipientLabel}</p>
+                                </div>
+                                
+                                {/* Wallet balance - What's left */}
+                                <div>
+                                    <p className="text-slate-400 text-xs mb-1">What's left in your wallet</p>
+                                    {confirmDetails.remainingBalanceUsd !== null ? (
+                                        <>
+                                            <p className="text-white font-medium">${confirmDetails.remainingBalanceUsd.toFixed(3)} USD</p>
+                                            <p className="text-slate-400 text-xs mt-1">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
+                                        </>
+                                    ) : (
+                                        <p className="text-white font-medium">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
+                                    )}
                                 </div>
                             </div>
                             
@@ -878,7 +944,16 @@ const GiftPage: React.FC = () => {
                             </div>
                             <h2 className="text-xl font-bold text-white mb-1">Gift Sent Successfully! 🎁</h2>
                             <p className="text-slate-400 text-sm">
-                                {giftDetails.amount} {giftDetails.token} sent to {giftDetails.recipient}
+                                {giftDetails.usdValue !== null ? (
+                                    <>
+                                        <span className="text-white font-semibold">${giftDetails.usdValue.toFixed(3)} USD</span>
+                                        {' '}({parseFloat(giftDetails.amount).toFixed(3)} {giftDetails.token}) sent to {giftDetails.recipient}
+                                    </>
+                                ) : (
+                                    <>
+                                        {parseFloat(giftDetails.amount).toFixed(3)} {giftDetails.token} sent to {giftDetails.recipient}
+                                    </>
+                                )}
                             </p>
                         </div>
 
@@ -934,9 +1009,20 @@ const GiftPage: React.FC = () => {
                 {/* User Balance Info */}
                 <div className="bg-gradient-to-r from-sky-500/10 to-purple-500/10 border border-sky-500/30 rounded-lg p-4 mb-6">
                     <p className="text-slate-400 text-sm">Your Balance</p>
-                    <p className="text-2xl font-bold text-white">
-                        {userBalance.toFixed(4)} {selectedToken?.symbol || 'SOL'}
-                    </p>
+                    {tokenPrice && tokenPrice > 0 ? (
+                        <>
+                            <p className="text-2xl font-bold text-white">
+                                ${(userBalance * tokenPrice).toFixed(3)} USD
+                            </p>
+                            <p className="text-sm text-slate-400 mt-1">
+                                {userBalance.toFixed(4)} {selectedToken?.symbol || 'SOL'}
+                            </p>
+                        </>
+                    ) : (
+                        <p className="text-2xl font-bold text-white">
+                            {userBalance.toFixed(4)} {selectedToken?.symbol || 'SOL'}
+                        </p>
+                    )}
                     <p className="text-xs text-slate-500 mt-1">Available for gifting</p>
                     {userBalance < 0.01 && (
                         <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">

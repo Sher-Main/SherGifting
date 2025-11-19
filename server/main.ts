@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { TipLink } from '@tiplink/api';
 import { Connection, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, getAccount } from '@solana/spl-token';
 import 'dotenv/config';
 import { authenticateToken, AuthRequest } from './authMiddleware';
 import { sendGiftNotification } from './emailService';
@@ -35,6 +35,7 @@ interface Gift {
   token_symbol: string;
   token_decimals: number;
   amount: number;
+  usd_value?: number | null;  // USD value at time of gift creation
   message: string;
   status: GiftStatus;
   tiplink_url: string;
@@ -727,7 +728,58 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       return res.status(400).json({ error: 'Transaction does not involve the TipLink address' });
     }
 
+    // For SPL tokens, verify the TipLink ATA received tokens
+    const isNative = token_mint === 'So11111111111111111111111111111111111111112';
+    if (!isNative && tokenInfo) {
+      console.log('🔍 Verifying SPL token transfer to TipLink...');
+      const { getAssociatedTokenAddress, getAccount } = await import('@solana/spl-token');
+      const mintPubkey = new PublicKey(token_mint);
+      const tiplinkATA = await getAssociatedTokenAddress(mintPubkey, tiplinkPubkey);
+      
+      try {
+        // Wait a moment for the transaction to fully settle
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        const tiplinkTokenAccount = await getAccount(connection, tiplinkATA);
+        const tokenBalance = Number(tiplinkTokenAccount.amount) / (10 ** tokenInfo.decimals);
+        console.log(`💰 TipLink ${tokenInfo.symbol} balance after funding: ${tokenBalance} ${tokenInfo.symbol}`);
+        
+        if (tokenBalance < amount * 0.99) { // Allow 1% tolerance for rounding
+          console.warn(`⚠️ TipLink token balance (${tokenBalance}) is less than expected (${amount}). Transaction may have partially failed.`);
+        } else {
+          console.log(`✅ TipLink has sufficient ${tokenInfo.symbol} balance`);
+        }
+      } catch (error: any) {
+        if (error.name === 'TokenAccountNotFoundError' || error.message?.includes('could not find account')) {
+          console.error(`❌ TipLink ${tokenInfo.symbol} token account not found after funding transaction!`);
+          return res.status(400).json({ 
+            error: `TipLink ${tokenInfo.symbol} token account was not created or funded. The funding transaction may have failed.` 
+          });
+        }
+        console.error('⚠️ Error verifying TipLink token balance:', error);
+        // Don't fail the gift creation, but log the warning
+      }
+    }
+
     console.log('✅ Funding transaction verified!');
+
+    // Fetch token price and calculate USD value for storage (before creating gift record)
+    let usdValue: number | null = null;
+    try {
+      console.log('💰 Fetching token price for gift record...');
+      const jupiterTokenMap = await fetchJupiterTokenInfo([token_mint]);
+      const jupiterInfo = jupiterTokenMap.get(token_mint);
+      
+      if (jupiterInfo && jupiterInfo.price && jupiterInfo.price > 0) {
+        usdValue = amount * jupiterInfo.price;
+        console.log(`✅ Gift USD value calculated: $${usdValue.toFixed(3)}`);
+      } else {
+        console.log('⚠️ Token price not available, storing gift without USD value');
+      }
+    } catch (priceError) {
+      console.error('⚠️ Error fetching token price for gift record:', priceError);
+      // Continue without USD value
+    }
 
     // Create gift record
     const giftId = `gift_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -740,6 +792,7 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       token_symbol: tokenInfo.symbol,
       token_decimals: tokenInfo.decimals,
       amount,
+      usd_value: usdValue,
       message: message || '',
       status: GiftStatus.SENT,
       tiplink_url,
@@ -760,6 +813,22 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
     
     console.log('✅ Gift created successfully:', newGift.id);
     
+    // Fetch token name for email display (USD value already calculated and stored in gift)
+    let tokenName: string | undefined = undefined;
+    
+    try {
+      console.log('💰 Fetching token name for email...');
+      const jupiterTokenMap = await fetchJupiterTokenInfo([token_mint]);
+      const jupiterInfo = jupiterTokenMap.get(token_mint);
+      
+      if (jupiterInfo && jupiterInfo.name) {
+        tokenName = jupiterInfo.name;
+      }
+    } catch (priceError) {
+      console.error('⚠️ Error fetching token name for email:', priceError);
+      // Continue without token name
+    }
+    
     // Send email notification to recipient
     const claimUrl = `/claim/${giftId}`;
     const fullClaimUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}${claimUrl}`;
@@ -770,6 +839,8 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       senderEmail: sender.email,
       amount,
       tokenSymbol: tokenInfo.symbol,
+      tokenName: tokenName,
+      usdValue: usdValue, // Use the USD value we calculated and stored in gift
       claimUrl: fullClaimUrl,
       message: message || undefined,
     });
@@ -889,9 +960,9 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
     const tipLink = await TipLink.fromUrl(new URL(gift.tiplink_url));
     console.log('✅ TipLink loaded:', tipLink.keypair.publicKey.toBase58());
     
-    // Check TipLink balance
+    // Check TipLink balance (will check SOL or SPL token balance based on token type)
     const tiplinkBalanceLamports = await connection.getBalance(tipLink.keypair.publicKey);
-    console.log('💰 TipLink balance:', tiplinkBalanceLamports / LAMPORTS_PER_SOL, 'SOL');
+    console.log('💰 TipLink SOL balance:', tiplinkBalanceLamports / LAMPORTS_PER_SOL, 'SOL');
 
     const recipientPubkey = new PublicKey(recipient_wallet);
     console.log('👤 Recipient wallet:', recipientPubkey.toBase58());
@@ -990,17 +1061,39 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
       );
     } else {
       // SPL Token transfer
-      console.log(`💸 Transferring ${gift.amount} ${gift.token_symbol} to recipient...`);
+      console.log(`💸 Preparing SPL token transfer: ${gift.amount} ${gift.token_symbol} to recipient...`);
       
       const mintPubkey = new PublicKey(gift.token_mint);
       const tiplinkATA = await getAssociatedTokenAddress(mintPubkey, tipLink.keypair.publicKey);
       const recipientATA = await getAssociatedTokenAddress(mintPubkey, recipientPubkey);
+
+      // ✅ CRITICAL: Check if TipLink has the SPL tokens before attempting transfer
+      console.log(`🔍 Checking TipLink token account: ${tiplinkATA.toBase58()}`);
+      let tiplinkTokenAccount;
+      try {
+        tiplinkTokenAccount = await getAccount(connection, tiplinkATA);
+        const tokenBalance = Number(tiplinkTokenAccount.amount) / (10 ** gift.token_decimals);
+        console.log(`💰 TipLink ${gift.token_symbol} balance: ${tokenBalance} ${gift.token_symbol}`);
+        
+        // Check if TipLink has enough tokens
+        if (tokenBalance < gift.amount) {
+          throw new Error(`Insufficient ${gift.token_symbol} balance in TipLink. Required: ${gift.amount}, Available: ${tokenBalance}`);
+        }
+        
+        console.log(`✅ TipLink has sufficient ${gift.token_symbol} balance`);
+      } catch (error: any) {
+        if (error.name === 'TokenAccountNotFoundError' || error.message?.includes('could not find account')) {
+          throw new Error(`TipLink does not have a ${gift.token_symbol} token account. The gift may not have been funded correctly.`);
+        }
+        throw error;
+      }
 
       const instructions = [];
       
       // Create recipient's associated token account if it doesn't exist
       const recipientAccountInfo = await connection.getAccountInfo(recipientATA);
       if (!recipientAccountInfo) {
+        console.log(`📝 Creating recipient token account: ${recipientATA.toBase58()}`);
         instructions.push(
           createAssociatedTokenAccountInstruction(
             tipLink.keypair.publicKey,
@@ -1009,7 +1102,19 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
             mintPubkey
           )
         );
+      } else {
+        console.log(`✅ Recipient token account exists: ${recipientATA.toBase58()}`);
       }
+
+      // Calculate transfer amount in token's smallest unit
+      const transferAmount = BigInt(Math.floor(gift.amount * (10 ** gift.token_decimals)));
+      console.log(`📊 Transfer details:`, {
+        tokenSymbol: gift.token_symbol,
+        tokenAmount: gift.amount,
+        transferAmountRaw: transferAmount.toString(),
+        tiplinkBalance: Number(tiplinkTokenAccount.amount).toString(),
+        recipientATA: recipientATA.toBase58()
+      });
 
       // Transfer SPL tokens
       instructions.push(
@@ -1017,7 +1122,7 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
           tiplinkATA,
           recipientATA,
           tipLink.keypair.publicKey,
-          gift.amount * (10 ** gift.token_decimals)
+          transferAmount
         )
       );
 
