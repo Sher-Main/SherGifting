@@ -19,13 +19,17 @@ import {
   DbUser,
 } from './database';
 import userRoutes from './routes/user';
+import { startGiftExpiryJob } from './jobs/giftExpiryJob';
 
 
 // --- Types (duplicated from frontend for simplicity) ---
 enum GiftStatus {
   SENT = 'SENT',
   CLAIMED = 'CLAIMED',
-  EXPIRED = 'EXPIRED'
+  EXPIRED = 'EXPIRED',
+  REFUNDED = 'REFUNDED',
+  EXPIRED_EMPTY = 'EXPIRED_EMPTY',
+  EXPIRED_LOW_BALANCE = 'EXPIRED_LOW_BALANCE'
 }
 
 interface Gift {
@@ -47,6 +51,9 @@ interface Gift {
   claimed_at?: string | null;
   claimed_by?: string | null;
   claim_signature?: string | null;
+  expires_at?: string;  // 24 hours from creation
+  refunded_at?: string | null;  // when refund was processed
+  refund_transaction_signature?: string | null;  // Solana transaction signature
 }
 
 const app = express();
@@ -825,6 +832,7 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
 
     // Create gift record
     const giftId = `gift_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24 hours from now
     const newGift: Gift = {
       id: giftId,
       sender_did,
@@ -840,7 +848,8 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       tiplink_url, // Keep for backward compatibility
       tiplink_public_key,
       transaction_signature: funding_signature,
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      expires_at: expiresAt
     };
 
     // Save to database (persistent storage) with security fields
@@ -849,6 +858,7 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
         ...newGift,
         claim_token: claimToken,
         tiplink_url_encrypted: encryptedTipLink,
+        expires_at: expiresAt,
       });
       console.log('✅ Gift saved to database with security fields:', newGift.id);
     } catch (dbError: any) {
@@ -943,6 +953,9 @@ app.get('/api/gifts/history', authenticateToken, async (req: AuthRequest, res) =
       claimed_at: gift.claimed_at || null,
       claimed_by: gift.claimed_by || null,
       claim_signature: gift.claim_signature || null,
+      expires_at: gift.expires_at || null,
+      refunded_at: gift.refunded_at || null,
+      refund_transaction_signature: gift.refund_transaction_signature || null,
     }));
     
     res.json(formattedGifts);
@@ -1548,5 +1561,9 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Initialize background jobs
+console.log('🚀 Initializing background jobs...');
+startGiftExpiryJob();
 
 app.listen(PORT, () => console.log(`Server listening on http://localhost:${PORT}`));

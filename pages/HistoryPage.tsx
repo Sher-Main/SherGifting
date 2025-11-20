@@ -28,16 +28,28 @@ const HistoryPage: React.FC = () => {
     fetchHistory();
   }, []);
 
-  const getStatusChip = (status: GiftStatus) => {
-    switch (status) {
+  const getStatusChip = (gift: Gift) => {
+    switch (gift.status) {
       case GiftStatus.SENT:
+        // Check if expired but not yet refunded
+        if (gift.expires_at) {
+          const expiresAt = new Date(gift.expires_at);
+          const isExpired = expiresAt < new Date();
+          if (isExpired) {
+            return <span className="px-2 py-1 text-xs font-medium text-orange-300 bg-orange-900/50 rounded-full">Expired</span>;
+          }
+        }
         return <span className="px-2 py-1 text-xs font-medium text-yellow-300 bg-yellow-900/50 rounded-full">Sent</span>;
       case GiftStatus.CLAIMED:
         return <span className="px-2 py-1 text-xs font-medium text-green-300 bg-green-900/50 rounded-full">Claimed</span>;
+      case GiftStatus.REFUNDED:
+        return <span className="px-2 py-1 text-xs font-medium text-blue-300 bg-blue-900/50 rounded-full">Refunded</span>;
       case GiftStatus.EXPIRED:
+      case GiftStatus.EXPIRED_EMPTY:
+      case GiftStatus.EXPIRED_LOW_BALANCE:
         return <span className="px-2 py-1 text-xs font-medium text-red-300 bg-red-900/50 rounded-full">Expired</span>;
       default:
-        return null;
+        return <span className="px-2 py-1 text-xs font-medium text-slate-300 bg-slate-700/50 rounded-full">{gift.status}</span>;
     }
   };
   
@@ -75,6 +87,7 @@ const HistoryPage: React.FC = () => {
                             <th scope="col" className="px-6 py-3">Amount</th>
                             <th scope="col" className="px-6 py-3">Date</th>
                             <th scope="col" className="px-6 py-3">Status</th>
+                            <th scope="col" className="px-6 py-3">Transaction</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-700">
@@ -91,8 +104,35 @@ const HistoryPage: React.FC = () => {
                                         <span className="text-white">{gift.amount.toFixed(3)} {gift.token_symbol}</span>
                                     )}
                                 </td>
-                                <td className="px-6 py-4 text-slate-300">{formatDate(gift.created_at)}</td>
-                                <td className="px-6 py-4">{getStatusChip(gift.status)}</td>
+                                <td className="px-6 py-4 text-slate-300">
+                                    <div>{formatDate(gift.created_at)}</div>
+                                    {gift.refunded_at && (
+                                        <div className="text-xs text-blue-400 mt-1">Refunded: {formatDate(gift.refunded_at)}</div>
+                                    )}
+                                </td>
+                                <td className="px-6 py-4">{getStatusChip(gift)}</td>
+                                <td className="px-6 py-4">
+                                    {gift.status === GiftStatus.CLAIMED && gift.claim_signature && (
+                                        <a 
+                                            href={`https://solscan.io/tx/${gift.claim_signature}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-sky-400 hover:text-sky-300 text-xs"
+                                        >
+                                            View claim ↗
+                                        </a>
+                                    )}
+                                    {gift.status === GiftStatus.REFUNDED && gift.refund_transaction_signature && (
+                                        <a 
+                                            href={`https://solscan.io/tx/${gift.refund_transaction_signature}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-blue-400 hover:text-blue-300 text-xs"
+                                        >
+                                            View refund ↗
+                                        </a>
+                                    )}
+                                </td>
                             </tr>
                         ))}
                     </tbody>

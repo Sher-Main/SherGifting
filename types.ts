@@ -48,6 +48,9 @@ export enum GiftStatus {
   SENT = 'SENT',
   CLAIMED = 'CLAIMED',
   EXPIRED = 'EXPIRED',
+  REFUNDED = 'REFUNDED',
+  EXPIRED_EMPTY = 'EXPIRED_EMPTY',
+  EXPIRED_LOW_BALANCE = 'EXPIRED_LOW_BALANCE',
 }
 
 export interface Gift {
@@ -69,6 +72,12 @@ export interface Gift {
   claimed_at?: string | null;
   claimed_by?: string | null;
   claim_signature?: string | null;
+  expires_at?: string;  // 24 hours from creation
+  refunded_at?: string | null;  // when refund was processed
+  refund_transaction_signature?: string | null;  // Solana transaction signature
+  auto_refund_attempted?: boolean;  // prevent duplicate processing
+  auto_refund_attempts?: number;  // track retry attempts
+  last_refund_attempt?: string | null;  // last attempt timestamp
 }
 
 export interface GiftInfo {

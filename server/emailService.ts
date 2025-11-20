@@ -214,3 +214,269 @@ Powered by Crypto Gifting • Solana Blockchain
     };
   }
 }
+
+interface RefundNotificationParams {
+  senderEmail: string;
+  senderName?: string;
+  recipientEmail: string;
+  amount: number;
+  tokenSymbol: string;
+  transactionSignature: string;
+  giftId: string;
+  message?: string;
+}
+
+export async function sendRefundNotificationEmail(params: RefundNotificationParams): Promise<{ success: boolean; error?: string; emailId?: string }> {
+  if (!resend) {
+    console.log('📧 Email not sent: Resend API key not configured');
+    return { success: false, error: 'Email service not configured' };
+  }
+
+  if (!FROM_EMAIL) {
+    console.log('📧 Email not sent: FROM_EMAIL not configured');
+    return { success: false, error: 'FROM_EMAIL not set in environment variables' };
+  }
+
+  const { senderEmail, senderName, recipientEmail, amount, tokenSymbol, transactionSignature, giftId, message } = params;
+
+  // Validate email addresses
+  if (!senderEmail) {
+    return { success: false, error: 'Missing sender email' };
+  }
+
+  try {
+    const senderDisplay = senderName || senderEmail.split('@')[0];
+    const recipientDisplay = recipientEmail;
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+          }
+          .container {
+            background: #ffffff;
+            border-radius: 8px;
+            padding: 32px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          }
+          .header {
+            text-align: center;
+            margin-bottom: 32px;
+          }
+          .logo {
+            font-size: 32px;
+            margin-bottom: 8px;
+          }
+          h1 {
+            color: #1a1a1a;
+            font-size: 24px;
+            margin: 0 0 16px 0;
+          }
+          .amount-box {
+            background: #f0f9ff;
+            border: 2px solid #0ea5e9;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            margin: 24px 0;
+          }
+          .amount {
+            font-size: 36px;
+            font-weight: bold;
+            color: #0ea5e9;
+            margin: 0;
+          }
+          .token {
+            font-size: 18px;
+            color: #64748b;
+            margin-top: 4px;
+          }
+          .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid #e5e5e5;
+          }
+          .info-row:last-child {
+            border-bottom: none;
+          }
+          .label {
+            color: #666;
+            font-weight: 500;
+          }
+          .value {
+            color: #1a1a1a;
+            font-weight: 600;
+          }
+          .message-box {
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 16px;
+            margin: 24px 0;
+            border-radius: 4px;
+          }
+          .message-box p {
+            margin: 0;
+            color: #78350f;
+          }
+          .button {
+            display: inline-block;
+            background: #3b82f6;
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            margin: 24px 0;
+          }
+          .button:hover {
+            background: #2563eb;
+          }
+          .footer {
+            text-align: center;
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 1px solid #e5e5e5;
+            color: #666;
+            font-size: 14px;
+          }
+          .tx-link {
+            word-break: break-all;
+            color: #3b82f6;
+            font-size: 12px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <div class="logo">🎁</div>
+            <h1>Gift Automatically Refunded</h1>
+          </div>
+          
+          <p>Hi${senderName ? ` ${senderName}` : ''},</p>
+          
+          <p>Your gift to <strong>${recipientDisplay}</strong> was not claimed within 24 hours, so we've automatically refunded it to your wallet.</p>
+          
+          <div class="amount-box">
+            <div class="amount">${amount.toFixed(6)}</div>
+            <div class="token">${tokenSymbol}</div>
+          </div>
+          
+          <div style="margin: 24px 0;">
+            <div class="info-row">
+              <span class="label">Recipient</span>
+              <span class="value">${recipientDisplay}</span>
+            </div>
+            <div class="info-row">
+              <span class="label">Amount</span>
+              <span class="value">${amount.toFixed(6)} ${tokenSymbol}</span>
+            </div>
+            <div class="info-row">
+              <span class="label">Gift ID</span>
+              <span class="value">${giftId}</span>
+            </div>
+          </div>
+          
+          ${message ? `
+            <div class="message-box">
+              <strong>Your original message:</strong>
+              <p>"${message}"</p>
+            </div>
+          ` : ''}
+          
+          <p style="margin-top: 24px;">The funds have been returned to your wallet and are ready to use. You can create a new gift or keep them in your wallet.</p>
+          
+          <center>
+            <a href="${process.env.FRONTEND_URL || 'https://sher.one'}/history" class="button">View Gift History</a>
+          </center>
+          
+          <p style="font-size: 14px; color: #666; margin-top: 24px;">
+            Transaction signature:<br>
+            <a href="https://solscan.io/tx/${transactionSignature}" class="tx-link" target="_blank">
+              ${transactionSignature}
+            </a>
+          </p>
+          
+          <div class="footer">
+            <p>Thank you for using Sher! 💜</p>
+            <p style="font-size: 12px; margin-top: 8px;">
+              <a href="${process.env.FRONTEND_URL || 'https://sher.one'}">sher.one</a>
+            </p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const plainTextContent = `
+Gift Automatically Refunded
+
+Hi${senderName ? ` ${senderName}` : ''},
+
+Your gift to ${recipientDisplay} was not claimed within 24 hours, so we've automatically refunded it to your wallet.
+
+Amount: ${amount.toFixed(6)} ${tokenSymbol}
+Recipient: ${recipientDisplay}
+Gift ID: ${giftId}
+${message ? `\nYour original message: "${message}"\n` : ''}
+
+The funds have been returned to your wallet and are ready to use.
+
+Transaction: https://solscan.io/tx/${transactionSignature}
+
+View Gift History: ${process.env.FRONTEND_URL || 'https://sher.one'}/history
+
+Thank you for using Sher!
+    `.trim();
+
+    const { data, error } = await resend.emails.send({
+      from: FROM_EMAIL,
+      to: senderEmail,
+      subject: 'Your gift has been automatically refunded',
+      html: htmlContent,
+      text: plainTextContent,
+    });
+
+    if (error) {
+      console.error('❌ Resend API error:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to send refund notification email' 
+      };
+    }
+
+    if (!data) {
+      console.error('❌ No data returned from Resend');
+      return { 
+        success: false, 
+        error: 'No response data from email service' 
+      };
+    }
+
+    console.log(`✅ Refund notification sent to ${senderEmail}, email ID: ${data.id}`);
+
+    return { 
+      success: true, 
+      emailId: data.id 
+    };
+
+  } catch (error: any) {
+    console.error('❌ Exception in sendRefundNotificationEmail:', error);
+    console.error('Error message:', error?.message);
+    console.error('Error stack:', error?.stack);
+    
+    return { 
+      success: false, 
+      error: error?.message || 'Failed to send refund notification email' 
+    };
+  }
+}

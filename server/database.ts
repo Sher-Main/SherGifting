@@ -127,6 +127,19 @@ async function initializeSchema() {
     // Columns might already exist, ignore error
   });
 
+  // Add refund tracking columns
+  await pool.query(`
+    ALTER TABLE gifts 
+    ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS refund_transaction_signature VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS auto_refund_attempted BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS auto_refund_attempts INTEGER DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS last_refund_attempt TIMESTAMP
+  `).catch(() => {
+    // Columns might already exist, ignore error
+  });
+
   // Create index on claim_token for fast lookups
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_gifts_claim_token ON gifts(claim_token)
@@ -148,6 +161,23 @@ async function initializeSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_gifts_status ON gifts(status)
   `);
+
+  // Create indexes for refund system
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_gifts_expiry_check 
+    ON gifts(expires_at, status) 
+    WHERE status = 'SENT'
+  `).catch(() => {
+    // Index might already exist, ignore error
+  });
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_gifts_refunded 
+    ON gifts(refunded_at) 
+    WHERE status = 'REFUNDED'
+  `).catch(() => {
+    // Index might already exist, ignore error
+  });
 }
 
 export async function query<T extends QueryResultRow = any>(
@@ -257,13 +287,14 @@ export async function insertGift(gift: {
   created_at: string;
   claim_token?: string | null;
   tiplink_url_encrypted?: string | null;
+  expires_at?: string;  // 24 hours from creation
 }): Promise<void> {
   await query(
     `INSERT INTO gifts (
       id, sender_did, sender_email, recipient_email, token_mint, token_symbol, 
       token_decimals, amount, usd_value, message, status, tiplink_url, tiplink_public_key, 
-      transaction_signature, created_at, claim_token, tiplink_url_encrypted
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+      transaction_signature, created_at, claim_token, tiplink_url_encrypted, expires_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
     [
       gift.id,
       gift.sender_did,
@@ -282,6 +313,7 @@ export async function insertGift(gift: {
       gift.created_at,
       gift.claim_token ?? null,
       gift.tiplink_url_encrypted ?? null,
+      gift.expires_at ?? null,
     ]
   );
 }
@@ -292,7 +324,7 @@ export async function getGiftsBySender(sender_did: string): Promise<any[]> {
       id, sender_did, sender_email, recipient_email, token_mint, token_symbol, 
       token_decimals, amount, usd_value, message, status, tiplink_url, 
       tiplink_public_key, transaction_signature, created_at, claimed_at, 
-      claimed_by, claim_signature
+      claimed_by, claim_signature, expires_at, refunded_at, refund_transaction_signature
      FROM gifts 
      WHERE sender_did = $1 
      ORDER BY created_at DESC`,
