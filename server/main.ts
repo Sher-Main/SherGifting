@@ -1557,6 +1557,72 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
   }
 });
 
+// ============================================
+// WITHDRAWAL ENDPOINTS
+// ============================================
+
+// Record withdrawal
+app.post('/api/withdrawals/create', authenticateToken, async (req: AuthRequest, res) => {
+  const {
+    token_mint,
+    amount,
+    fee,
+    recipient_address,
+    transaction_signature,
+    token_symbol,
+    token_decimals,
+  } = req.body;
+
+  const sender_did = req.userId || req.user?.id;
+
+  if (!sender_did || !token_mint || !amount || !recipient_address || !transaction_signature) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    // Validate Solana address
+    try {
+      new PublicKey(recipient_address);
+    } catch {
+      return res.status(400).json({ error: 'Invalid recipient address' });
+    }
+
+    // Record withdrawal in database
+    const withdrawalId = `withdrawal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    if (pool) {
+      await pool.query(
+        `INSERT INTO withdrawals (
+          id, sender_did, token_mint, token_symbol, token_decimals,
+          amount, fee, recipient_address, transaction_signature, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)`,
+        [
+          withdrawalId,
+          sender_did,
+          token_mint,
+          token_symbol || null,
+          token_decimals || null,
+          amount,
+          fee,
+          recipient_address,
+          transaction_signature,
+        ]
+      );
+      console.log('✅ Withdrawal recorded:', withdrawalId);
+    } else {
+      console.warn('⚠️ Database not available, withdrawal not recorded');
+    }
+
+    res.json({
+      success: true,
+      withdrawal_id: withdrawalId,
+    });
+  } catch (error: any) {
+    console.error('❌ Error recording withdrawal:', error);
+    res.status(500).json({ error: 'Failed to record withdrawal', details: error?.message });
+  }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

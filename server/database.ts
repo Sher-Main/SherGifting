@@ -178,6 +178,37 @@ async function initializeSchema() {
   `).catch(() => {
     // Index might already exist, ignore error
   });
+
+  // Create withdrawals table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS withdrawals (
+      id VARCHAR(255) PRIMARY KEY,
+      sender_did VARCHAR(255) NOT NULL,
+      token_mint VARCHAR(255) NOT NULL,
+      token_symbol VARCHAR(50),
+      token_decimals INTEGER,
+      amount DECIMAL(20, 9) NOT NULL,
+      fee DECIMAL(20, 9) NOT NULL,
+      recipient_address VARCHAR(255) NOT NULL,
+      transaction_signature VARCHAR(255) NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (sender_did) REFERENCES users(privy_did)
+    )
+  `).catch(() => {
+    // Table might already exist, ignore error
+  });
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_withdrawals_sender ON withdrawals(sender_did)
+  `).catch(() => {
+    // Index might already exist, ignore error
+  });
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_withdrawals_created_at ON withdrawals(created_at)
+  `).catch(() => {
+    // Index might already exist, ignore error
+  });
 }
 
 export async function query<T extends QueryResultRow = any>(

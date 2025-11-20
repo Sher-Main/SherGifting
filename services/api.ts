@@ -203,3 +203,18 @@ export const giftService = {
     return response.data;
   },
 };
+
+export const withdrawalService = {
+  recordWithdrawal: async (withdrawalData: {
+    token_mint: string;
+    amount: number;
+    fee: number;
+    recipient_address: string;
+    transaction_signature: string;
+    token_symbol?: string;
+    token_decimals?: number;
+  }): Promise<{ success: boolean; withdrawal_id: string }> => {
+    const response = await apiClient.post('/withdrawals/create', withdrawalData);
+    return response.data;
+  },
+};

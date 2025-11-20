@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { heliusService } from '../services/api';
 import { TokenBalance } from '../types';
 import Spinner from '../components/Spinner';
-import { GiftIcon, WalletIcon } from '../components/icons';
+import { GiftIcon, WalletIcon, ArrowUpTrayIcon } from '../components/icons';
 
 const HomePage: React.FC = () => {
   const { user } = useAuth();
@@ -73,6 +73,12 @@ const HomePage: React.FC = () => {
 
                     >
                       <GiftIcon className="w-5 h-5" /> Send Gift
+                    </button>
+                    <button 
+                      onClick={() => navigate('/withdraw')} 
+                      className="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 px-6 rounded-lg transition-colors flex items-center justify-center gap-2 text-base"
+                    >
+                      <ArrowUpTrayIcon className="w-5 h-5" /> Withdraw Funds
                     </button>
                 </div>
             </div>
