@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePrivy } from '@privy-io/react-auth';
 import { giftService } from '../services/api';
@@ -8,7 +8,8 @@ import Spinner from '../components/Spinner';
 import { ProgressLoader } from '../components/ProgressLoader';
 
 const ClaimPage: React.FC = () => {
-    const { giftId } = useParams<{ giftId: string }>();
+    const [searchParams] = useSearchParams();
+    const claimToken = searchParams.get('token');
     const { user, refreshUser, isLoading: authLoading, loadingStage } = useAuth();
     const { ready, authenticated, login } = usePrivy();
     const navigate = useNavigate();
@@ -19,18 +20,20 @@ const ClaimPage: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [claimSuccess, setClaimSuccess] = useState(false);
     const [claimSignature, setClaimSignature] = useState<string | null>(null);
+    const [hasAttemptedClaim, setHasAttemptedClaim] = useState(false); // Prevent retries after error
+    const [emailMismatch, setEmailMismatch] = useState(false); // Track email mismatch
 
     // Fetch gift info on mount
     useEffect(() => {
         const fetchGiftInfo = async () => {
-            if (!giftId) {
-                setError('Invalid gift link');
+            if (!claimToken) {
+                setError('Invalid gift link - missing claim token');
                 setIsLoadingGift(false);
                 return;
             }
 
             try {
-                const info = await giftService.getGiftInfo(giftId);
+                const info = await giftService.getGiftInfoByToken(claimToken);
                 setGiftInfo(info);
             } catch (err: any) {
                 console.error('Error fetching gift info:', err);
@@ -41,11 +44,36 @@ const ClaimPage: React.FC = () => {
         };
 
         fetchGiftInfo();
-    }, [giftId]);
+    }, [claimToken]);
+
+    // Helper function to check if user email matches recipient email
+    const checkEmailMatch = (): boolean => {
+        if (!giftInfo?.recipient_email || !user?.email) {
+            return false;
+        }
+        
+        const recipientEmail = giftInfo.recipient_email.toLowerCase().trim();
+        const userEmail = user.email.toLowerCase().trim();
+        const matches = recipientEmail === userEmail;
+        
+        console.log('📧 Email verification:', {
+            recipientEmail,
+            userEmail,
+            matches
+        });
+        
+        return matches;
+    };
 
     // Auto-claim after user signs up/logs in
     useEffect(() => {
         const autoClaimGift = async () => {
+            // Don't auto-claim if we've already attempted and failed
+            if (hasAttemptedClaim || emailMismatch) {
+                console.log('⏸️ Skipping auto-claim - already attempted or email mismatch');
+                return;
+            }
+
             console.log('🔍 Auto-claim check:', {
                 authenticated,
                 hasUser: !!user,
@@ -53,7 +81,9 @@ const ClaimPage: React.FC = () => {
                 hasGiftInfo: !!giftInfo,
                 giftStatus: giftInfo?.status,
                 isClaiming,
-                claimSuccess
+                claimSuccess,
+                hasAttemptedClaim,
+                emailMismatch
             });
             
             // Only auto-claim if:
@@ -63,10 +93,21 @@ const ClaimPage: React.FC = () => {
             // 4. Gift hasn't been claimed yet
             // 5. Not already in the claiming process
             // 6. Not already successfully claimed
-            if (authenticated && user && user.wallet_address && giftInfo && giftInfo.status === 'SENT' && !isClaiming && !claimSuccess) {
+            // 7. Claim token is available
+            // 8. Email matches recipient (NEW)
+            // 9. Haven't already attempted claim (NEW)
+            if (authenticated && user && user.wallet_address && giftInfo && giftInfo.status === 'SENT' && !isClaiming && !claimSuccess && claimToken && !hasAttemptedClaim) {
+                // Check email match BEFORE attempting claim
+                if (!checkEmailMatch()) {
+                    console.error('❌ Email mismatch - cannot auto-claim');
+                    setEmailMismatch(true);
+                    setError('This gift is not for your account. It can only be claimed by the recipient email address.');
+                    return;
+                }
+                
                 console.log('🎁 Auto-claiming gift for newly signed-in user...');
                 console.log('User wallet:', user.wallet_address);
-                console.log('Gift ID:', giftId);
+                console.log('Claim token:', claimToken.substring(0, 8) + '...');
                 handleClaim();
             } else {
                 console.log('⏸️ Auto-claim conditions not met');
@@ -79,7 +120,7 @@ const ClaimPage: React.FC = () => {
         }, 1000);
 
         return () => clearTimeout(timer);
-    }, [authenticated, user, giftInfo, isClaiming, claimSuccess]); // Trigger when auth state or user changes
+    }, [authenticated, user, giftInfo, isClaiming, claimSuccess, claimToken, hasAttemptedClaim, emailMismatch]); // Trigger when auth state or user changes
 
     const handleLogin = async () => {
         try {
@@ -94,16 +135,16 @@ const ClaimPage: React.FC = () => {
         console.log('🎯 handleClaim called', { 
             authenticated, 
             hasUser: !!user, 
-            giftId,
+            claimToken: claimToken?.substring(0, 8) + '...',
             userDid: user?.privy_did,
             userWallet: user?.wallet_address
         });
         
-        if (!authenticated || !user || !giftId) {
+        if (!authenticated || !user || !claimToken) {
             console.error('❌ Cannot claim - missing requirements:', {
                 authenticated,
                 hasUser: !!user,
-                giftId
+                hasToken: !!claimToken
             });
             return;
         }
@@ -114,16 +155,27 @@ const ClaimPage: React.FC = () => {
             return;
         }
 
+        // Check email match before attempting claim
+        if (!checkEmailMatch()) {
+            console.error('❌ Email mismatch - cannot claim');
+            setEmailMismatch(true);
+            setError('This gift is not for your account. It can only be claimed by the recipient email address.');
+            setHasAttemptedClaim(true);
+            return;
+        }
+
         setIsClaiming(true);
         setError(null);
+        setHasAttemptedClaim(true); // Mark that we've attempted claim
 
         try {
-            console.log('🎁 Claiming gift...', { giftId, user_did: user.privy_did, wallet: user.wallet_address });
-            
-            const result = await giftService.claimGift(giftId, {
-                recipient_did: user.privy_did,
-                recipient_wallet: user.wallet_address,
+            console.log('🎁 Claiming gift with secure token...', { 
+                claimToken: claimToken.substring(0, 8) + '...', 
+                user_did: user.privy_did, 
+                wallet: user.wallet_address 
             });
+            
+            const result = await giftService.claimGiftSecure(claimToken);
 
             console.log('✅ Gift claimed successfully!', result);
             setClaimSignature(result.signature);
@@ -134,7 +186,20 @@ const ClaimPage: React.FC = () => {
         } catch (err: any) {
             console.error('❌ Error claiming gift:', err);
             console.error('Error details:', err.response?.data);
-            setError(err.response?.data?.error || err.message || 'Failed to claim gift. Please try again.');
+            
+            // Handle specific error cases with clear messages
+            const errorMessage = err.response?.data?.error || err.response?.data?.hint || err.message || 'Failed to claim gift. Please try again.';
+            
+            if (errorMessage.includes('not for you') || errorMessage.includes('email')) {
+                setEmailMismatch(true);
+                setError('This gift is not for your account. It can only be claimed by the recipient email address.');
+            } else if (errorMessage.includes('locked')) {
+                setError('This gift has been locked due to multiple failed claim attempts. Please contact support.');
+            } else if (errorMessage.includes('Too many') || err.response?.status === 429) {
+                setError('Too many claim attempts. Please wait 15 minutes before trying again.');
+            } else {
+                setError(errorMessage);
+            }
         } finally {
             setIsClaiming(false);
         }
@@ -231,6 +296,72 @@ const ClaimPage: React.FC = () => {
     // Show progress loader during claiming
     if (isClaiming) {
         return <ProgressLoader stage="preparing" message="Claiming your gift..." />;
+    }
+
+    // Show email mismatch error prominently
+    if (emailMismatch) {
+        return (
+            <div className="min-h-screen flex items-center justify-center p-4">
+                <div className="bg-slate-800/50 border border-red-500/30 rounded-2xl p-8 shadow-lg max-w-md w-full">
+                    <div className="text-center">
+                        <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                            </svg>
+                        </div>
+                        <h2 className="text-2xl font-bold text-white mb-2">Gift Not For Your Account</h2>
+                        <p className="text-slate-300 mb-2 font-medium">This gift can only be claimed by the recipient email address.</p>
+                        <p className="text-slate-400 text-sm mb-6">
+                            If you received this link by mistake, please contact the sender.
+                        </p>
+                        <button
+                            onClick={() => navigate('/')}
+                            className="w-full bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 px-4 rounded-lg transition-colors"
+                        >
+                            Go to Homepage
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // Check if gift is temporarily locked
+    if (giftInfo.status === 'LOCKED' || (giftInfo.locked_until && giftInfo.minutes_remaining && giftInfo.minutes_remaining > 0)) {
+        const minutesRemaining = giftInfo.minutes_remaining || 0;
+        const hoursRemaining = Math.floor(minutesRemaining / 60);
+        const minsRemaining = minutesRemaining % 60;
+        
+        return (
+            <div className="min-h-screen flex items-center justify-center p-4">
+                <div className="bg-slate-800/50 border border-yellow-500/30 rounded-2xl p-8 shadow-lg max-w-md w-full">
+                    <div className="text-center">
+                        <div className="w-16 h-16 bg-yellow-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <svg className="w-8 h-8 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                        </div>
+                        <h2 className="text-2xl font-bold text-white mb-2">Gift Temporarily Locked</h2>
+                        <p className="text-slate-400 mb-2">This gift has been temporarily locked due to multiple failed claim attempts.</p>
+                        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 mb-6">
+                            <p className="text-yellow-400 font-semibold text-lg mb-1">
+                                {hoursRemaining > 0 
+                                    ? `${hoursRemaining}h ${minsRemaining}m remaining`
+                                    : `${minsRemaining} minutes remaining`
+                                }
+                            </p>
+                            <p className="text-slate-400 text-sm">You can try claiming again after the lock expires.</p>
+                        </div>
+                        <button
+                            onClick={() => navigate('/')}
+                            className="w-full bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 px-4 rounded-lg transition-colors"
+                        >
+                            Go to Homepage
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
     }
 
     // Check if gift is already claimed

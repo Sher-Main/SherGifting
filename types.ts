@@ -75,7 +75,10 @@ export interface GiftInfo {
   amount: number;
   token_symbol: string;
   sender_email: string;
+  recipient_email?: string; // Added for email verification
   message?: string;
   status: GiftStatus;
   created_at: string;
+  locked_until?: string | null; // Timestamp when lock expires
+  minutes_remaining?: number | null; // Minutes remaining until unlock
 }

@@ -45,7 +45,7 @@ const AppContent: React.FC = () => {
           <Route path="/add-funds" element={user ? <AddFundsPage /> : <Navigate to="/login" />} />
           <Route path="/gift" element={user ? <GiftPage /> : <Navigate to="/login" />} />
           <Route path="/history" element={user ? <HistoryPage /> : <Navigate to="/login" />} />
-          <Route path="/claim/:giftId" element={<ClaimPage />} />
+          <Route path="/claim" element={<ClaimPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </main>

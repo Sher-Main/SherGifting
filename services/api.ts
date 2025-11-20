@@ -170,6 +170,11 @@ export const giftService = {
     return response.data;
   },
 
+  getGiftInfoByToken: async (claimToken: string): Promise<GiftInfo> => {
+    const response = await apiClient.get(`/gifts/info?token=${encodeURIComponent(claimToken)}`);
+    return response.data;
+  },
+
   claimGift: async (giftId: string, claimData: { 
     recipient_did: string; 
     recipient_wallet: string;
@@ -180,6 +185,16 @@ export const giftService = {
     token_symbol: string;
   }> => {
     const response = await apiClient.post(`/gifts/${giftId}/claim`, claimData);
+    return response.data;
+  },
+
+  claimGiftSecure: async (claimToken: string): Promise<{ 
+    success: boolean;
+    signature: string;
+    amount: number;
+    token_symbol: string;
+  }> => {
+    const response = await apiClient.post('/gifts/claim', { claim_token: claimToken });
     return response.data;
   },
 

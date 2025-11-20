@@ -1,11 +1,13 @@
 import express from 'express';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import { TipLink } from '@tiplink/api';
 import { Connection, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, getAccount } from '@solana/spl-token';
 import 'dotenv/config';
 import { authenticateToken, AuthRequest } from './authMiddleware';
 import { sendGiftNotification } from './emailService';
+import { generateSecureToken, encryptTipLink, decryptTipLink } from './utils/encryption';
 import {
   insertGift,
   getGiftsBySender,
@@ -49,6 +51,28 @@ interface Gift {
 
 const app = express();
 app.use(express.json());
+
+// Rate limiting middleware
+const claimLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // Max 10 claim attempts per IP (increased to handle auto-claim retries)
+  message: 'Too many claim attempts, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    // Skip rate limiting for authenticated users (they're already verified)
+    // This helps prevent false positives from auto-claim retries
+    return !!req.headers.authorization;
+  },
+});
+
+const giftInfoLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 20, // Max 20 gift info lookups per IP per minute
+  message: 'Too many requests, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // ✅ CORS configuration - allow Vercel frontend and localhost
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -781,6 +805,24 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       // Continue without USD value
     }
 
+    // Generate secure claim token and encrypt TipLink URL
+    const claimToken = generateSecureToken(32); // 32 bytes = 64 hex characters
+    const ENCRYPTION_KEY = process.env.TIPLINK_ENCRYPTION_KEY;
+    
+    if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length < 32) {
+      console.error('❌ TIPLINK_ENCRYPTION_KEY not set or too short (must be at least 32 characters)');
+      return res.status(500).json({ error: 'Server configuration error: encryption key not set' });
+    }
+
+    let encryptedTipLink: string;
+    try {
+      encryptedTipLink = encryptTipLink(tiplink_url, ENCRYPTION_KEY);
+      console.log('✅ TipLink URL encrypted successfully');
+    } catch (encryptError) {
+      console.error('❌ Error encrypting TipLink URL:', encryptError);
+      return res.status(500).json({ error: 'Failed to encrypt TipLink URL' });
+    }
+
     // Create gift record
     const giftId = `gift_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const newGift: Gift = {
@@ -795,19 +837,23 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       usd_value: usdValue,
       message: message || '',
       status: GiftStatus.SENT,
-      tiplink_url,
+      tiplink_url, // Keep for backward compatibility
       tiplink_public_key,
       transaction_signature: funding_signature,
       created_at: new Date().toISOString()
     };
 
-    // Save to database (persistent storage)
+    // Save to database (persistent storage) with security fields
     try {
-      await insertGift(newGift);
-      console.log('✅ Gift saved to database:', newGift.id);
+      await insertGift({
+        ...newGift,
+        claim_token: claimToken,
+        tiplink_url_encrypted: encryptedTipLink,
+      });
+      console.log('✅ Gift saved to database with security fields:', newGift.id);
     } catch (dbError: any) {
       console.error('⚠️ Failed to save gift to database, using in-memory storage:', dbError?.message);
-      // Fallback to in-memory storage if database fails
+      // Fallback to in-memory storage if database fails (without security fields)
       gifts.push(newGift);
     }
     
@@ -829,11 +875,11 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       // Continue without token name
     }
     
-    // Send email notification to recipient
-    const claimUrl = `/claim/${giftId}`;
+    // Send email notification to recipient with secure claim token
+    const claimUrl = `/claim?token=${claimToken}`;
     const fullClaimUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}${claimUrl}`;
     
-    console.log('📧 Sending email notification to recipient...');
+    console.log('📧 Sending email notification to recipient with secure claim token...');
     const emailResult = await sendGiftNotification({
       recipientEmail: recipient_email,
       senderEmail: sender.email,
@@ -889,7 +935,83 @@ app.get('/api/gifts/history', authenticateToken, async (req: AuthRequest, res) =
 // PUBLIC ROUTES (No Authentication Required)
 // ============================================
 
-// Get gift info by ID (public - for claim page)
+// Get gift info by claim token (public - for claim page)
+app.get('/api/gifts/info', giftInfoLimiter, async (req, res) => {
+  const { token } = req.query;
+  
+  if (!token || typeof token !== 'string') {
+    return res.status(400).json({ error: 'Missing or invalid claim token' });
+  }
+  
+  try {
+    // Look up gift by claim_token from database
+    if (pool) {
+      const result = await pool.query(
+        `SELECT id, sender_email, recipient_email, token_symbol, amount, message, status, created_at, claim_attempts, locked_until
+         FROM gifts 
+         WHERE claim_token = $1`,
+        [token]
+      );
+      
+      if (result.rows.length > 0) {
+        const gift = result.rows[0];
+        
+        // Check if lock has expired
+        let isLocked = false;
+        let minutesRemaining = 0;
+        if (gift.locked_until) {
+          const lockedUntil = new Date(gift.locked_until);
+          const now = new Date();
+          if (lockedUntil > now) {
+            isLocked = true;
+            minutesRemaining = Math.ceil((lockedUntil.getTime() - now.getTime()) / (1000 * 60));
+          } else {
+            // Lock expired - unlock it
+            await pool.query(
+              `UPDATE gifts SET locked_until = NULL, claim_attempts = 0 WHERE id = $1`,
+              [gift.id]
+            );
+          }
+        }
+        
+        // Return public info only (hide sensitive data like TipLink URL)
+        // Include recipient_email so frontend can verify email match before attempting claim
+        return res.json({
+          amount: gift.amount,
+          token_symbol: gift.token_symbol,
+          sender_email: gift.sender_email,
+          recipient_email: gift.recipient_email, // Added for email verification
+          message: gift.message,
+          status: isLocked ? 'LOCKED' : gift.status, // Return LOCKED if temporarily locked
+          created_at: gift.created_at,
+          locked_until: gift.locked_until || null,
+          minutes_remaining: isLocked ? minutesRemaining : null
+        });
+      }
+    }
+    
+    // Fallback to in-memory storage (for backward compatibility with old gifts)
+    const gift = gifts.find(g => g.id === token) || null;
+    if (!gift) {
+      return res.status(404).json({ error: 'Gift not found' });
+    }
+    
+    // Return public info only (hide sensitive data)
+    res.json({
+      amount: gift.amount,
+      token_symbol: gift.token_symbol,
+      sender_email: gift.sender_email,
+      message: gift.message,
+      status: gift.status,
+      created_at: gift.created_at
+    });
+  } catch (error: any) {
+    console.error('❌ Error fetching gift:', error);
+    res.status(500).json({ error: 'Failed to fetch gift' });
+  }
+});
+
+// Legacy endpoint for backward compatibility (deprecated - use /api/gifts/info?token=...)
 app.get('/api/gifts/:giftId', async (req, res) => {
   const { giftId } = req.params;
   
@@ -921,43 +1043,208 @@ app.get('/api/gifts/:giftId', async (req, res) => {
   }
 });
 
-// Claim a gift (requires Privy authentication via recipient)
-app.post('/api/gifts/:giftId/claim', async (req, res) => {
-  const { giftId } = req.params;
-  const { recipient_did, recipient_wallet } = req.body;
+// Secure claim endpoint (requires authentication and email verification)
+app.post('/api/gifts/claim', claimLimiter, authenticateToken, async (req: AuthRequest, res) => {
+  const { claim_token } = req.body;
+  const user_email = req.user?.email?.address || req.user?.google?.email;
+  const user_wallet = req.user?.wallet?.address;
+  // Handle IP address (can be string or string[])
+  const ipHeader = req.headers['x-forwarded-for'];
+  const ip_address = typeof ipHeader === 'string' 
+    ? ipHeader 
+    : Array.isArray(ipHeader) 
+      ? ipHeader[0] 
+      : (req.ip || 'unknown');
 
-  console.log('🎁 Claiming gift:', { giftId, recipient_did, recipient_wallet });
+  console.log('🎁 Secure claim attempt:', { 
+    claim_token: claim_token?.substring(0, 8) + '...', 
+    user_email,
+    ip_address 
+  });
 
-  if (!recipient_did || !recipient_wallet) {
-    return res.status(400).json({ error: 'Missing required fields' });
+  if (!claim_token) {
+    return res.status(400).json({ error: 'Missing claim token' });
   }
 
-  // Find the gift
-  let gift = null;
+  if (!user_email) {
+    return res.status(400).json({ error: 'User email not found. Please ensure you are signed in.' });
+  }
+
+  // Find the gift by claim_token
+  if (!pool) {
+    return res.status(500).json({ error: 'Database not available' });
+  }
+
+  let gift: any = null;
   try {
-    gift = await getGiftById(giftId);
-    // Fallback to in-memory storage if not found in database
-    if (!gift) {
-      gift = gifts.find(g => g.id === giftId) || null;
+    const result = await pool.query(
+      `SELECT * FROM gifts WHERE claim_token = $1`,
+      [claim_token]
+    );
+    
+    if (result.rows.length === 0) {
+      console.warn(`⚠️ Invalid claim token from ${ip_address}`);
+      return res.status(404).json({ error: 'Gift not found' });
     }
+    
+    gift = result.rows[0];
   } catch (dbError: any) {
-    console.error('⚠️ Failed to fetch gift from database, using in-memory storage:', dbError?.message);
-    gift = gifts.find(g => g.id === giftId) || null;
-  }
-  
-  if (!gift) {
-    return res.status(404).json({ error: 'Gift not found' });
+    console.error('❌ Error fetching gift from database:', dbError);
+    return res.status(500).json({ error: 'Failed to fetch gift' });
   }
 
   // Check if already claimed
-  if (gift.status !== GiftStatus.SENT) {
+  if (gift.status !== 'SENT' && gift.status !== GiftStatus.SENT) {
     return res.status(400).json({ error: 'Gift has already been claimed or is expired' });
   }
 
+  // Check if gift is temporarily locked due to too many failed attempts
+  if (gift.locked_until) {
+    const lockedUntil = new Date(gift.locked_until);
+    const now = new Date();
+    
+    if (lockedUntil > now) {
+      // Still locked - calculate remaining time
+      const minutesRemaining = Math.ceil((lockedUntil.getTime() - now.getTime()) / (1000 * 60));
+      return res.status(403).json({ 
+        error: 'This gift has been temporarily locked due to multiple failed claim attempts',
+        locked_until: gift.locked_until,
+        minutes_remaining: minutesRemaining
+      });
+    } else {
+      // Lock has expired - unlock it
+      console.log(`🔓 Gift ${gift.id} lock expired, unlocking...`);
+      if (pool) {
+        try {
+          await pool.query(
+            `UPDATE gifts SET locked_until = NULL, claim_attempts = 0 WHERE id = $1`,
+            [gift.id]
+          );
+        } catch (unlockError) {
+          console.error('⚠️ Failed to unlock gift:', unlockError);
+        }
+      }
+      // Continue with claim attempt
+    }
+  }
+
+  // CRITICAL: Verify email matches recipient
+  const recipientEmailNormalized = gift.recipient_email.toLowerCase().trim();
+  const userEmailNormalized = user_email.toLowerCase().trim();
+  
+  if (recipientEmailNormalized !== userEmailNormalized) {
+    console.error(`❌ Email mismatch: Expected ${gift.recipient_email}, got ${user_email} from IP ${ip_address}`);
+    
+    // Increment claim attempts
+    if (pool) {
+      try {
+        await pool.query(
+          `UPDATE gifts 
+           SET claim_attempts = claim_attempts + 1, 
+               last_claim_attempt = NOW(),
+               ip_address = $1
+           WHERE id = $2`,
+          [ip_address, gift.id]
+        );
+        
+        // Get updated attempt count
+        const updatedResult = await pool.query(
+          `SELECT claim_attempts FROM gifts WHERE id = $1`,
+          [gift.id]
+        );
+        const attemptCount = updatedResult.rows[0]?.claim_attempts || gift.claim_attempts + 1;
+        
+        // Lock gift for 1 hour after 3 failed attempts
+        if (attemptCount >= 3) {
+          const lockedUntil = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
+          await pool.query(
+            `UPDATE gifts SET locked_until = $1 WHERE id = $2`,
+            [lockedUntil.toISOString(), gift.id]
+          );
+          console.error(`🔒 Gift ${gift.id} locked until ${lockedUntil.toISOString()} due to ${attemptCount} failed attempts`);
+        }
+      } catch (updateError) {
+        console.error('⚠️ Failed to update claim attempts:', updateError);
+      }
+    }
+    
+    return res.status(403).json({ 
+      error: 'This gift is not for you',
+      hint: 'Please check your email and ensure you are signed in with the correct account'
+    });
+  }
+
+  console.log(`✅ Email verified: ${user_email} matches recipient`);
+
+  // Get recipient wallet from user data (from Privy)
+  if (!user_wallet) {
+    // Try to get wallet from user's database record
+    if (pool) {
+      try {
+        const userResult = await pool.query(
+          `SELECT wallet_address FROM users WHERE email = $1`,
+          [user_email]
+        );
+        if (userResult.rows.length > 0 && userResult.rows[0].wallet_address) {
+          const recipient_wallet = userResult.rows[0].wallet_address;
+          console.log('✅ Found wallet from database:', recipient_wallet);
+          
+          // Continue with claim using this wallet
+          return await processGiftClaim(gift, recipient_wallet, req.userId || '', ip_address, res);
+        }
+      } catch (userError) {
+        console.error('⚠️ Error fetching user wallet:', userError);
+      }
+    }
+    
+    return res.status(400).json({ error: 'Wallet address not found. Please ensure your wallet is connected.' });
+  }
+
+  // Process the claim
+  return await processGiftClaim(gift, user_wallet, req.userId || '', ip_address, res);
+});
+
+// Helper function to process gift claim (extracted for reuse)
+async function processGiftClaim(
+  gift: any,
+  recipient_wallet: string,
+  recipient_did: string,
+  ip_address: string,
+  res: express.Response
+) {
   try {
+    // Decrypt TipLink URL
+    const ENCRYPTION_KEY = process.env.TIPLINK_ENCRYPTION_KEY;
+    if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length < 32) {
+      throw new Error('Encryption key not configured');
+    }
+
+    let tiplinkUrl: string;
+    if (gift.tiplink_url_encrypted) {
+      try {
+        tiplinkUrl = decryptTipLink(gift.tiplink_url_encrypted, ENCRYPTION_KEY);
+        console.log('✅ TipLink URL decrypted successfully');
+      } catch (decryptError) {
+        console.error('❌ Error decrypting TipLink URL:', decryptError);
+        // Fallback to plain text URL for backward compatibility
+        if (gift.tiplink_url) {
+          tiplinkUrl = gift.tiplink_url;
+          console.log('⚠️ Using plain text TipLink URL (backward compatibility)');
+        } else {
+          throw new Error('TipLink URL not available');
+        }
+      }
+    } else if (gift.tiplink_url) {
+      // Backward compatibility: use plain text URL if encrypted version doesn't exist
+      tiplinkUrl = gift.tiplink_url;
+      console.log('⚠️ Using plain text TipLink URL (legacy gift)');
+    } else {
+      throw new Error('TipLink URL not found');
+    }
+
     // Load the TipLink
-    console.log('📦 Loading TipLink from URL:', gift.tiplink_url);
-    const tipLink = await TipLink.fromUrl(new URL(gift.tiplink_url));
+    console.log('📦 Loading TipLink from URL');
+    const tipLink = await TipLink.fromUrl(new URL(tiplinkUrl));
     console.log('✅ TipLink loaded:', tipLink.keypair.publicKey.toBase58());
     
     // Check TipLink balance (will check SOL or SPL token balance based on token type)
@@ -967,10 +1254,9 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
     const recipientPubkey = new PublicKey(recipient_wallet);
     console.log('👤 Recipient wallet:', recipientPubkey.toBase58());
     
-    // Get token info - use gift's stored info or fetch from SUPPORTED_TOKENS
+    // Get token info - use gift's stored info
     let tokenInfo: { symbol: string; decimals: number; isNative?: boolean } | null = null;
     
-    // Use stored token info from gift (most reliable)
     if (gift.token_symbol && gift.token_decimals) {
       tokenInfo = {
         symbol: gift.token_symbol,
@@ -1137,28 +1423,100 @@ app.post('/api/gifts/:giftId/claim', async (req, res) => {
 
     console.log('✅ Gift claimed! Transaction:', signature);
 
-    // Update gift status in database
-    try {
-      await updateGiftClaim(giftId, recipient_did, signature);
-      console.log('✅ Gift claim status updated in database');
-    } catch (dbError: any) {
-      console.error('⚠️ Failed to update gift claim status in database, using in-memory storage:', dbError?.message);
-      // Fallback to in-memory storage if database fails
-      gift.status = GiftStatus.CLAIMED;
-      gift.claimed_at = new Date().toISOString();
-      gift.claimed_by = recipient_did;
-      gift.claim_signature = signature;
+    // Update gift status in database with security fields
+    if (pool) {
+      try {
+        await pool.query(
+          `UPDATE gifts 
+           SET status = $1,
+               claimed_at = NOW(),
+               claimed_by = $2,
+               claim_signature = $3,
+               email_verified = TRUE,
+               ip_address = $4
+           WHERE id = $5`,
+          ['CLAIMED', recipient_did, signature, ip_address, gift.id]
+        );
+        console.log('✅ Gift claim status updated in database with security fields');
+      } catch (dbError: any) {
+        console.error('⚠️ Failed to update gift claim status in database:', dbError?.message);
+        // Try legacy update function as fallback
+        try {
+          await updateGiftClaim(gift.id, recipient_did, signature);
+        } catch (legacyError) {
+          console.error('⚠️ Legacy update also failed:', legacyError);
+        }
+      }
+    } else {
+      // Fallback to legacy update if pool is not available
+      try {
+        await updateGiftClaim(gift.id, recipient_did, signature);
+      } catch (legacyError) {
+        console.error('⚠️ Legacy update failed:', legacyError);
+      }
     }
 
-    res.json({
+    return res.json({
       success: true,
       signature,
       amount: claimedAmount,
       token_symbol: gift.token_symbol
     });
   } catch (error: any) {
+    console.error('❌ Error processing gift claim:', error);
+    return res.status(500).json({ error: 'Failed to claim gift', details: error?.message });
+  }
+}
+
+// Legacy claim endpoint for backward compatibility (deprecated - use /api/gifts/claim with claim_token)
+app.post('/api/gifts/:giftId/claim', async (req, res) => {
+  const { giftId } = req.params;
+  const { recipient_did, recipient_wallet } = req.body;
+
+  console.log('🎁 Legacy claim attempt:', { giftId, recipient_did, recipient_wallet });
+
+  if (!recipient_did || !recipient_wallet) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  // Find the gift
+  let gift = null;
+  try {
+    gift = await getGiftById(giftId);
+    // Fallback to in-memory storage if not found in database
+    if (!gift) {
+      gift = gifts.find(g => g.id === giftId) || null;
+    }
+  } catch (dbError: any) {
+    console.error('⚠️ Failed to fetch gift from database, using in-memory storage:', dbError?.message);
+    gift = gifts.find(g => g.id === giftId) || null;
+  }
+  
+  if (!gift) {
+    return res.status(404).json({ error: 'Gift not found' });
+  }
+
+  // Check if already claimed
+  if (gift.status !== GiftStatus.SENT) {
+    return res.status(400).json({ error: 'Gift has already been claimed or is expired' });
+  }
+
+  // For legacy gifts, use plain text TipLink URL
+  try {
+    const tiplinkUrl = gift.tiplink_url;
+    if (!tiplinkUrl) {
+      return res.status(400).json({ error: 'TipLink URL not found' });
+    }
+
+    const tipLink = await TipLink.fromUrl(new URL(tiplinkUrl));
+    const recipientPubkey = new PublicKey(recipient_wallet);
+    
+    // Continue with transfer logic (same as before but without email verification)
+    // ... (rest of legacy claim logic)
+    return res.status(400).json({ error: 'Legacy claim endpoint is deprecated. Please use the secure claim endpoint.' });
+  } catch (error: any) {
     console.error('❌ Error claiming gift:', error);
-    res.status(500).json({ error: 'Failed to claim gift', details: error?.message });
+    return res.status(500).json({ error: 'Failed to claim gift', details: error?.message });
   }
 });
 

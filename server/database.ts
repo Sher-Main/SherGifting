@@ -113,6 +113,27 @@ async function initializeSchema() {
     // Column might already exist, ignore error
   });
 
+  // Add security columns for email verification
+  await pool.query(`
+    ALTER TABLE gifts 
+    ADD COLUMN IF NOT EXISTS claim_token VARCHAR(64) UNIQUE,
+    ADD COLUMN IF NOT EXISTS tiplink_url_encrypted TEXT,
+    ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS claim_attempts INTEGER DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS last_claim_attempt TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS ip_address VARCHAR(45),
+    ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP
+  `).catch(() => {
+    // Columns might already exist, ignore error
+  });
+
+  // Create index on claim_token for fast lookups
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_gifts_claim_token ON gifts(claim_token)
+  `).catch(() => {
+    // Index might already exist, ignore error
+  });
+
   // Create index on sender_did for faster history queries
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_gifts_sender_did ON gifts(sender_did)
@@ -234,13 +255,15 @@ export async function insertGift(gift: {
   tiplink_public_key: string;
   transaction_signature: string;
   created_at: string;
+  claim_token?: string | null;
+  tiplink_url_encrypted?: string | null;
 }): Promise<void> {
   await query(
     `INSERT INTO gifts (
       id, sender_did, sender_email, recipient_email, token_mint, token_symbol, 
       token_decimals, amount, usd_value, message, status, tiplink_url, tiplink_public_key, 
-      transaction_signature, created_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+      transaction_signature, created_at, claim_token, tiplink_url_encrypted
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
     [
       gift.id,
       gift.sender_did,
@@ -253,10 +276,12 @@ export async function insertGift(gift: {
       gift.usd_value ?? null,
       gift.message || null,
       gift.status,
-      gift.tiplink_url,
+      gift.tiplink_url, // Keep for backward compatibility
       gift.tiplink_public_key,
       gift.transaction_signature,
       gift.created_at,
+      gift.claim_token ?? null,
+      gift.tiplink_url_encrypted ?? null,
     ]
   );
 }
