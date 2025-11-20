@@ -288,7 +288,14 @@ export async function insertGift(gift: {
 
 export async function getGiftsBySender(sender_did: string): Promise<any[]> {
   return await query(
-    `SELECT * FROM gifts WHERE sender_did = $1 ORDER BY created_at DESC`,
+    `SELECT 
+      id, sender_did, sender_email, recipient_email, token_mint, token_symbol, 
+      token_decimals, amount, usd_value, message, status, tiplink_url, 
+      tiplink_public_key, transaction_signature, created_at, claimed_at, 
+      claimed_by, claim_signature
+     FROM gifts 
+     WHERE sender_did = $1 
+     ORDER BY created_at DESC`,
     [sender_did]
   );
 }

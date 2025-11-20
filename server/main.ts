@@ -922,9 +922,33 @@ app.get('/api/gifts/history', authenticateToken, async (req: AuthRequest, res) =
   try {
     // Try to get from database first
     const userGifts = await getGiftsBySender(sender_did);
-    res.json(userGifts);
+    
+    // Ensure all required fields are present and format the response
+    const formattedGifts = userGifts.map((gift: any) => ({
+      id: gift.id,
+      sender_did: gift.sender_did,
+      sender_email: gift.sender_email,
+      recipient_email: gift.recipient_email,
+      token_mint: gift.token_mint,
+      token_symbol: gift.token_symbol,
+      token_decimals: gift.token_decimals,
+      amount: parseFloat(gift.amount),
+      usd_value: gift.usd_value ? parseFloat(gift.usd_value) : null,
+      message: gift.message || '',
+      status: gift.status,
+      tiplink_url: gift.tiplink_url,
+      tiplink_public_key: gift.tiplink_public_key,
+      transaction_signature: gift.transaction_signature,
+      created_at: gift.created_at,
+      claimed_at: gift.claimed_at || null,
+      claimed_by: gift.claimed_by || null,
+      claim_signature: gift.claim_signature || null,
+    }));
+    
+    res.json(formattedGifts);
   } catch (dbError: any) {
     console.error('⚠️ Failed to fetch gifts from database, using in-memory storage:', dbError?.message);
+    console.error('Database error details:', dbError);
     // Fallback to in-memory storage if database fails
     const userGifts = gifts.filter(g => g.sender_did === sender_did);
     res.json(userGifts);
