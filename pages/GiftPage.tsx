@@ -304,6 +304,143 @@ const GiftPage: React.FC = () => {
         }
     }, [isUsernameRecipient, resolvedRecipient, trimmedRecipient]);
 
+    // Helper function to parse simulation errors into user-friendly messages
+    const parseSimulationError = (err: any): string => {
+        if (!err) return 'Transaction simulation failed. Please check your balance and try again.';
+        
+        // Handle different error formats
+        let errStr = '';
+        if (typeof err === 'string') {
+            errStr = err;
+        } else if (err.toString) {
+            errStr = err.toString();
+        } else {
+            errStr = JSON.stringify(err);
+        }
+        
+        // Also check for nested error objects
+        const errObj = typeof err === 'object' ? err : null;
+        const errCode = errObj?.InstructionError?.[1]?.Custom || errObj?.Err || errObj?.code;
+        
+        console.log('🔍 Parsing simulation error:', { errStr, errObj, errCode });
+        
+        // Check error code first (most reliable)
+        if (errCode !== undefined) {
+            // Solana error codes: https://github.com/solana-labs/solana/blob/master/sdk/src/transaction/error.rs
+            if (errCode === 1 || errStr.includes('InsufficientFunds')) {
+                return 'Not enough SOL in your wallet to pay for transaction fees. Please add more SOL to your wallet.';
+            }
+            if (errCode === 2 || errStr.includes('InsufficientLamports')) {
+                return 'Not enough SOL in your wallet. Please add more SOL to cover transaction fees.';
+            }
+        }
+        
+        // Common Solana error patterns (case-insensitive)
+        const lowerErrStr = errStr.toLowerCase();
+        
+        if (lowerErrStr.includes('insufficient funds') || lowerErrStr.includes('insufficientfunds')) {
+            return 'Not enough SOL in your wallet to pay for transaction fees. Please add more SOL to your wallet.';
+        }
+        if (lowerErrStr.includes('insufficient lamports') || lowerErrStr.includes('insufficientlamports')) {
+            return 'Not enough SOL in your wallet. Please add more SOL to cover transaction fees.';
+        }
+        if (lowerErrStr.includes('insufficient token') || lowerErrStr.includes('insufficienttoken')) {
+            return 'Not enough tokens in your wallet. Please check your balance and try again.';
+        }
+        if (lowerErrStr.includes('tokenaccountnotfound') || lowerErrStr.includes('token account not found')) {
+            return 'Token account not found. Please ensure you have the token in your wallet.';
+        }
+        if (lowerErrStr.includes('accountnotfound') || lowerErrStr.includes('account not found')) {
+            return 'Account not found. Please refresh and try again.';
+        }
+        if (lowerErrStr.includes('blockhashnotfound') || lowerErrStr.includes('blockhash not found')) {
+            return 'Transaction expired. Please try again.';
+        }
+        if (lowerErrStr.includes('already in use') || lowerErrStr.includes('alreadyinuse')) {
+            return 'Transaction is already being processed. Please wait a moment and try again.';
+        }
+        if (lowerErrStr.includes('custom program error') || lowerErrStr.includes('programerror')) {
+            return 'Transaction failed. Please check your balance and try again.';
+        }
+        if (lowerErrStr.includes('invalid account') || lowerErrStr.includes('invalidaccount')) {
+            return 'Invalid account. Please refresh and try again.';
+        }
+        if (lowerErrStr.includes('owner mismatch') || lowerErrStr.includes('ownermismatch')) {
+            return 'Account ownership mismatch. Please refresh and try again.';
+        }
+        
+        return 'Transaction simulation failed. Please check your balance and try again.';
+    };
+
+    // Helper function to parse transaction errors into user-friendly messages
+    const parseTransactionError = (error: any): string => {
+        if (!error) return 'Transaction failed. Please check your balance and try again.';
+        
+        const errorMessage = error?.message || error?.toString() || JSON.stringify(error);
+        const lowerErrorMessage = errorMessage.toLowerCase();
+        console.log('🔍 Parsing transaction error:', { errorMessage, error });
+        
+        // Check for common error patterns (case-insensitive)
+        if (lowerErrorMessage.includes('insufficient funds') || lowerErrorMessage.includes('insufficientfunds')) {
+            return 'Not enough SOL in your wallet to pay for transaction fees. Please add more SOL to your wallet.';
+        }
+        if (lowerErrorMessage.includes('insufficient lamports') || lowerErrorMessage.includes('insufficientlamports')) {
+            return 'Not enough SOL in your wallet. Please add more SOL to cover transaction fees.';
+        }
+        if (lowerErrorMessage.includes('insufficient token') || lowerErrorMessage.includes('insufficienttoken')) {
+            return 'Not enough tokens in your wallet. Please check your balance and try again.';
+        }
+        if (lowerErrorMessage.includes('simulation failed') || lowerErrorMessage.includes('transaction simulation failed')) {
+            return 'Transaction failed. Please check that you have enough SOL for fees and enough tokens for the gift.';
+        }
+        if (lowerErrorMessage.includes('user rejected') || lowerErrorMessage.includes('userrejected') || lowerErrorMessage.includes('cancelled')) {
+            return 'Transaction was cancelled. Please try again when ready.';
+        }
+        if (lowerErrorMessage.includes('blockhashnotfound') || lowerErrorMessage.includes('blockhash not found')) {
+            return 'Transaction expired. Please try again.';
+        }
+        if (lowerErrorMessage.includes('network') || lowerErrorMessage.includes('connection')) {
+            return 'Network error. Please check your connection and try again.';
+        }
+        if (lowerErrorMessage.includes('timeout') || lowerErrorMessage.includes('timed out')) {
+            return 'Transaction timed out. Please try again.';
+        }
+        if (lowerErrorMessage.includes('signature') && lowerErrorMessage.includes('invalid')) {
+            return 'Transaction signature invalid. Please try again.';
+        }
+        if (lowerErrorMessage.includes('rate limit') || lowerErrorMessage.includes('ratelimit')) {
+            return 'Too many requests. Please wait a moment and try again.';
+        }
+        
+        // Default user-friendly message
+        return 'Transaction failed. Please check your balance and try again.';
+    };
+
+    // Helper function to get SOL balance (with fallback to direct connection fetch)
+    const getSolBalance = async (): Promise<number> => {
+        // First try to get from walletBalances
+        const solFromBalances = walletBalances.find(b => b.symbol === 'SOL')?.balance;
+        if (solFromBalances !== undefined && solFromBalances >= 0) {
+            console.log(`💰 SOL balance from walletBalances: ${solFromBalances.toFixed(6)} SOL`);
+            return solFromBalances;
+        }
+        
+        // Fallback: fetch directly from connection
+        if (user?.wallet_address) {
+            try {
+                const solBalanceLamports = await connection.getBalance(new PublicKey(user.wallet_address));
+                const solBalance = solBalanceLamports / LAMPORTS_PER_SOL;
+                console.log(`💰 Fetched SOL balance directly: ${solBalance.toFixed(6)} SOL`);
+                return solBalance;
+            } catch (error) {
+                console.error('Error fetching SOL balance:', error);
+                return 0;
+            }
+        }
+        
+        return 0;
+    };
+
     // Mode switch handler
     const handleModeSwitch = (newMode: 'token' | 'usd') => {
         if (!tokenPrice && newMode === 'usd') {
@@ -402,11 +539,23 @@ const GiftPage: React.FC = () => {
                 return;
             }
             
-            // Check SOL balance for transaction fees (need at least 0.01 SOL for fees and rent)
-            const solBalance = walletBalances.find(b => b.symbol === 'SOL')?.balance || 0;
-            const MIN_SOL_FOR_FEES = 0.01; // Minimum SOL needed for transaction fees and rent
-            if (solBalance < MIN_SOL_FOR_FEES) {
-                setError(`Insufficient SOL for transaction fees. You need at least ${MIN_SOL_FOR_FEES} SOL to pay for transaction fees and rent. You have ${solBalance.toFixed(4)} SOL available. Please add more SOL to your wallet.`);
+            // Get SOL balance (with fallback to direct fetch)
+            const solBalance = await getSolBalance();
+            
+            // Conservative estimate for initial check (base fee + 1 ATA rent + buffer)
+            // We'll do accurate estimation in handleConfirmSend after TipLink is created
+            const BASE_FEE = 0.000005; // Base transaction fee (~5,000 lamports)
+            const RENT_PER_ATA = 0.00203928; // Rent exemption for token account
+            const estimatedRequiredSol = (BASE_FEE + RENT_PER_ATA) * 1.2; // Add 20% buffer
+            
+            console.log('🔍 SOL Balance Check (Initial):', {
+                solBalance: solBalance.toFixed(6),
+                estimatedRequired: estimatedRequiredSol.toFixed(6),
+                hasEnough: solBalance >= estimatedRequiredSol
+            });
+            
+            if (solBalance < estimatedRequiredSol) {
+                setError(`Insufficient SOL for transaction fees. You need approximately ${estimatedRequiredSol.toFixed(6)} SOL to pay for transaction fees and rent. You have ${solBalance.toFixed(6)} SOL available. Please add more SOL to your wallet.`);
                 return;
             }
         }
@@ -490,7 +639,7 @@ const GiftPage: React.FC = () => {
             // Step 1: Create TipLink on backend
             const { tiplink_url, tiplink_public_key } = await tiplinkService.create();
             console.log('✅ TipLink created:', tiplink_public_key);
-
+            
             // Step 2: Fund TipLink from user's Privy wallet
             console.log('💸 Step 2: Funding TipLink from your wallet...');
             
@@ -516,6 +665,77 @@ const GiftPage: React.FC = () => {
             }
 
             console.log('✅ Found embedded Privy wallet:', embeddedWallet.address);
+
+            // For SPL tokens, verify SOL balance with accurate fee estimation
+            if (!currentToken.isNative && currentToken.mint !== 'So11111111111111111111111111111111111111112') {
+                // Get actual SOL balance
+                const solBalance = await getSolBalance();
+                
+                // Estimate required SOL based on actual transaction
+                const BASE_FEE = 0.000005; // Base transaction fee (~5,000 lamports)
+                const RENT_PER_ATA = 0.00203928; // Rent exemption for token account (~2,039,280 lamports)
+                let estimatedRequiredSol = BASE_FEE;
+                
+                const splToken = await import('@solana/spl-token');
+                const { getAssociatedTokenAddress, getAccount, TOKEN_PROGRAM_ID } = splToken;
+                const senderPubkey = new PublicKey(embeddedWallet.address);
+                const tipLinkPubkey = new PublicKey(tiplink_public_key);
+                const mintPubkey = new PublicKey(currentToken.mint);
+                
+                // Check TipLink ATA
+                const tipLinkATA = await getAssociatedTokenAddress(
+                    mintPubkey,
+                    tipLinkPubkey,
+                    true,
+                    TOKEN_PROGRAM_ID
+                );
+                try {
+                    await getAccount(connection, tipLinkATA);
+                    console.log('✅ TipLink ATA already exists');
+                } catch (error: any) {
+                    if (error.name === 'TokenAccountNotFoundError') {
+                        estimatedRequiredSol += RENT_PER_ATA;
+                        console.log('📝 TipLink ATA needs to be created (+0.00203928 SOL)');
+                    } else {
+                        throw error;
+                    }
+                }
+                
+                // Check fee wallet ATA (if fee wallet is configured)
+                if (feeWalletAddress) {
+                    const feeWalletPubkey = new PublicKey(feeWalletAddress);
+                    const feeWalletATA = await getAssociatedTokenAddress(
+                        mintPubkey,
+                        feeWalletPubkey,
+                        true,
+                        TOKEN_PROGRAM_ID
+                    );
+                    try {
+                        await getAccount(connection, feeWalletATA);
+                        console.log('✅ Fee wallet ATA already exists');
+                    } catch (error: any) {
+                        if (error.name === 'TokenAccountNotFoundError') {
+                            estimatedRequiredSol += RENT_PER_ATA;
+                            console.log('📝 Fee wallet ATA needs to be created (+0.00203928 SOL)');
+                        } else {
+                            throw error;
+                        }
+                    }
+                }
+                
+                // Add 10% buffer for safety
+                estimatedRequiredSol *= 1.1;
+                
+                console.log('🔍 SOL Balance Check (Accurate):', {
+                    solBalance: solBalance.toFixed(6),
+                    estimatedRequired: estimatedRequiredSol.toFixed(6),
+                    hasEnough: solBalance >= estimatedRequiredSol
+                });
+                
+                if (solBalance < estimatedRequiredSol) {
+                    throw new Error(`Insufficient SOL for transaction fees. You need approximately ${estimatedRequiredSol.toFixed(6)} SOL to pay for transaction fees and rent. You have ${solBalance.toFixed(6)} SOL available. Please add more SOL to your wallet.`);
+                }
+            }
 
             // Step 3: Build transaction using @solana/web3.js (compatible with @solana/kit@3.0.0)
             console.log('📝 Step 3: Building transaction...');
@@ -731,6 +951,47 @@ const GiftPage: React.FC = () => {
             
             console.log(`✅ Transaction blockhash: ${blockhash.substring(0, 8)}... (valid until block ${lastValidBlockHeight})`);
 
+            // Step 3.5: Simulate transaction to catch errors early (before serialization)
+            console.log('🔍 Step 3.5: Simulating transaction to check for errors...');
+            try {
+                // For @solana/web3.js v1.98.4, simulateTransaction accepts Transaction object directly
+                // No options needed - it will use defaults and handle blockhash automatically
+                const simulation = await connection.simulateTransaction(transaction);
+                
+                if (simulation.value.err) {
+                    const errorMessage = parseSimulationError(simulation.value.err);
+                    console.error('❌ Transaction simulation failed:', simulation.value.err);
+                    console.error('📋 Simulation logs:', simulation.value.logs);
+                    if (simulation.value.logs) {
+                        console.error('📋 Full simulation logs:', simulation.value.logs.join('\n'));
+                    }
+                    throw new Error(errorMessage);
+                }
+                
+                console.log('✅ Transaction simulation passed:', {
+                    fee: simulation.value.fee ? `${(simulation.value.fee / LAMPORTS_PER_SOL).toFixed(6)} SOL` : 'N/A',
+                    unitsConsumed: simulation.value.unitsConsumed || 'N/A',
+                });
+            } catch (simError: any) {
+                console.error('❌ Transaction simulation error:', simError);
+                
+                // If it's an API error (Invalid arguments), log warning but don't block transaction
+                // The transaction will still be validated when sent to the network
+                // Gas fees will be paid in SOL automatically by Solana network
+                if (simError.message?.includes('Invalid arguments') || simError.message?.includes('simulateTransaction')) {
+                    console.warn('⚠️ Simulation API error - proceeding without simulation. Transaction will be validated on send.');
+                    console.warn('💡 Gas fees will be automatically deducted from SOL balance when transaction is sent.');
+                    // Don't throw - allow transaction to proceed
+                } else if (simError.message && !simError.message.includes('simulation') && !simError.message.includes('Transaction simulation')) {
+                    // If it's a real simulation error (like insufficient funds), throw it
+                    throw simError;
+                } else {
+                    // Otherwise, parse and throw
+                    const errorMessage = parseTransactionError(simError);
+                    throw new Error(errorMessage);
+                }
+            }
+
             // Serialize transaction to Uint8Array (required by Privy's signAndSendTransaction)
             const serializedTransaction = transaction.serialize({
                 requireAllSignatures: false,
@@ -772,19 +1033,16 @@ const GiftPage: React.FC = () => {
                 console.log('✅ Transaction sent (success path):', signatureString);
                 
             } catch (error: any) {
-                // Privy sometimes throws even when transaction succeeds, but user confirmed it failed
+                // Log detailed error information for debugging
                 console.error('❌ Transaction failed:', error);
-                
-                // Check if error contains useful information
-                if (error?.message) {
-                    console.error('Error message:', error.message);
-                }
-                if (error?.code) {
-                    console.error('Error code:', error.code);
-                }
-                if (error?.transaction) {
-                    console.error('Transaction in error:', error.transaction);
-                }
+                console.error('📋 Error details:', {
+                    message: error?.message,
+                    code: error?.code,
+                    name: error?.name,
+                    stack: error?.stack,
+                    data: error?.data,
+                    transaction: error?.transaction,
+                });
                 
                 // Check if error contains a signature (unlikely if transaction failed)
                 if (error?.signature) {
@@ -811,14 +1069,17 @@ const GiftPage: React.FC = () => {
                             console.log('✅ Transaction actually succeeded despite error!');
                             // Continue with success flow
                         } else {
-                            throw new Error(`Transaction failed on-chain: ${tx?.meta?.err || 'Transaction not found'}`);
+                            const onChainError = parseSimulationError(tx?.meta?.err);
+                            throw new Error(onChainError);
                         }
-                    } catch (verifyError) {
-                        throw new Error(`Transaction failed: ${error.message || 'Unknown error'}`);
+                    } catch (verifyError: any) {
+                        const errorMessage = parseTransactionError(verifyError);
+                        throw new Error(errorMessage);
                     }
                 } else {
-                    // Transaction definitely failed
-                    throw new Error(`Transaction failed: ${error.message || error.code || 'Unknown error'}. Please check your balance and try again.`);
+                    // Transaction definitely failed - parse error for user-friendly message
+                    const errorMessage = parseTransactionError(error);
+                    throw new Error(errorMessage);
                 }
             }
 
