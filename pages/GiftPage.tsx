@@ -466,7 +466,7 @@ const GiftPage: React.FC = () => {
         setIsSending(true);
         setError(null);
         setSuccessMessage(null);
-        setShowConfirmModal(false);
+        // Keep modal open to show loading overlay during transaction processing
 
         const numericAmount = confirmDetails.amount;
         const feeAmount = confirmDetails.fee;
@@ -883,6 +883,10 @@ const GiftPage: React.FC = () => {
                 ? confirmDetails.usdValue
                 : (tokenPrice ? numericAmount * tokenPrice : null);
             
+            // Close confirmation modal and show success modal
+            setShowConfirmModal(false);
+            setConfirmDetails(null);
+            
             // Set gift details and show success modal
             setGiftDetails({
                 claim_url: fullClaimUrl,
@@ -914,6 +918,9 @@ const GiftPage: React.FC = () => {
         } catch (err: any) {
             console.error('❌ Error sending gift:', err);
             setError(err.response?.data?.error || err.message || 'Failed to send gift. Please try again.');
+            // Close confirmation modal on error so user can see the error message
+            setShowConfirmModal(false);
+            setConfirmDetails(null);
         } finally {
             setIsSending(false);
         }
@@ -933,7 +940,16 @@ const GiftPage: React.FC = () => {
             {/* Confirmation Modal */}
             {showConfirmModal && confirmDetails && (
                 <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                    <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 shadow-2xl max-w-md w-full animate-scale-in">
+                    <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 shadow-2xl max-w-md w-full animate-scale-in relative">
+                        {/* Loading Overlay */}
+                        {isSending && (
+                            <div className="absolute inset-0 bg-slate-800/95 backdrop-blur-sm rounded-2xl flex flex-col items-center justify-center z-10">
+                                <Spinner size="8" color="border-sky-400" />
+                                <p className="text-white font-medium mt-4 text-lg">Processing Transaction...</p>
+                                <p className="text-slate-400 text-sm mt-2">Please wait while we sign and send your gift</p>
+                            </div>
+                        )}
+                        
                         <h2 className="text-2xl font-bold text-white mb-4 text-center">Confirm Transaction</h2>
                         
                         <div className="space-y-4 mb-6">
@@ -1009,10 +1025,13 @@ const GiftPage: React.FC = () => {
                         <div className="flex gap-3">
                             <button
                                 onClick={() => {
-                                    setShowConfirmModal(false);
-                                    setConfirmDetails(null);
+                                    if (!isSending) {
+                                        setShowConfirmModal(false);
+                                        setConfirmDetails(null);
+                                    }
                                 }}
-                                className="flex-1 bg-slate-600 hover:bg-slate-500 text-white font-bold py-3 px-4 rounded-lg transition-colors"
+                                disabled={isSending}
+                                className="flex-1 bg-slate-600 hover:bg-slate-500 text-white font-bold py-3 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 Cancel
                             </button>

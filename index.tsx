@@ -67,6 +67,8 @@ root.render(
         },
         // ✅ Privy v3 Solana configuration - use 'solana:mainnet' (NOT 'solana:mainnet-beta')
         embeddedWallets: {
+          // ✅ Disable all Privy wallet confirmation modals for silent transaction signing
+          showWalletUIs: false,
           solana: {
             createOnLogin: "users-without-wallets", // ✅ Enable Solana wallet creation for new users
           },
