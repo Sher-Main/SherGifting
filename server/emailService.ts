@@ -24,6 +24,7 @@ interface GiftNotificationParams {
   usdValue?: number | null;  // USD value of the gift
   claimUrl: string;
   message?: string;
+  cardImageUrl?: string | null;  // Personalized greeting card image URL
 }
 
 export async function sendGiftNotification(params: GiftNotificationParams): Promise<{ success: boolean; error?: string; emailId?: string }> {
@@ -37,7 +38,7 @@ export async function sendGiftNotification(params: GiftNotificationParams): Prom
     return { success: false, error: 'FROM_EMAIL not set in environment variables' };
   }
 
-  const { recipientEmail, senderEmail, senderName, amount, tokenSymbol, tokenName, usdValue, claimUrl, message } = params;
+  const { recipientEmail, senderEmail, senderName, amount, tokenSymbol, tokenName, usdValue, claimUrl, message, cardImageUrl } = params;
 
   // Validate email addresses
   if (!senderEmail || !recipientEmail) {
@@ -61,6 +62,20 @@ export async function sendGiftNotification(params: GiftNotificationParams): Prom
     <tr>
       <td align="center" style="padding: 40px 0;">
         <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+          ${cardImageUrl ? `
+          <!-- Greeting Card Image -->
+          <tr>
+            <td style="padding: 0;">
+              <img 
+                src="${cardImageUrl}" 
+                alt="Greeting Card" 
+                width="600" 
+                style="display: block; width: 100%; height: auto; border: 0; max-width: 600px;"
+              />
+            </td>
+          </tr>
+          ` : ''}
+          
           <!-- Header -->
           <tr>
             <td style="background: linear-gradient(135deg, #0ea5e9 0%, #06b6d4 100%); padding: 40px 30px; text-align: center;">

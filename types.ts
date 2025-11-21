@@ -78,6 +78,11 @@ export interface Gift {
   auto_refund_attempted?: boolean;  // prevent duplicate processing
   auto_refund_attempts?: number;  // track retry attempts
   last_refund_attempt?: string | null;  // last attempt timestamp
+  has_greeting_card?: boolean;  // whether a greeting card was included
+  card_type?: string | null;  // 'thanksgiving', 'newyear', 'christmas', 'birthday'
+  card_cloudinary_url?: string | null;  // Generated personalized card URL
+  card_recipient_name?: string | null;  // Name used for card personalization
+  card_price_usd?: number;  // Price of the greeting card (default 0.50)
 }
 
 export interface GiftInfo {

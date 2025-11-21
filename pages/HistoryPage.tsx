@@ -93,7 +93,16 @@ const HistoryPage: React.FC = () => {
                     <tbody className="divide-y divide-slate-700">
                         {gifts.map(gift => (
                             <tr key={gift.id} className="hover:bg-slate-800 transition-colors">
-                                <td className="px-6 py-4 font-medium text-white whitespace-nowrap">{gift.recipient_email}</td>
+                                <td className="px-6 py-4 font-medium text-white whitespace-nowrap">
+                                    <div className="flex items-center gap-2">
+                                        <span>{gift.recipient_email}</span>
+                                        {gift.has_greeting_card && (
+                                            <span className="px-2 py-1 text-xs font-medium text-purple-300 bg-purple-900/50 rounded-full" title={`${gift.card_type ? gift.card_type.charAt(0).toUpperCase() + gift.card_type.slice(1) : 'Greeting'} Card`}>
+                                                🎴 Card
+                                            </span>
+                                        )}
+                                    </div>
+                                </td>
                                 <td className="px-6 py-4">
                                     {gift.usd_value !== null && gift.usd_value !== undefined ? (
                                         <>
@@ -102,6 +111,9 @@ const HistoryPage: React.FC = () => {
                                         </>
                                     ) : (
                                         <span className="text-white">{gift.amount.toFixed(3)} {gift.token_symbol}</span>
+                                    )}
+                                    {gift.has_greeting_card && gift.card_price_usd && (
+                                        <div className="text-xs text-purple-400 mt-1">+ ${gift.card_price_usd.toFixed(2)} card</div>
                                     )}
                                 </td>
                                 <td className="px-6 py-4 text-slate-300">

@@ -140,6 +140,31 @@ async function initializeSchema() {
     // Columns might already exist, ignore error
   });
 
+  // Add greeting card columns
+  await pool.query(`
+    ALTER TABLE gifts 
+    ADD COLUMN IF NOT EXISTS has_greeting_card BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS card_type VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS card_cloudinary_url TEXT,
+    ADD COLUMN IF NOT EXISTS card_recipient_name VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS card_price_usd DECIMAL(10,2) DEFAULT 0.50
+  `).catch(() => {
+    // Columns might already exist, ignore error
+  });
+
+  // Create indexes for card fields
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_gifts_has_card ON gifts(has_greeting_card)
+  `).catch(() => {
+    // Index might already exist, ignore error
+  });
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_gifts_card_type ON gifts(card_type)
+  `).catch(() => {
+    // Index might already exist, ignore error
+  });
+
   // Create index on claim_token for fast lookups
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_gifts_claim_token ON gifts(claim_token)
@@ -319,13 +344,19 @@ export async function insertGift(gift: {
   claim_token?: string | null;
   tiplink_url_encrypted?: string | null;
   expires_at?: string;  // 24 hours from creation
+  has_greeting_card?: boolean;
+  card_type?: string | null;
+  card_cloudinary_url?: string | null;
+  card_recipient_name?: string | null;
+  card_price_usd?: number;
 }): Promise<void> {
   await query(
     `INSERT INTO gifts (
       id, sender_did, sender_email, recipient_email, token_mint, token_symbol, 
       token_decimals, amount, usd_value, message, status, tiplink_url, tiplink_public_key, 
-      transaction_signature, created_at, claim_token, tiplink_url_encrypted, expires_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+      transaction_signature, created_at, claim_token, tiplink_url_encrypted, expires_at,
+      has_greeting_card, card_type, card_cloudinary_url, card_recipient_name, card_price_usd
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
     [
       gift.id,
       gift.sender_did,
@@ -345,6 +376,11 @@ export async function insertGift(gift: {
       gift.claim_token ?? null,
       gift.tiplink_url_encrypted ?? null,
       gift.expires_at ?? null,
+      gift.has_greeting_card ?? false,
+      gift.card_type ?? null,
+      gift.card_cloudinary_url ?? null,
+      gift.card_recipient_name ?? null,
+      gift.card_price_usd ?? null,
     ]
   );
 }
@@ -355,7 +391,8 @@ export async function getGiftsBySender(sender_did: string): Promise<any[]> {
       id, sender_did, sender_email, recipient_email, token_mint, token_symbol, 
       token_decimals, amount, usd_value, message, status, tiplink_url, 
       tiplink_public_key, transaction_signature, created_at, claimed_at, 
-      claimed_by, claim_signature, expires_at, refunded_at, refund_transaction_signature
+      claimed_by, claim_signature, expires_at, refunded_at, refund_transaction_signature,
+      has_greeting_card, card_type, card_cloudinary_url, card_recipient_name, card_price_usd
      FROM gifts 
      WHERE sender_did = $1 
      ORDER BY created_at DESC`,

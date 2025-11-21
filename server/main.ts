@@ -8,6 +8,7 @@ import 'dotenv/config';
 import { authenticateToken, AuthRequest } from './authMiddleware';
 import { sendGiftNotification } from './emailService';
 import { generateSecureToken, encryptTipLink, decryptTipLink } from './utils/encryption';
+import { generatePersonalizedCardUrl } from './utils/cloudinary';
 import {
   insertGift,
   getGiftsBySender,
@@ -648,7 +649,7 @@ app.post('/api/tiplink/create', authenticateToken, async (req: AuthRequest, res)
 
 // Create gift - Frontend has already funded the TipLink, backend creates the gift record
 app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) => {
-  const { sender_did, recipient_email, token_mint, amount, message, tiplink_url, tiplink_public_key, funding_signature, token_symbol, token_decimals } = req.body;
+  const { sender_did, recipient_email, token_mint, amount, message, tiplink_url, tiplink_public_key, funding_signature, token_symbol, token_decimals, card_type, card_recipient_name, card_price_usd } = req.body;
 
   console.log('🎁 Creating gift record:', { sender_did, recipient_email, token_mint, amount, token_symbol, token_decimals });
 
@@ -830,6 +831,22 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       return res.status(500).json({ error: 'Failed to encrypt TipLink URL' });
     }
 
+    // Generate personalized card URL if card is selected
+    let cardCloudinaryUrl: string | null = null;
+    const hasCard = !!card_type && !!card_recipient_name;
+    
+    if (hasCard) {
+      try {
+        console.log('🎴 Generating personalized card URL...');
+        cardCloudinaryUrl = generatePersonalizedCardUrl(card_type, card_recipient_name);
+        console.log('✅ Card URL generated:', cardCloudinaryUrl);
+      } catch (cardError: any) {
+        console.error('❌ Error generating card URL:', cardError);
+        // Don't fail gift creation if card generation fails, just log the error
+        console.warn('⚠️ Continuing without card URL');
+      }
+    }
+
     // Create gift record
     const giftId = `gift_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24 hours from now
@@ -852,15 +869,20 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       expires_at: expiresAt
     };
 
-    // Save to database (persistent storage) with security fields
+    // Save to database (persistent storage) with security fields and card info
     try {
       await insertGift({
         ...newGift,
         claim_token: claimToken,
         tiplink_url_encrypted: encryptedTipLink,
         expires_at: expiresAt,
+        has_greeting_card: hasCard,
+        card_type: card_type || null,
+        card_cloudinary_url: cardCloudinaryUrl,
+        card_recipient_name: card_recipient_name || null,
+        card_price_usd: card_price_usd || (hasCard ? 0.00 : null), // Free for testing
       });
-      console.log('✅ Gift saved to database with security fields:', newGift.id);
+      console.log('✅ Gift saved to database with security fields and card info:', newGift.id);
     } catch (dbError: any) {
       console.error('⚠️ Failed to save gift to database, using in-memory storage:', dbError?.message);
       // Fallback to in-memory storage if database fails (without security fields)
@@ -899,6 +921,7 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       usdValue: usdValue, // Use the USD value we calculated and stored in gift
       claimUrl: fullClaimUrl,
       message: message || undefined,
+      cardImageUrl: cardCloudinaryUrl || undefined,
     });
 
     if (emailResult.success) {

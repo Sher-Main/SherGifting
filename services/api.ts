@@ -155,6 +155,9 @@ export const giftService = {
     funding_signature: string;
     token_symbol?: string;
     token_decimals?: number;
+    card_type?: string | null;
+    card_recipient_name?: string | null;
+    card_price_usd?: number;
   }): Promise<{ 
     gift_id: string;
     claim_url: string;

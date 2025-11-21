@@ -7,6 +7,8 @@ import { tokenService, giftService, tiplinkService, heliusService, feeService, p
 import { Token, TokenBalance, ResolveRecipientResponse } from '../types';
 import Spinner from '../components/Spinner';
 import { ArrowLeftIcon } from '../components/icons';
+import { CardUpsellSection } from '../components/CardUpsellSection';
+import { CARD_UPSELL_PRICE } from '../lib/cardTemplates';
 import QRCode from 'qrcode';
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import { connection } from '../services/solana';
@@ -54,6 +56,10 @@ const GiftPage: React.FC = () => {
     const [priceLoading, setPriceLoading] = useState(false);
     const [priceError, setPriceError] = useState<string | null>(null);
     
+    // Card upsell state
+    const [selectedCard, setSelectedCard] = useState<string | null>(null);
+    const [recipientName, setRecipientName] = useState<string>('');
+    
     // Confirmation modal state
     const [showConfirmModal, setShowConfirmModal] = useState(false);
     const [confirmDetails, setConfirmDetails] = useState<{
@@ -70,6 +76,9 @@ const GiftPage: React.FC = () => {
         remainingBalance: number;
         remainingBalanceUsd: number | null;
         message: string;
+        cardFee: number;
+        cardFeeUsd: number | null;
+        hasCard: boolean;
     } | null>(null);
     
     // Success modal state
@@ -240,6 +249,21 @@ const GiftPage: React.FC = () => {
         return () => clearTimeout(timeoutId);
     }, [isUsernameRecipient, trimmedRecipient]);
 
+    // Extract recipient name for card personalization
+    useEffect(() => {
+        if (isUsernameRecipient && resolvedRecipient) {
+            // Try to get name from resolved recipient (if available)
+            const name = resolvedRecipient.username?.replace('@', '') || resolvedRecipient.email.split('@')[0];
+            setRecipientName(name);
+        } else if (!isUsernameRecipient && trimmedRecipient.includes('@')) {
+            // Extract name from email (part before @)
+            const name = trimmedRecipient.split('@')[0];
+            setRecipientName(name);
+        } else {
+            setRecipientName('');
+        }
+    }, [isUsernameRecipient, resolvedRecipient, trimmedRecipient]);
+
     // Mode switch handler
     const handleModeSwitch = (newMode: 'token' | 'usd') => {
         if (!tokenPrice && newMode === 'usd') {
@@ -347,13 +371,30 @@ const GiftPage: React.FC = () => {
             }
         }
 
+        // Calculate card fee if selected (currently free for testing)
+        const hasCard = !!selectedCard;
+        const cardFeeUsd = hasCard ? CARD_UPSELL_PRICE : 0;
+        const cardFeeInTokens = 0; // Free, so no token fee
+        
         // Calculate USD values if price is available
         const usdValue = tokenPrice ? numericAmount * tokenPrice : null;
         const usdFee = tokenPrice ? feeAmount * tokenPrice : null;
-        const usdTotal = tokenPrice ? totalAmount * tokenPrice : null;
+        const totalWithCard = totalAmount; // No card fee added to transaction
+        const usdTotal = tokenPrice ? (totalAmount * tokenPrice) + cardFeeUsd : null;
+        
+        // Check if user has enough balance (card is free, so no additional balance check needed)
+        if (selectedToken.isNative && totalWithCard > userBalance) {
+            setError(`Insufficient balance. You need ${totalWithCard.toFixed(4)} ${selectedToken.symbol} (${numericAmount.toFixed(4)} ${selectedToken.symbol} gift + ${feeAmount.toFixed(4)} ${selectedToken.symbol} fee). You have ${userBalance.toFixed(4)} ${selectedToken.symbol} available.`);
+            return;
+        }
+        
+        if (!selectedToken.isNative && totalWithCard > userBalance) {
+            setError(`Insufficient ${selectedToken.symbol} balance. You need ${totalWithCard.toFixed(4)} ${selectedToken.symbol} (${numericAmount.toFixed(4)} ${selectedToken.symbol} gift + ${feeAmount.toFixed(4)} ${selectedToken.symbol} fee). You have ${userBalance.toFixed(4)} ${selectedToken.symbol} available.`);
+            return;
+        }
         
         // Calculate remaining balance after transaction
-        const remainingBalance = userBalance - totalAmount;
+        const remainingBalance = userBalance - totalWithCard;
         const remainingBalanceUsd = tokenPrice ? remainingBalance * tokenPrice : null;
         
         // Show confirmation modal first
@@ -362,7 +403,7 @@ const GiftPage: React.FC = () => {
             recipientEmail: recipientEmailValue,
             amount: numericAmount,
             fee: feeAmount,
-            total: totalAmount,
+            total: totalWithCard,
             token: selectedToken.symbol,
             tokenName: selectedToken.name,
             usdValue,
@@ -371,6 +412,9 @@ const GiftPage: React.FC = () => {
             remainingBalance,
             remainingBalanceUsd,
             message: message || '',
+            cardFee: cardFeeInTokens,
+            cardFeeUsd: hasCard ? cardFeeUsd : null,
+            hasCard,
         });
         setShowConfirmModal(true);
         return;
@@ -386,6 +430,7 @@ const GiftPage: React.FC = () => {
 
         const numericAmount = confirmDetails.amount;
         const feeAmount = confirmDetails.fee;
+        const cardFee = confirmDetails.cardFee || 0;
         const recipientEmail = confirmDetails.recipientEmail;
         const recipientLabel = confirmDetails.recipientLabel;
         const message = confirmDetails.message;
@@ -441,12 +486,12 @@ const GiftPage: React.FC = () => {
             const transaction = new Transaction();
             
             // Add memo instruction to show total amount (for Privy modal display)
-            const totalAmount = numericAmount + feeAmount;
+            const totalAmount = numericAmount + feeAmount; // Card is free, no fee added
             // Calculate USD value for memo if price is available
             const memoUsdValue = tokenPrice ? numericAmount * tokenPrice : null;
             const memoText = memoUsdValue !== null
-                ? `Gift: $${memoUsdValue.toFixed(3)} USD (${numericAmount.toFixed(6)} ${currentToken.symbol}) to ${recipientLabel}`
-                : `Gift: ${numericAmount.toFixed(6)} ${currentToken.symbol} to ${recipientLabel}`;
+                ? `Gift: $${memoUsdValue.toFixed(3)} USD (${numericAmount.toFixed(6)} ${currentToken.symbol}) to ${recipientLabel}${cardFee > 0 ? ' + Card' : ''}`
+                : `Gift: ${numericAmount.toFixed(6)} ${currentToken.symbol} to ${recipientLabel}${cardFee > 0 ? ' + Card' : ''}`;
             const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
             transaction.add({
                 keys: [{ pubkey: new PublicKey(embeddedWallet.address), isSigner: true, isWritable: false }],
@@ -462,10 +507,14 @@ const GiftPage: React.FC = () => {
                 // Round lamports to integers to avoid floating-point precision errors
                 const giftAmountLamports = Math.round(numericAmount * LAMPORTS_PER_SOL);
                 const feeAmountLamports = Math.round(feeAmount * LAMPORTS_PER_SOL);
+                // Card is free, so no card fee in transaction
                 
                 console.log(`💰 Transaction breakdown (SOL):`);
                 console.log(`  Gift amount: ${numericAmount} ${currentToken.symbol} (${giftAmountLamports} lamports)`);
                 console.log(`  Fee (${feePercentage * 100}%): ${feeAmount} ${currentToken.symbol} (${feeAmountLamports} lamports)`);
+                if (cardFee > 0) {
+                    console.log(`  Card fee: ${cardFee} ${currentToken.symbol} (FREE - not charged)`);
+                }
                 console.log(`  Total: ${numericAmount + feeAmount} ${currentToken.symbol} (${giftAmountLamports + feeAmountLamports} lamports)`);
                 
                 // Add gift amount transfer to TipLink
@@ -477,9 +526,9 @@ const GiftPage: React.FC = () => {
                     })
                 );
                 
-                // Add fee transfer to fee wallet if configured
+                // Add fee transfer to fee wallet if configured (only transaction fee, card is free)
                 if (feeWalletAddress && feeAmountLamports > 0) {
-                    console.log(`💼 Adding fee transfer to fee wallet: ${feeWalletAddress}`);
+                    console.log(`💼 Adding fee transfer to fee wallet: ${feeWalletAddress} (transaction fee only)`);
                     transaction.add(
                         SystemProgram.transfer({
                             fromPubkey: senderPubkey,
@@ -507,10 +556,14 @@ const GiftPage: React.FC = () => {
                 // Convert amount to token's smallest unit (like lamports for SOL)
                 const giftAmountRaw = Math.round(numericAmount * Math.pow(10, decimals));
                 const feeAmountRaw = Math.round(feeAmount * Math.pow(10, decimals));
+                // Card is free, so no card fee in transaction
                 
                 console.log(`💰 Transaction breakdown (SPL Token):`);
                 console.log(`  Gift amount: ${numericAmount} ${currentToken.symbol} (${giftAmountRaw} raw units)`);
                 console.log(`  Fee (${feePercentage * 100}%): ${feeAmount} ${currentToken.symbol} (${feeAmountRaw} raw units)`);
+                if (cardFee > 0) {
+                    console.log(`  Card fee: ${cardFee} ${currentToken.symbol} (FREE - not charged)`);
+                }
                 console.log(`  Total: ${numericAmount + feeAmount} ${currentToken.symbol} (${giftAmountRaw + feeAmountRaw} raw units)`);
                 
                 // Get associated token addresses (ATAs)
@@ -576,9 +629,9 @@ const GiftPage: React.FC = () => {
                     )
                 );
                 
-                // Add fee transfer to fee wallet if configured
+                // Add fee transfer to fee wallet if configured (only transaction fee, card is free)
                 if (feeWalletAddress && feeAmountRaw > 0) {
-                    console.log(`💼 Adding fee transfer to fee wallet: ${feeWalletAddress}`);
+                    console.log(`💼 Adding fee transfer to fee wallet: ${feeWalletAddress} (transaction fee only)`);
                     const feeWalletPubkey = new PublicKey(feeWalletAddress);
                     const feeWalletATA = await getAssociatedTokenAddress(
                         mintPubkey,
@@ -613,7 +666,7 @@ const GiftPage: React.FC = () => {
                             senderATA, // source
                             feeWalletATA, // destination
                             senderPubkey, // owner
-                            BigInt(feeAmountRaw), // amount
+                            BigInt(feeAmountRaw), // amount (transaction fee only, card is free)
                             [], // multiSigners
                             TOKEN_PROGRAM_ID
                         )
@@ -766,6 +819,9 @@ const GiftPage: React.FC = () => {
                 funding_signature: signatureString,
                 token_symbol: currentToken.symbol,
                 token_decimals: currentToken.decimals,
+                card_type: selectedCard || null,
+                card_recipient_name: recipientName || null,
+                card_price_usd: selectedCard ? CARD_UPSELL_PRICE : undefined,
             });
 
             const { claim_url, gift_id } = createResponse;
@@ -812,6 +868,8 @@ const GiftPage: React.FC = () => {
             setUsdAmount('');
             setMessage('');
             setAmountMode('token'); // Reset to token mode
+            setSelectedCard(null); // Reset card selection
+            setRecipientName(''); // Reset recipient name
             
         } catch (err: any) {
             console.error('❌ Error sending gift:', err);
@@ -881,6 +939,14 @@ const GiftPage: React.FC = () => {
                                         <p className="text-slate-500 text-xs mt-1">{confirmDetails.fee.toFixed(6)} {confirmDetails.token}</p>
                                     )}
                                 </div>
+                                
+                                {/* Greeting Card (free) */}
+                                {confirmDetails.hasCard && (
+                                    <div className="pb-3 border-b border-slate-700">
+                                        <p className="text-slate-400 text-xs mb-1">Greeting Card</p>
+                                        <p className="text-green-400 font-medium">FREE</p>
+                                    </div>
+                                )}
                                 
                                 {/* To whom */}
                                 <div className="pb-3 border-b border-slate-700">
@@ -1094,6 +1160,13 @@ const GiftPage: React.FC = () => {
                             )}
                         </div>
                     </div>
+
+                    {/* Card Upsell Section */}
+                    <CardUpsellSection
+                        recipientName={recipientName}
+                        selectedCard={selectedCard}
+                        onCardSelect={setSelectedCard}
+                    />
 
                     {/* Amount Input with Mode Toggle */}
                     <div>
