@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 // 🔥 Import usePrivy from main package
 import { usePrivy } from '@privy-io/react-auth';
 // 🔥 Import useWallets from SOLANA package (returns Solana wallets)
@@ -24,10 +24,55 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const { ready, authenticated, user: privyUser, login: privyLogin, logout: privyLogout, getAccessToken } = usePrivy();
   const { wallets, ready: walletsReady } = useWallets();
   const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(false); // Start with false - show UI immediately
   const [loadingStage, setLoadingStage] = useState<'authenticating' | 'setting-up' | 'preparing' | 'ready'>('authenticating');
   const [retryCount, setRetryCount] = useState(0);
   const [showUsernameSetup, setShowUsernameSetup] = useState(false);
+  const isSyncingRef = useRef(false); // Prevent concurrent syncs
+  const lastSyncedWalletRef = useRef<string | null>(null); // Track last synced wallet
+
+  const syncBackendUser = useCallback(
+    async (walletAddress: string, email: string) => {
+      if (!privyUser?.id || !walletAddress || !email) {
+        console.warn('Missing data for backend sync', { walletAddress, email, hasPrivyUser: !!privyUser?.id });
+        return null;
+      }
+
+      // Check if we're already syncing this exact wallet
+      if (lastSyncedWalletRef.current === walletAddress) {
+        console.log('⏸️ Already synced this wallet, skipping backend call');
+        return null;
+      }
+
+      setLoadingStage('preparing');
+      // Only show loading if we don't have a user yet (first time)
+      setIsLoading(true);
+
+      try {
+        const token = await getAccessToken();
+        if (token) {
+          setAuthToken(token);
+        }
+
+        const backendUser = await userService.getOrCreateUser({
+          privy_did: privyUser.id,
+          wallet_address: walletAddress,
+          email,
+        });
+
+        setUser(backendUser);
+        setLoadingStage('ready');
+        lastSyncedWalletRef.current = walletAddress; // Mark as synced
+        return backendUser;
+      } catch (error) {
+        console.error('❌ Error syncing backend user:', error);
+        throw error;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [getAccessToken, privyUser]
+  );
 
   // 🔥 CRITICAL: Helper to detect Solana wallets robustly
   const isSolanaWallet = useCallback((w: any): boolean => {
@@ -117,18 +162,32 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [wallets, privyUser, isSolanaWallet]);
 
   const syncUser = useCallback(async () => {
+    // Prevent concurrent syncs
+    if (isSyncingRef.current) {
+      console.log('⏸️ Sync already in progress, skipping...');
+      return;
+    }
+
     console.log('🔄 syncUser called', { ready, walletsReady, authenticated, walletsCount: wallets.length, retryCount });
     
     if (!ready || !walletsReady) {
-      console.log('⏸️ Not ready yet');
-      setLoadingStage('authenticating');
-      setIsLoading(true);
+      console.log('⏸️ Not ready yet - Privy initializing');
+      // Don't block UI - let it render while Privy initializes
+      setIsLoading(false);
       return;
     }
 
     if (authenticated && privyUser) {
       // 🔥 Get Solana wallet (works for existing users with both wallets)
       const solanaWalletResult = getSolanaWallet();
+      
+      // Check if we already synced this wallet (prevent infinite loop)
+      const currentWalletAddress = solanaWalletResult?.wallet?.address || solanaWalletResult?.address;
+      if (currentWalletAddress && lastSyncedWalletRef.current === currentWalletAddress && user) {
+        console.log('✅ Already synced this wallet, skipping...');
+        setIsLoading(false);
+        return;
+      }
       
       // If no wallets yet in useWallets(), check linkedAccounts and retry
       if (wallets.length === 0) {
@@ -142,47 +201,32 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
           if (email && walletAddress) {
             try {
-              console.log('🔑 Fetching auth token...');
-              const token = await getAccessToken();
-              console.log('🔑 Token retrieved:', token ? `${token.substring(0, 20)}...` : 'null');
-              setAuthToken(token);
-              console.log('✅ Auth token set for API requests');
-              
-              console.log('📡 Creating/fetching backend user with Solana wallet from linkedAccounts...');
-              console.log('📋 User data:', { privy_did: privyUser.id, wallet_address: walletAddress, email });
-              const backendUser = await userService.getOrCreateUser({
-                privy_did: privyUser.id,
-                wallet_address: walletAddress,
-                email: email,
-              });
-              console.log('✅ Backend user synced:', backendUser);
-              setUser(backendUser);
-              setLoadingStage('ready');
-              setTimeout(() => {
-                setIsLoading(false);
-              }, 300);
+              isSyncingRef.current = true;
+              const backendUser = await syncBackendUser(walletAddress, email);
+              if (backendUser) {
+                lastSyncedWalletRef.current = walletAddress;
+              }
               return;
-            } catch (error) {
-              console.error('❌ Error syncing user:', error);
-              setIsLoading(false);
+            } catch {
               return;
+            } finally {
+              isSyncingRef.current = false;
             }
           }
         }
         
-        // If no Solana wallet found in linkedAccounts, retry a few times
-        if (retryCount < 5) {
-          console.log(`⏳ Setting up your account (attempt ${retryCount + 1}/5)...`);
+        // If no Solana wallet found in linkedAccounts, retry a few times (faster)
+        if (retryCount < 3) {
+          console.log(`⏳ Setting up your account (attempt ${retryCount + 1}/3)...`);
           setLoadingStage('setting-up');
-          setIsLoading(true);
           
-          // Wait 1 second for wallet to appear in useWallets()
+          // Wait 300ms for wallet to appear in useWallets() (faster retries)
           setTimeout(() => {
             setRetryCount(prev => prev + 1);
-          }, 1000);
+          }, 300);
           return;
         } else {
-          console.error('❌ No Solana wallet found after 5 attempts. Please refresh the page.');
+          console.error('❌ No Solana wallet found after 3 attempts.');
           console.log('📋 Final linkedAccounts state:', privyUser.linkedAccounts);
           console.log('📋 Available wallets:', wallets);
           setIsLoading(false);
@@ -218,22 +262,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
 
         try {
-          console.log('📡 Creating/fetching backend user...');
-          const backendUser = await userService.getOrCreateUser({
-            privy_did: privyUser.id,
-            wallet_address: walletAddress,
-            email: email,
-          });
-
-          console.log('✅ Backend user synced:', backendUser);
-          setUser(backendUser);
-          setLoadingStage('ready');
-          setTimeout(() => {
-            setIsLoading(false);
-          }, 300);
-        } catch (error) {
-          console.error('❌ Sync error:', error);
-          setIsLoading(false);
+          isSyncingRef.current = true;
+          const backendUser = await syncBackendUser(walletAddress, email);
+          if (backendUser) {
+            lastSyncedWalletRef.current = walletAddress;
+          }
+        } catch {
+          // error already logged
+        } finally {
+          isSyncingRef.current = false;
         }
       } else {
         // No Solana wallet found
@@ -255,19 +292,24 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           // TODO: Show UI to create Solana wallet or handle this case
         }
         
-        setIsLoading(false);
         return;
       }
     } else {
       console.log('👤 Not authenticated');
       setUser(null);
       setRetryCount(0);
-      setIsLoading(false);
+      setIsLoading(false); // Always allow UI to render when not authenticated
+      lastSyncedWalletRef.current = null; // Reset on logout
     }
-  }, [ready, walletsReady, authenticated, privyUser, wallets, retryCount, getAccessToken, getSolanaWallet, isSolanaWallet]);
+  }, [ready, walletsReady, authenticated, privyUser, wallets, retryCount, getSolanaWallet, isSolanaWallet, syncBackendUser]);
 
   useEffect(() => {
-    syncUser();
+    // Debounce sync calls to prevent rapid-fire updates
+    const timeoutId = setTimeout(() => {
+      syncUser();
+    }, 100); // Small delay to batch rapid changes
+
+    return () => clearTimeout(timeoutId);
   }, [syncUser]);
 
   // Set auth token when user is authenticated

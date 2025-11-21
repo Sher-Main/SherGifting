@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePrivy } from '@privy-io/react-auth';
@@ -7,15 +7,20 @@ import { tokenService, giftService, tiplinkService, heliusService, feeService, p
 import { Token, TokenBalance, ResolveRecipientResponse } from '../types';
 import Spinner from '../components/Spinner';
 import { ArrowLeftIcon } from '../components/icons';
-import { CardUpsellSection } from '../components/CardUpsellSection';
 import { CARD_UPSELL_PRICE } from '../lib/cardTemplates';
 import QRCode from 'qrcode';
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import { connection } from '../services/solana';
 import bs58 from 'bs58';
 
+const CardUpsellSection = React.lazy(() =>
+    import('../components/CardUpsellSection').then((module) => ({
+        default: module.CardUpsellSection,
+    }))
+);
+
 const GiftPage: React.FC = () => {
-    const { user, refreshUser } = useAuth();
+    const { user, refreshUser, isLoading: authLoading } = useAuth();
     const { ready, authenticated, user: privyUser } = usePrivy();
     const { signAndSendTransaction } = useSignAndSendTransaction();
     const { wallets, ready: walletsReady } = useWallets();
@@ -31,6 +36,7 @@ const GiftPage: React.FC = () => {
     const [walletReady, setWalletReady] = useState(false);
     const [feeWalletAddress, setFeeWalletAddress] = useState<string | null>(null);
     const [feePercentage, setFeePercentage] = useState<number>(0.001); // Default 0.1%
+    const showFormSkeleton = authLoading || isLoadingTokens || !walletReady || !user?.wallet_address;
     
     const [recipientInput, setRecipientInput] = useState('');
     const [resolvedRecipient, setResolvedRecipient] = useState<ResolveRecipientResponse | null>(null);
@@ -112,15 +118,22 @@ const GiftPage: React.FC = () => {
     }, [wallets, walletsReady, privyUser]);
 
     useEffect(() => {
+        if (!user?.wallet_address) {
+            setIsLoadingTokens(false);
+            return;
+        }
+
+        let cancelled = false;
+        let idleHandle: number | null = null;
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
         const fetchTokensAndBalances = async () => {
-            if (!user?.wallet_address) return;
+            if (cancelled) return;
             setIsLoadingTokens(true);
             try {
-                // Fetch all wallet balances (non-zero tokens only)
-                const balances = await heliusService.getTokenBalances(user.wallet_address);
+                const balances = await heliusService.getTokenBalances(user.wallet_address!);
                 setWalletBalances(balances);
                 
-                // Filter to only non-zero tokens and sort alphabetically
                 const nonZeroTokens = balances
                     .filter(b => b.balance > 0)
                     .sort((a, b) => a.symbol.localeCompare(b.symbol))
@@ -134,12 +147,10 @@ const GiftPage: React.FC = () => {
                 
                 setTokens(nonZeroTokens);
                 
-                // Set default selected token (first non-zero token, or SOL if available)
                 if (nonZeroTokens.length > 0) {
                     const defaultToken = nonZeroTokens.find(t => t.symbol === 'SOL') || nonZeroTokens[0];
                     setSelectedToken(defaultToken);
                     
-                    // Set initial balance for selected token
                     const tokenBalance = balances.find(b => b.symbol === defaultToken.symbol);
                     setUserBalance(tokenBalance?.balance || 0);
                 }
@@ -149,10 +160,39 @@ const GiftPage: React.FC = () => {
                 setError('Failed to fetch tokens and balances.');
                 console.error(e);
             } finally {
-                setIsLoadingTokens(false);
+                if (!cancelled) {
+                    setIsLoadingTokens(false);
+                }
             }
         };
-        fetchTokensAndBalances();
+
+        const scheduleFetch = () => {
+            if (typeof window !== 'undefined' && (window as any).requestIdleCallback) {
+                idleHandle = (window as any).requestIdleCallback(() => {
+                    if (!cancelled) {
+                        fetchTokensAndBalances();
+                    }
+                }, { timeout: 1200 });
+            } else {
+                timeoutId = setTimeout(() => {
+                    if (!cancelled) {
+                        fetchTokensAndBalances();
+                    }
+                }, 80);
+            }
+        };
+
+        scheduleFetch();
+
+        return () => {
+            cancelled = true;
+            if (idleHandle !== null && typeof (window as any).cancelIdleCallback === 'function') {
+                (window as any).cancelIdleCallback(idleHandle);
+            }
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
+        };
     }, [user]);
     
     // Price fetching function
@@ -888,16 +928,6 @@ const GiftPage: React.FC = () => {
             setError('Failed to copy link');
         }
     };
-
-
-    if (isLoadingTokens) {
-        return (
-            <div className="flex justify-center items-center h-screen">
-                <Spinner />
-            </div>
-        );
-    }
-
     return (
         <div className="animate-fade-in">
             {/* Confirmation Modal */}
@@ -1071,35 +1101,39 @@ const GiftPage: React.FC = () => {
             
             <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-8 shadow-lg">
                 <h1 className="text-3xl font-bold text-center mb-6">Send a Gift 🎁</h1>
-                
-                {/* User Balance Info */}
-                <div className="bg-gradient-to-r from-sky-500/10 to-purple-500/10 border border-sky-500/30 rounded-lg p-4 mb-6">
-                    <p className="text-slate-400 text-sm">Your Balance</p>
-                    {tokenPrice && tokenPrice > 0 ? (
-                        <>
-                            <p className="text-2xl font-bold text-white">
-                                ${(userBalance * tokenPrice).toFixed(3)} USD
-                            </p>
-                            <p className="text-sm text-slate-400 mt-1">
-                                {userBalance.toFixed(4)} {selectedToken?.symbol || 'SOL'}
-                            </p>
-                        </>
-                    ) : (
-                        <p className="text-2xl font-bold text-white">
-                            {userBalance.toFixed(4)} {selectedToken?.symbol || 'SOL'}
-                        </p>
-                    )}
-                    <p className="text-xs text-slate-500 mt-1">Available for gifting</p>
-                    {userBalance < 0.01 && (
-                        <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-                            <p className="text-yellow-200 text-sm">
-                                ⚠️ Low balance. Add {selectedToken?.symbol || 'tokens'} to your wallet in the "Add Funds" page.
-                            </p>
+
+                {showFormSkeleton ? (
+                    <GiftFormSkeleton />
+                ) : (
+                    <>
+                        {/* User Balance Info */}
+                        <div className="bg-gradient-to-r from-sky-500/10 to-purple-500/10 border border-sky-500/30 rounded-lg p-4 mb-6">
+                            <p className="text-slate-400 text-sm">Your Balance</p>
+                            {tokenPrice && tokenPrice > 0 ? (
+                                <>
+                                    <p className="text-2xl font-bold text-white">
+                                        ${(userBalance * tokenPrice).toFixed(3)} USD
+                                    </p>
+                                    <p className="text-sm text-slate-400 mt-1">
+                                        {userBalance.toFixed(4)} {selectedToken?.symbol || 'SOL'}
+                                    </p>
+                                </>
+                            ) : (
+                                <p className="text-2xl font-bold text-white">
+                                    {userBalance.toFixed(4)} {selectedToken?.symbol || 'SOL'}
+                                </p>
+                            )}
+                            <p className="text-xs text-slate-500 mt-1">Available for gifting</p>
+                            {userBalance < 0.01 && (
+                                <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                                    <p className="text-yellow-200 text-sm">
+                                        ⚠️ Low balance. Add {selectedToken?.symbol || 'tokens'} to your wallet in the "Add Funds" page.
+                                    </p>
+                                </div>
+                            )}
                         </div>
-                    )}
-                </div>
-                
-                <form onSubmit={handleSendGift} className="space-y-6">
+
+                        <form onSubmit={handleSendGift} className="space-y-6">
                     {/* Token Selector */}
                     <div>
                         <label htmlFor="token" className="block text-sm font-medium text-slate-300 mb-2">
@@ -1162,11 +1196,13 @@ const GiftPage: React.FC = () => {
                     </div>
 
                     {/* Card Upsell Section */}
-                    <CardUpsellSection
-                        recipientName={recipientName}
-                        selectedCard={selectedCard}
-                        onCardSelect={setSelectedCard}
-                    />
+                    <Suspense fallback={<CardUpsellFallback />}>
+                        <CardUpsellSection
+                            recipientName={recipientName}
+                            selectedCard={selectedCard}
+                            onCardSelect={setSelectedCard}
+                        />
+                    </Suspense>
 
                     {/* Amount Input with Mode Toggle */}
                     <div>
@@ -1371,10 +1407,26 @@ const GiftPage: React.FC = () => {
                             '🎁 Send Gift'
                         )}
                     </button>
-                </form>
+                        </form>
+                    </>
+                )}
             </div>
         </div>
     );
 };
+
+const GiftFormSkeleton: React.FC = () => (
+    <div className="space-y-6 animate-pulse">
+        <div className="h-24 rounded-xl bg-slate-900/40 border border-slate-700" />
+        {Array.from({ length: 3 }).map((_, index) => (
+            <div key={index} className="h-28 rounded-xl bg-slate-900/40 border border-slate-700" />
+        ))}
+        <div className="h-12 rounded-xl bg-slate-900/40 border border-slate-700" />
+    </div>
+);
+
+const CardUpsellFallback: React.FC = () => (
+    <div className="h-48 rounded-2xl border border-slate-700 bg-slate-900/40 animate-pulse" />
+);
 
 export default GiftPage;

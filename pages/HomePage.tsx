@@ -4,36 +4,74 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { heliusService } from '../services/api';
 import { TokenBalance } from '../types';
-import Spinner from '../components/Spinner';
 import { GiftIcon, WalletIcon, ArrowUpTrayIcon } from '../components/icons';
 
 const HomePage: React.FC = () => {
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [balances, setBalances] = useState<TokenBalance[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const showSkeleton = authLoading || isLoading || !user?.wallet_address;
 
   useEffect(() => {
+    if (!user?.wallet_address) {
+      setBalances([]);
+      setIsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    let idleHandle: number | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
     const fetchBalances = async () => {
-      if (!user?.wallet_address) return;
+      if (cancelled) return;
       setIsLoading(true);
       setError(null);
       try {
-        const fetchedBalances = await heliusService.getTokenBalances(user.wallet_address);
-        // Filter non-zero balances and sort alphabetically (backend already does this, but ensure it here too)
+        const fetchedBalances = await heliusService.getTokenBalances(user.wallet_address!);
         const nonZeroBalances = fetchedBalances
-          .filter(b => b.balance > 0)
+          .filter((b) => b.balance > 0)
           .sort((a, b) => a.symbol.localeCompare(b.symbol));
         setBalances(nonZeroBalances);
       } catch (e) {
         setError('Failed to fetch token balances.');
         console.error(e);
       } finally {
-        setIsLoading(false);
+        if (!cancelled) {
+          setIsLoading(false);
+        }
       }
     };
-    fetchBalances();
+
+    const scheduleFetch = () => {
+      if (typeof window !== 'undefined' && (window as any).requestIdleCallback) {
+        idleHandle = (window as any).requestIdleCallback(() => {
+          if (!cancelled) {
+            fetchBalances();
+          }
+        }, { timeout: 1000 });
+      } else {
+        timeoutId = setTimeout(() => {
+          if (!cancelled) {
+            fetchBalances();
+          }
+        }, 50);
+      }
+    };
+
+    scheduleFetch();
+
+    return () => {
+      cancelled = true;
+      if (idleHandle !== null && typeof (window as any).cancelIdleCallback === 'function') {
+        (window as any).cancelIdleCallback(idleHandle);
+      }
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
   }, [user]);
 
   const totalBalanceUSD = useMemo(() => {
@@ -58,7 +96,11 @@ const HomePage: React.FC = () => {
             <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-6 shadow-lg space-y-6">
                 <div>
                   <p className="text-slate-400 text-sm">Total Balance</p>
-                  <p className="text-4xl font-bold text-white">{formatCurrency(totalBalanceUSD)}</p>
+                  {showSkeleton ? (
+                    <div className="mt-2 h-10 w-40 rounded-lg bg-slate-700 animate-pulse" />
+                  ) : (
+                    <p className="text-4xl font-bold text-white">{formatCurrency(totalBalanceUSD)}</p>
+                  )}
                 </div>
                 <div className="flex flex-col space-y-3">
                     <button 
@@ -87,9 +129,11 @@ const HomePage: React.FC = () => {
         {/* Right Column: Token List */}
         <div className="lg:col-span-2 bg-slate-800/50 border border-slate-700 rounded-2xl shadow-lg">
           <h2 className="text-xl font-bold p-6 border-b border-slate-700">Your Assets</h2>
-          {isLoading ? (
-            <div className="flex justify-center items-center h-64">
-              <Spinner />
+          {showSkeleton ? (
+            <div className="p-6 space-y-4">
+              {Array.from({ length: 3 }).map((_, index) => (
+                <BalanceRowSkeleton key={index} />
+              ))}
             </div>
           ) : error ? (
             <div className="flex justify-center items-center h-64">
@@ -141,4 +185,20 @@ const HomePage: React.FC = () => {
 };
 
 export default HomePage;
+
+const BalanceRowSkeleton: React.FC = () => (
+  <div className="flex items-center justify-between border border-slate-700 rounded-xl p-4 animate-pulse bg-slate-900/40">
+    <div className="flex items-center gap-4">
+      <div className="w-12 h-12 rounded-full bg-slate-700" />
+      <div className="space-y-2">
+        <div className="h-4 w-24 bg-slate-700 rounded" />
+        <div className="h-3 w-32 bg-slate-800 rounded" />
+      </div>
+    </div>
+    <div className="space-y-2 text-right">
+      <div className="h-4 w-16 bg-slate-700 rounded" />
+      <div className="h-3 w-20 bg-slate-800 rounded" />
+    </div>
+  </div>
+);
 

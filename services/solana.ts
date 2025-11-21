@@ -6,7 +6,11 @@ const RPC_URL = HELIUS_API_KEY
   ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`
   : 'https://api.mainnet.solana.com';
 
-export const connection = new Connection(RPC_URL, 'confirmed');
+export const connection = new Connection(RPC_URL, {
+  commitment: 'confirmed',
+  confirmTransactionInitialTimeout: 60_000,
+  disableRetryOnRateLimit: false,
+});
 
 export async function createTransferToTipLinkTransaction(
   fromPublicKey: PublicKey,

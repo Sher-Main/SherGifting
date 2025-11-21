@@ -10,7 +10,7 @@ const LoginPage: React.FC = () => {
   // ✅ Redirect if already authenticated
   useEffect(() => {
     if (isAuthenticated && !isLoading) {
-      navigate('/home');
+      navigate('/');
     }
   }, [isAuthenticated, isLoading, navigate]);
 

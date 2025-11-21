@@ -72,6 +72,36 @@ export const setAuthToken = (token: string | null) => {
   }
 };
 
+type ResponseCacheEntry<T> = { data: T; timestamp: number };
+const responseCache = new Map<string, ResponseCacheEntry<any>>();
+const CACHE_TTLS = {
+  balances: 15_000,
+  history: 15_000,
+};
+
+const getCachedResponse = <T>(key: string, ttlMs: number): T | null => {
+  const entry = responseCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > ttlMs) {
+    responseCache.delete(key);
+    return null;
+  }
+  return entry.data as T;
+};
+
+const setCachedResponse = <T>(key: string, data: T) => {
+  responseCache.set(key, { data, timestamp: Date.now() });
+};
+
+const invalidateCache = (key: string) => {
+  responseCache.delete(key);
+};
+
+const getGiftHistoryCacheKey = () => {
+  const authHeader = apiClient.defaults.headers.common['Authorization'] || 'anon';
+  return `gift_history:${authHeader.slice(-12)}`;
+};
+
 export const userService = {
   getOrCreateUser: async (userData: {
     privy_did: string;
@@ -85,9 +115,22 @@ export const userService = {
 
 export const heliusService = {
   getTokenBalances: async (walletAddress: string): Promise<TokenBalance[]> => {
-    try {
+    const cacheKey = `wallet_balances:${walletAddress}`;
+    const cached = getCachedResponse<TokenBalance[]>(cacheKey, CACHE_TTLS.balances);
+
+    const fetchLatest = async () => {
       const response = await apiClient.get(`/wallet/balances/${walletAddress}`);
+      setCachedResponse(cacheKey, response.data);
       return response.data;
+    };
+
+    if (cached) {
+      fetchLatest().catch((error) => console.error('Error refreshing balances:', error));
+      return cached;
+    }
+
+    try {
+      return await fetchLatest();
     } catch (error) {
       console.error('Error fetching token balances:', error);
       return [];
@@ -165,6 +208,7 @@ export const giftService = {
     signature: string;
   }> => {
     const response = await apiClient.post('/gifts/create', giftData);
+    invalidateCache(getGiftHistoryCacheKey());
     return response.data;
   },
 
@@ -188,6 +232,7 @@ export const giftService = {
     token_symbol: string;
   }> => {
     const response = await apiClient.post(`/gifts/${giftId}/claim`, claimData);
+    invalidateCache(getGiftHistoryCacheKey());
     return response.data;
   },
 
@@ -198,12 +243,31 @@ export const giftService = {
     token_symbol: string;
   }> => {
     const response = await apiClient.post('/gifts/claim', { claim_token: claimToken });
+    invalidateCache(getGiftHistoryCacheKey());
     return response.data;
   },
 
   getGiftHistory: async (): Promise<Gift[]> => {
-    const response = await apiClient.get('/gifts/history');
-    return response.data;
+    const cacheKey = getGiftHistoryCacheKey();
+    const cached = getCachedResponse<Gift[]>(cacheKey, CACHE_TTLS.history);
+
+    const fetchHistory = async () => {
+      const response = await apiClient.get('/gifts/history');
+      setCachedResponse(cacheKey, response.data);
+      return response.data;
+    };
+
+    if (cached) {
+      fetchHistory().catch((error) => console.error('Error refreshing gift history:', error));
+      return cached;
+    }
+
+    try {
+      return await fetchHistory();
+    } catch (error) {
+      console.error('Error fetching gift history:', error);
+      return [];
+    }
   },
 };
 

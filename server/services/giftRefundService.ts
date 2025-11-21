@@ -10,7 +10,15 @@ export class GiftRefundService {
 
   constructor() {
     const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
-    this.connection = new Connection(rpcUrl, 'confirmed');
+    this.connection = new Connection(rpcUrl, {
+      commitment: 'confirmed',
+      confirmTransactionInitialTimeout: 60_000,
+      disableRetryOnRateLimit: false,
+      httpHeaders: {
+        'Content-Type': 'application/json',
+        'Accept-Encoding': 'gzip',
+      },
+    });
     this.encryptionKey = process.env.TIPLINK_ENCRYPTION_KEY || '';
 
     if (!this.encryptionKey || this.encryptionKey.length < 32) {

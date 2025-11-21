@@ -9,6 +9,8 @@ import { authenticateToken, AuthRequest } from './authMiddleware';
 import { sendGiftNotification } from './emailService';
 import { generateSecureToken, encryptTipLink, decryptTipLink } from './utils/encryption';
 import { generatePersonalizedCardUrl } from './utils/cloudinary';
+import { sharedCache } from './utils/cache';
+import { startKeepAlivePing } from './utils/keepAlive';
 import {
   insertGift,
   getGiftsBySender,
@@ -59,6 +61,37 @@ interface Gift {
 
 const app = express();
 app.use(express.json());
+
+const PERF_LOG_ENDPOINTS = [
+  '/api/wallet/balances',
+  '/api/gifts/create',
+  '/api/gifts/history',
+  '/api/gifts/info',
+  '/api/gifts/claim',
+  '/api/withdrawals/create',
+];
+
+app.use((req, res, next) => {
+  const shouldTrack = PERF_LOG_ENDPOINTS.some((endpoint) =>
+    req.originalUrl.startsWith(endpoint)
+  );
+
+  if (!shouldTrack) {
+    return next();
+  }
+
+  const start = process.hrtime.bigint();
+
+  res.on('finish', () => {
+    const end = process.hrtime.bigint();
+    const durationMs = Number(end - start) / 1_000_000;
+    console.log(
+      `⏱️ [perf] ${req.method} ${req.originalUrl} → ${res.statusCode} in ${durationMs.toFixed(2)}ms`
+    );
+  });
+
+  next();
+});
 
 // Rate limiting middleware
 const claimLimiter = rateLimit({
@@ -147,7 +180,15 @@ const RPC_URL = HELIUS_API_KEY
 
 console.log('🌐 Connecting to Solana Mainnet RPC:', RPC_URL.replace(HELIUS_API_KEY || '', '***'));
 
-const connection = new Connection(RPC_URL, 'confirmed');
+const connection = new Connection(RPC_URL, {
+  commitment: 'confirmed',
+  confirmTransactionInitialTimeout: 60_000,
+  disableRetryOnRateLimit: false,
+  httpHeaders: {
+    'Content-Type': 'application/json',
+    'Accept-Encoding': 'gzip',
+  },
+});
 
 // Test connection
 (async () => {
@@ -394,41 +435,62 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
       return res.status(400).json({ error: 'Wallet address is required' });
     }
 
+    const cacheKey = `wallet_balances:${address}`;
+    const cachedBalances = sharedCache.get<any[]>(cacheKey);
+    if (cachedBalances) {
+      console.log(`💾 Cache hit for wallet balances (${address})`);
+      return res.json(cachedBalances);
+    }
+
     console.log(`📊 Fetching balances for wallet: ${address}`);
+    const ownerPublicKey = new PublicKey(address);
 
-    // Get SOL balance
-    const solBalance = await connection.getBalance(new PublicKey(address));
-    const solInLamports = solBalance / LAMPORTS_PER_SOL;
-
-    // Get SOL price from Jupiter Tokens API V2 (same API, includes price!)
     const solMint = 'So11111111111111111111111111111111111111112';
     const solSearchUrl = `https://lite-api.jup.ag/tokens/v2/search?query=${solMint}`;
-    const solResponse = await fetch(solSearchUrl);
-    const solData = await solResponse.json();
-    const solToken = Array.isArray(solData) && solData.length > 0 ? solData[0] : null;
-    
-    // 🔥 V2 includes price as usdPrice in the response
-    const solPriceValue = solToken?.usdPrice;
-    const solPrice: number = (solToken && typeof solPriceValue === 'number') 
-      ? solPriceValue 
-      : 0;
+    const solMetaCacheKey = 'token_meta:sol';
+    let solTokenMeta = sharedCache.get<any>(solMetaCacheKey) || null;
+    let cachedSolPrice = getCachedPrice(solMint);
+    const shouldFetchSolMeta = !solTokenMeta || cachedSolPrice === null;
+
+    const [solBalanceLamports, tokenAccounts, fetchedSolMeta] = await Promise.all([
+      connection.getBalance(ownerPublicKey),
+      connection.getParsedTokenAccountsByOwner(ownerPublicKey, { programId: TOKEN_PROGRAM_ID }),
+      shouldFetchSolMeta
+        ? fetch(solSearchUrl)
+            .then(async (response) => {
+              if (!response.ok) {
+                throw new Error(`Jupiter SOL search failed (${response.status})`);
+              }
+              const solData = await response.json();
+              return Array.isArray(solData) && solData.length > 0 ? solData[0] : null;
+            })
+            .catch((err) => {
+              console.warn('⚠️ Failed to fetch SOL metadata:', err);
+              return null;
+            })
+        : Promise.resolve(null),
+    ]);
+
+    if (fetchedSolMeta) {
+      solTokenMeta = fetchedSolMeta;
+      sharedCache.set(solMetaCacheKey, fetchedSolMeta, 5 * 60 * 1000);
+      const fetchedPrice = typeof fetchedSolMeta.usdPrice === 'number' ? fetchedSolMeta.usdPrice : 0;
+      if (fetchedPrice > 0) {
+        cachedSolPrice = fetchedPrice;
+        setCachedPrice(solMint, fetchedPrice);
+      }
+    }
+
+    const solPrice = typeof cachedSolPrice === 'number' ? cachedSolPrice : 0;
+    const solInLamports = solBalanceLamports / LAMPORTS_PER_SOL;
 
     console.log(`💰 SOL Balance: ${solInLamports.toFixed(4)} SOL ($${(solInLamports * solPrice).toFixed(2)})`);
-
-    // Get token accounts
-    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
-      new PublicKey(address),
-      { programId: TOKEN_PROGRAM_ID }
-    );
-
     console.log(`🪙 Found ${tokenAccounts.value.length} token accounts`);
 
-    // Extract tokens with balance > 0
     const tokenData = tokenAccounts.value
       .map((account) => {
         const parsed = account.account.data.parsed.info;
         const amount = parsed.tokenAmount.uiAmount;
-        
         if (amount > 0) {
           return {
             mint: parsed.mint,
@@ -442,17 +504,17 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
 
     console.log(`✅ Found ${tokenData.length} tokens with balance > 0`);
 
-    // Fetch ALL token info from Jupiter (metadata + prices)
-    const mintAddresses = tokenData.map(t => t.mint);
+    const mintAddresses = tokenData.map((t) => t.mint);
     const jupiterTokenMap = await fetchJupiterTokenInfo(mintAddresses);
 
-    // Build response with SOL first
     const balances = [
       {
         address: solMint,
         symbol: 'SOL',
-        name: solToken?.name || 'Wrapped SOL',
-        logoURI: solToken?.icon || 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
+        name: solTokenMeta?.name || 'Wrapped SOL',
+        logoURI:
+          solTokenMeta?.icon ||
+          'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
         decimals: 9,
         balance: solInLamports,
         usdValue: solInLamports * solPrice,
@@ -461,15 +523,10 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
       },
     ];
 
-    // Add SPL tokens with Jupiter data
     for (const token of tokenData) {
       const jupiterInfo = jupiterTokenMap.get(token.mint);
-      
       if (jupiterInfo) {
-        // Found in Jupiter - use their data
-        // jupiterInfo.price is guaranteed to be a number from the interface
         const usdValue: number = token.balance * jupiterInfo.price;
-        
         balances.push({
           address: token.mint,
           symbol: jupiterInfo.symbol,
@@ -477,16 +534,13 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
           logoURI: jupiterInfo.logoURI,
           decimals: token.decimals,
           balance: token.balance,
-          usdValue: usdValue,
+          usdValue,
           verified: jupiterInfo.verified,
           tags: jupiterInfo.tags,
         });
-        
         console.log(`📦 ${jupiterInfo.symbol}: ${token.balance.toFixed(4)} ($${usdValue.toFixed(2)}) ${jupiterInfo.verified ? '✓' : ''}`);
       } else {
-        // Not found in Jupiter - use fallback with truncated mint
         const shortMint = `${token.mint.substring(0, 4)}...${token.mint.substring(token.mint.length - 4)}`;
-        
         balances.push({
           address: token.mint,
           symbol: shortMint,
@@ -494,27 +548,25 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
           logoURI: '',
           decimals: token.decimals,
           balance: token.balance,
-          usdValue: 0,  // Explicitly 0 as a number
+          usdValue: 0,
           verified: false,
           tags: ['unknown'],
         });
-        
         console.warn(`⚠️ No data found for: ${token.mint}`);
       }
     }
 
-    // Sort by USD value (highest first)
     balances.sort((a, b) => b.usdValue - a.usdValue);
-
     const totalUsdValue: number = balances.reduce((sum, t) => sum + t.usdValue, 0);
     console.log(`✅ Returning ${balances.length} balances (total: $${totalUsdValue.toFixed(2)})`);
-    
+
+    sharedCache.set(cacheKey, balances, 30 * 1000);
     res.json(balances);
   } catch (error) {
     console.error('❌ Error fetching wallet balances:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to fetch wallet balances',
-      details: error instanceof Error ? error.message : 'Unknown error'
+      details: error instanceof Error ? error.message : 'Unknown error',
     });
   }
 });
@@ -882,6 +934,7 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
         card_recipient_name: card_recipient_name || null,
         card_price_usd: card_price_usd || (hasCard ? 0.00 : null), // Free for testing
       });
+      sharedCache.delete(`gift_history:${sender_did}`);
       console.log('✅ Gift saved to database with security fields and card info:', newGift.id);
     } catch (dbError: any) {
       console.error('⚠️ Failed to save gift to database, using in-memory storage:', dbError?.message);
@@ -953,6 +1006,13 @@ app.get('/api/gifts/history', authenticateToken, async (req: AuthRequest, res) =
   }
   
   try {
+    const cacheKey = `gift_history:${sender_did}`;
+    const cachedHistory = sharedCache.get<any[]>(cacheKey);
+    if (cachedHistory) {
+      console.log(`💾 Cache hit for gift history (${sender_did})`);
+      return res.json(cachedHistory);
+    }
+
     // Try to get from database first
     const userGifts = await getGiftsBySender(sender_did);
     
@@ -981,6 +1041,7 @@ app.get('/api/gifts/history', authenticateToken, async (req: AuthRequest, res) =
       refund_transaction_signature: gift.refund_transaction_signature || null,
     }));
     
+    sharedCache.set(cacheKey, formattedGifts, 30 * 1000);
     res.json(formattedGifts);
   } catch (dbError: any) {
     console.error('⚠️ Failed to fetch gifts from database, using in-memory storage:', dbError?.message);
@@ -1516,6 +1577,10 @@ async function processGiftClaim(
       }
     }
 
+    if (gift.sender_did) {
+      sharedCache.delete(`gift_history:${gift.sender_did}`);
+    }
+
     return res.json({
       success: true,
       signature,
@@ -1650,6 +1715,14 @@ app.post('/api/withdrawals/create', authenticateToken, async (req: AuthRequest, 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+const KEEP_ALIVE_URL =
+  process.env.KEEP_ALIVE_URL ||
+  (process.env.RENDER_EXTERNAL_URL ? `${process.env.RENDER_EXTERNAL_URL}/health` : undefined);
+
+if (KEEP_ALIVE_URL && process.env.NODE_ENV === 'production') {
+  startKeepAlivePing(KEEP_ALIVE_URL, 5 * 60 * 1000);
+}
 
 // Initialize background jobs
 console.log('🚀 Initializing background jobs...');
