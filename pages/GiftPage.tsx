@@ -61,6 +61,7 @@ const GiftPage: React.FC = () => {
     const [tokenAmount, setTokenAmount] = useState<string>('');
     const [priceLoading, setPriceLoading] = useState(false);
     const [priceError, setPriceError] = useState<string | null>(null);
+    const [balanceError, setBalanceError] = useState<string | null>(null);
     
     // Card upsell state
     const [selectedCard, setSelectedCard] = useState<string | null>(null);
@@ -156,6 +157,14 @@ const GiftPage: React.FC = () => {
                 }
                 
                 console.log(`💰 Found ${nonZeroTokens.length} token(s) with non-zero balance`);
+                
+                // Validate balance after refresh if amount is entered
+                if (tokenAmount && !isNaN(parseFloat(tokenAmount))) {
+                    const numValue = parseFloat(tokenAmount);
+                    if (numValue > 0) {
+                        validateBalance(numValue).catch(console.error);
+                    }
+                }
             } catch (e) {
                 setError('Failed to fetch tokens and balances.');
                 console.error(e);
@@ -225,6 +234,14 @@ const GiftPage: React.FC = () => {
         if (selectedToken && walletBalances.length > 0) {
             const tokenBalance = walletBalances.find(b => b.symbol === selectedToken.symbol);
             setUserBalance(tokenBalance?.balance || 0);
+            
+            // Validate balance when token changes if amount is entered
+            if (tokenAmount && !isNaN(parseFloat(tokenAmount))) {
+                const numValue = parseFloat(tokenAmount);
+                if (numValue > 0) {
+                    validateBalance(numValue).catch(console.error);
+                }
+            }
             console.log(`💰 Balance for ${selectedToken.symbol}:`, tokenBalance?.balance || 0);
         }
         
@@ -441,6 +458,70 @@ const GiftPage: React.FC = () => {
         return 0;
     };
 
+    // Real-time balance validation function
+    const validateBalance = async (amountValue: number) => {
+        if (!selectedToken || !tokenPrice || amountValue <= 0) {
+            setBalanceError(null);
+            return;
+        }
+
+        try {
+            const FLAT_SERVICE_FEE_USD = 1.00;
+            const CARD_FEE_USD = selectedCard ? 1.00 : 0;
+            const totalFeesUSD = FLAT_SERVICE_FEE_USD + CARD_FEE_USD;
+            
+            // Calculate fees in token
+            const serviceFeeAmount = tokenPrice > 0 ? FLAT_SERVICE_FEE_USD / tokenPrice : 0;
+            const cardFeeAmount = selectedCard && tokenPrice > 0 ? CARD_FEE_USD / tokenPrice : 0;
+            const totalFeeAmount = serviceFeeAmount + cardFeeAmount;
+            const totalAmount = amountValue + totalFeeAmount;
+
+            if (selectedToken.isNative) {
+                // For native SOL, fees are in SOL
+                if (totalAmount > userBalance) {
+                    setBalanceError(`Insufficient balance. You need ${totalAmount.toFixed(4)} SOL (${amountValue.toFixed(4)} SOL gift + ${totalFeeAmount.toFixed(4)} SOL fees). You have ${userBalance.toFixed(4)} SOL available.`);
+                    return;
+                }
+                setBalanceError(null);
+            } else {
+                // For SPL tokens, try token first, then SOL fallback
+                if (totalAmount > userBalance) {
+                    // Not enough token balance - check SOL fallback
+                    const tokenBalanceForGift = userBalance - amountValue;
+                    if (tokenBalanceForGift < 0) {
+                        // Not even enough for gift
+                        setBalanceError(`Insufficient ${selectedToken.symbol} balance. You need ${amountValue.toFixed(4)} ${selectedToken.symbol} for the gift. You have ${userBalance.toFixed(4)} ${selectedToken.symbol} available.`);
+                        return;
+                    }
+                    
+                    // Calculate fees split
+                    const feesInToken = Math.max(0, tokenBalanceForGift);
+                    const feesInSOLAmount = totalFeeAmount - feesInToken;
+                    
+                    // Get SOL balance and price
+                    const solBalance = await getSolBalance();
+                    const solPrice = await priceService.getTokenPrice('So11111111111111111111111111111111111111112');
+                    const feesInSOL = solPrice && solPrice > 0 ? feesInSOLAmount / solPrice : 0;
+                    
+                    if (solBalance < feesInSOL) {
+                        // Not enough in either
+                        setBalanceError(`Insufficient balance. You need ${amountValue.toFixed(4)} ${selectedToken.symbol} for the gift and $${totalFeesUSD.toFixed(2)} in fees. You have ${userBalance.toFixed(4)} ${selectedToken.symbol} and ${solBalance.toFixed(6)} SOL available, but need ${feesInToken.toFixed(4)} ${selectedToken.symbol} + ${feesInSOL.toFixed(6)} SOL for fees.`);
+                        return;
+                    }
+                    
+                    // Can use SOL fallback
+                    setBalanceError(null);
+                } else {
+                    // Enough in token
+                    setBalanceError(null);
+                }
+            }
+        } catch (error) {
+            console.error('Error validating balance:', error);
+            // Don't set error on validation failure, just log it
+        }
+    };
+
     // Mode switch handler
     const handleModeSwitch = (newMode: 'token' | 'usd') => {
         if (!tokenPrice && newMode === 'usd') {
@@ -522,68 +603,99 @@ const GiftPage: React.FC = () => {
             return;
         }
         
-        // Calculate fee (0.1% of gift amount)
-        const feeAmount = numericAmount * feePercentage;
-        const totalAmount = numericAmount + feeAmount;
+        // Calculate flat $1 service fee (convert to token amount)
+        const FLAT_SERVICE_FEE_USD = 1.00;
+        const serviceFeeAmount = tokenPrice && tokenPrice > 0 
+            ? FLAT_SERVICE_FEE_USD / tokenPrice 
+            : 0;
         
-        // Check user balance (including fee)
-        if (selectedToken.isNative && totalAmount > userBalance) {
-            setError(`Insufficient balance. You need ${totalAmount.toFixed(4)} ${selectedToken.symbol} (${numericAmount.toFixed(4)} ${selectedToken.symbol} gift + ${feeAmount.toFixed(4)} ${selectedToken.symbol} fee). You have ${userBalance.toFixed(4)} ${selectedToken.symbol} available.`);
+        if (!tokenPrice || tokenPrice <= 0) {
+            setError('Unable to fetch token price. Please try again.');
             return;
         }
         
-        // For SPL tokens, check if user has enough token balance AND enough SOL for fees
-        if (!selectedToken.isNative) {
+        // Calculate card fee ($1 if selected)
+        const hasCard = !!selectedCard;
+        const CARD_FEE_USD = 1.00;
+        const cardFeeInTokens = hasCard && tokenPrice && tokenPrice > 0
+            ? CARD_FEE_USD / tokenPrice
+            : 0;
+        
+        // Total fees (service + card)
+        const totalFeeAmount = serviceFeeAmount + cardFeeInTokens;
+        const totalAmount = numericAmount + totalFeeAmount;
+        
+        // Check user balance (including fees)
+        // First try to collect fees in the token being transferred
+        let feesToCollectInToken = totalFeeAmount;
+        let feesToCollectInSOL = 0;
+        
+        if (selectedToken.isNative) {
+            // For native SOL, fees are also collected in SOL
+            // Check if user has enough SOL for gift + fees
             if (totalAmount > userBalance) {
-                setError(`Insufficient ${selectedToken.symbol} balance. You need ${totalAmount.toFixed(4)} ${selectedToken.symbol} (${numericAmount.toFixed(4)} ${selectedToken.symbol} gift + ${feeAmount.toFixed(4)} ${selectedToken.symbol} fee). You have ${userBalance.toFixed(4)} ${selectedToken.symbol} available.`);
+                setError(`Insufficient balance. You need ${totalAmount.toFixed(4)} ${selectedToken.symbol} (${numericAmount.toFixed(4)} ${selectedToken.symbol} gift + ${totalFeeAmount.toFixed(4)} ${selectedToken.symbol} fees). You have ${userBalance.toFixed(4)} ${selectedToken.symbol} available.`);
                 return;
             }
+            // For native SOL, fees are collected in SOL (already set above)
+            feesToCollectInToken = totalFeeAmount;
+            feesToCollectInSOL = 0;
+        } else {
+            // For SPL tokens, try to collect fees in token first, then fallback to SOL
+            // Check if user has enough token balance for gift + fees
+            if (totalAmount > userBalance) {
+                // Not enough token balance - check if we can collect fees in SOL as fallback
+                const tokenBalanceForGift = userBalance - numericAmount;
+                if (tokenBalanceForGift < 0) {
+                    // Not even enough for the gift itself
+                    setError(`Insufficient ${selectedToken.symbol} balance. You need ${numericAmount.toFixed(4)} ${selectedToken.symbol} for the gift. You have ${userBalance.toFixed(4)} ${selectedToken.symbol} available.`);
+                    return;
+                }
+                
+                // Calculate how much fee we can collect in token, rest in SOL
+                feesToCollectInToken = Math.max(0, tokenBalanceForGift);
+                feesToCollectInSOL = totalFeeAmount - feesToCollectInToken;
+                
+                // Get SOL balance and price to check if we can collect fees there
+                const solBalance = await getSolBalance();
+                const solPrice = await priceService.getTokenPrice('So11111111111111111111111111111111111111112');
+                const feesInSOL = solPrice && solPrice > 0 ? feesToCollectInSOL / solPrice : 0;
+                
+                if (solBalance < feesInSOL) {
+                    // Not enough in either token or SOL
+                    setError(`Insufficient balance. You need ${numericAmount.toFixed(4)} ${selectedToken.symbol} for the gift and $${totalFeeAmount.toFixed(2)} in fees. You have ${userBalance.toFixed(4)} ${selectedToken.symbol} and ${solBalance.toFixed(6)} SOL available, but need ${feesToCollectInToken.toFixed(4)} ${selectedToken.symbol} + ${feesInSOL.toFixed(6)} SOL for fees.`);
+                    return;
+                }
+                
+                // We can collect fees in SOL - proceed
+                console.log(`✅ Will collect fees: ${feesToCollectInToken.toFixed(4)} ${selectedToken.symbol} + ${feesInSOL.toFixed(6)} SOL`);
+            } else {
+                // Enough token balance for gift + fees
+                feesToCollectInToken = totalFeeAmount;
+                feesToCollectInSOL = 0;
+            }
             
-            // Get SOL balance (with fallback to direct fetch)
+            // Still need SOL for network fees (transaction fees, not service fees)
             const solBalance = await getSolBalance();
-            
-            // Conservative estimate for initial check (base fee + 1 ATA rent + buffer)
-            // We'll do accurate estimation in handleConfirmSend after TipLink is created
-            const BASE_FEE = 0.000005; // Base transaction fee (~5,000 lamports)
-            const RENT_PER_ATA = 0.00203928; // Rent exemption for token account
-            const estimatedRequiredSol = (BASE_FEE + RENT_PER_ATA) * 1.2; // Add 20% buffer
-            
-            console.log('🔍 SOL Balance Check (Initial):', {
-                solBalance: solBalance.toFixed(6),
-                estimatedRequired: estimatedRequiredSol.toFixed(6),
-                hasEnough: solBalance >= estimatedRequiredSol
-            });
+            const BASE_FEE = 0.000005;
+            const RENT_PER_ATA = 0.00203928;
+            const estimatedRequiredSol = (BASE_FEE + RENT_PER_ATA) * 1.05; // Reduced buffer
             
             if (solBalance < estimatedRequiredSol) {
-                setError(`Insufficient SOL for transaction fees. You need approximately ${estimatedRequiredSol.toFixed(6)} SOL to pay for transaction fees and rent. You have ${solBalance.toFixed(6)} SOL available. Please add more SOL to your wallet.`);
+                setError(`Insufficient SOL for network transaction fees. You need approximately ${estimatedRequiredSol.toFixed(6)} SOL to pay for network fees and rent. You have ${solBalance.toFixed(6)} SOL available. Please add more SOL to your wallet.`);
                 return;
             }
         }
 
-        // Calculate card fee if selected (currently free for testing)
-        const hasCard = !!selectedCard;
-        const cardFeeUsd = hasCard ? CARD_UPSELL_PRICE : 0;
-        const cardFeeInTokens = 0; // Free, so no token fee
-        
-        // Calculate USD values if price is available
+        // Calculate USD values
         const usdValue = tokenPrice ? numericAmount * tokenPrice : null;
-        const usdFee = tokenPrice ? feeAmount * tokenPrice : null;
-        const totalWithCard = totalAmount; // No card fee added to transaction
-        const usdTotal = tokenPrice ? (totalAmount * tokenPrice) + cardFeeUsd : null;
-        
-        // Check if user has enough balance (card is free, so no additional balance check needed)
-        if (selectedToken.isNative && totalWithCard > userBalance) {
-            setError(`Insufficient balance. You need ${totalWithCard.toFixed(4)} ${selectedToken.symbol} (${numericAmount.toFixed(4)} ${selectedToken.symbol} gift + ${feeAmount.toFixed(4)} ${selectedToken.symbol} fee). You have ${userBalance.toFixed(4)} ${selectedToken.symbol} available.`);
-            return;
-        }
-        
-        if (!selectedToken.isNative && totalWithCard > userBalance) {
-            setError(`Insufficient ${selectedToken.symbol} balance. You need ${totalWithCard.toFixed(4)} ${selectedToken.symbol} (${numericAmount.toFixed(4)} ${selectedToken.symbol} gift + ${feeAmount.toFixed(4)} ${selectedToken.symbol} fee). You have ${userBalance.toFixed(4)} ${selectedToken.symbol} available.`);
-            return;
-        }
+        const usdServiceFee = FLAT_SERVICE_FEE_USD;
+        const usdCardFee = hasCard ? CARD_FEE_USD : 0;
+        const usdTotalFees = usdServiceFee + usdCardFee;
+        const usdTotal = tokenPrice ? (numericAmount * tokenPrice) + usdTotalFees : null;
         
         // Calculate remaining balance after transaction
-        const remainingBalance = userBalance - totalWithCard;
+        const remainingBalance = userBalance - numericAmount - feesToCollectInToken;
         const remainingBalanceUsd = tokenPrice ? remainingBalance * tokenPrice : null;
         
         // Show confirmation modal first
@@ -591,18 +703,18 @@ const GiftPage: React.FC = () => {
             recipientLabel,
             recipientEmail: recipientEmailValue,
             amount: numericAmount,
-            fee: feeAmount,
-            total: totalWithCard,
+            fee: serviceFeeAmount, // Service fee in tokens
+            total: numericAmount + feesToCollectInToken, // Gift + fees collected in token
             token: selectedToken.symbol,
             tokenName: selectedToken.name,
             usdValue,
-            usdFee,
+            usdFee: usdServiceFee, // $1 service fee
             usdTotal,
             remainingBalance,
             remainingBalanceUsd,
             message: message || '',
-            cardFee: cardFeeInTokens,
-            cardFeeUsd: hasCard ? cardFeeUsd : null,
+            cardFee: cardFeeInTokens, // Card fee in tokens
+            cardFeeUsd: hasCard ? usdCardFee : null, // $1 card fee
             hasCard,
         });
         setShowConfirmModal(true);
@@ -618,19 +730,64 @@ const GiftPage: React.FC = () => {
         // Keep modal open to show loading overlay during transaction processing
 
         const numericAmount = confirmDetails.amount;
-        const feeAmount = confirmDetails.fee;
-        const cardFee = confirmDetails.cardFee || 0;
         const recipientEmail = confirmDetails.recipientEmail;
         const recipientLabel = confirmDetails.recipientLabel;
         const message = confirmDetails.message;
         const tokenSymbol = confirmDetails.token;
         
-        // Find the token from tokens array
+        // Find the token from tokens array (must be done first)
         const currentToken = tokens.find(t => t.symbol === tokenSymbol) || selectedToken;
         if (!currentToken) {
             setError('Token not found. Please refresh the page.');
             setIsSending(false);
             return;
+        }
+        
+        // Recalculate fees (same as in handleSendGift)
+        const FLAT_SERVICE_FEE_USD = 1.00;
+        const CARD_FEE_USD = confirmDetails.hasCard ? 1.00 : 0;
+        const serviceFeeAmount = tokenPrice && tokenPrice > 0 ? FLAT_SERVICE_FEE_USD / tokenPrice : 0;
+        const cardFeeAmount = confirmDetails.hasCard && tokenPrice && tokenPrice > 0 ? CARD_FEE_USD / tokenPrice : 0;
+        const totalFeeAmount = serviceFeeAmount + cardFeeAmount;
+        
+        // Determine fee collection: token first, SOL fallback
+        let feesToCollectInToken = totalFeeAmount;
+        let feesToCollectInSOL = 0;
+        
+        if (currentToken.isNative) {
+            // For native SOL, fees are in SOL
+            feesToCollectInToken = totalFeeAmount;
+            feesToCollectInSOL = 0;
+        } else {
+            // For SPL tokens, try token first, then SOL fallback
+            if (userBalance < numericAmount + totalFeeAmount) {
+                // Not enough token balance - check SOL fallback
+                const tokenBalanceForGift = userBalance - numericAmount;
+                if (tokenBalanceForGift < 0) {
+                    // Not even enough for gift
+                    throw new Error(`Insufficient ${currentToken.symbol} balance. You need ${numericAmount.toFixed(4)} ${currentToken.symbol} for the gift. You have ${userBalance.toFixed(4)} ${currentToken.symbol} available.`);
+                }
+                
+                // Calculate fees split
+                feesToCollectInToken = Math.max(0, tokenBalanceForGift);
+                feesToCollectInSOL = totalFeeAmount - feesToCollectInToken;
+                
+                // Get SOL balance and price to verify we can collect fees there
+                const solBalance = await getSolBalance();
+                const solPrice = await priceService.getTokenPrice('So11111111111111111111111111111111111111112');
+                const feesInSOL = solPrice && solPrice > 0 ? feesToCollectInSOL / solPrice : 0;
+                
+                if (solBalance < feesInSOL) {
+                    // Not enough in either
+                    throw new Error(`Insufficient balance. You need ${numericAmount.toFixed(4)} ${currentToken.symbol} for the gift and $${(FLAT_SERVICE_FEE_USD + CARD_FEE_USD).toFixed(2)} in fees. You have ${userBalance.toFixed(4)} ${currentToken.symbol} and ${solBalance.toFixed(6)} SOL available, but need ${feesToCollectInToken.toFixed(4)} ${currentToken.symbol} + ${feesInSOL.toFixed(6)} SOL for fees.`);
+                }
+                
+                console.log(`✅ Will collect fees: ${feesToCollectInToken.toFixed(4)} ${currentToken.symbol} + ${feesInSOL.toFixed(6)} SOL`);
+            } else {
+                // Enough token balance for gift + fees
+                feesToCollectInToken = totalFeeAmount;
+                feesToCollectInSOL = 0;
+            }
         }
 
         try {
@@ -723,17 +880,20 @@ const GiftPage: React.FC = () => {
                     }
                 }
                 
-                // Add 10% buffer for safety
-                estimatedRequiredSol *= 1.1;
+                // Add 5% buffer for safety (reduced from 10% to be less strict)
+                estimatedRequiredSol *= 1.05;
                 
                 console.log('🔍 SOL Balance Check (Accurate):', {
                     solBalance: solBalance.toFixed(6),
                     estimatedRequired: estimatedRequiredSol.toFixed(6),
-                    hasEnough: solBalance >= estimatedRequiredSol
+                    hasEnough: solBalance >= estimatedRequiredSol,
+                    difference: (solBalance - estimatedRequiredSol).toFixed(6)
                 });
                 
                 if (solBalance < estimatedRequiredSol) {
-                    throw new Error(`Insufficient SOL for transaction fees. You need approximately ${estimatedRequiredSol.toFixed(6)} SOL to pay for transaction fees and rent. You have ${solBalance.toFixed(6)} SOL available. Please add more SOL to your wallet.`);
+                    // Round up to 4 decimal places for user-friendly message
+                    const requiredRounded = Math.ceil(estimatedRequiredSol * 10000) / 10000;
+                    throw new Error(`Insufficient SOL for transaction fees. You need approximately ${requiredRounded.toFixed(4)} SOL to pay for transaction fees and rent. You have ${solBalance.toFixed(4)} SOL available. Please add more SOL to your wallet.`);
                 }
             }
 
@@ -746,12 +906,12 @@ const GiftPage: React.FC = () => {
             const transaction = new Transaction();
             
             // Add memo instruction to show total amount (for Privy modal display)
-            const totalAmount = numericAmount + feeAmount; // Card is free, no fee added
+            const totalAmount = numericAmount + feesToCollectInToken; // Gift + fees collected in token
             // Calculate USD value for memo if price is available
             const memoUsdValue = tokenPrice ? numericAmount * tokenPrice : null;
             const memoText = memoUsdValue !== null
-                ? `Gift: $${memoUsdValue.toFixed(3)} USD (${numericAmount.toFixed(6)} ${currentToken.symbol}) to ${recipientLabel}${cardFee > 0 ? ' + Card' : ''}`
-                : `Gift: ${numericAmount.toFixed(6)} ${currentToken.symbol} to ${recipientLabel}${cardFee > 0 ? ' + Card' : ''}`;
+                ? `Gift: $${memoUsdValue.toFixed(3)} USD (${numericAmount.toFixed(6)} ${currentToken.symbol}) to ${recipientLabel}${cardFeeAmount > 0 ? ' + Card' : ''}`
+                : `Gift: ${numericAmount.toFixed(6)} ${currentToken.symbol} to ${recipientLabel}${cardFeeAmount > 0 ? ' + Card' : ''}`;
             const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
             transaction.add({
                 keys: [{ pubkey: new PublicKey(embeddedWallet.address), isSigner: true, isWritable: false }],
@@ -766,16 +926,18 @@ const GiftPage: React.FC = () => {
                 // Native SOL transfer
                 // Round lamports to integers to avoid floating-point precision errors
                 const giftAmountLamports = Math.round(numericAmount * LAMPORTS_PER_SOL);
-                const feeAmountLamports = Math.round(feeAmount * LAMPORTS_PER_SOL);
-                // Card is free, so no card fee in transaction
+                const serviceFeeLamports = Math.round(serviceFeeAmount * LAMPORTS_PER_SOL);
+                const cardFeeLamports = Math.round(cardFeeAmount * LAMPORTS_PER_SOL);
+                const totalFeeLamports = serviceFeeLamports + cardFeeLamports;
                 
                 console.log(`💰 Transaction breakdown (SOL):`);
                 console.log(`  Gift amount: ${numericAmount} ${currentToken.symbol} (${giftAmountLamports} lamports)`);
-                console.log(`  Fee (${feePercentage * 100}%): ${feeAmount} ${currentToken.symbol} (${feeAmountLamports} lamports)`);
-                if (cardFee > 0) {
-                    console.log(`  Card fee: ${cardFee} ${currentToken.symbol} (FREE - not charged)`);
+                console.log(`  Service fee: $1.00 = ${serviceFeeAmount.toFixed(6)} ${currentToken.symbol} (${serviceFeeLamports} lamports)`);
+                if (cardFeeAmount > 0) {
+                    console.log(`  Card fee: $1.00 = ${cardFeeAmount.toFixed(6)} ${currentToken.symbol} (${cardFeeLamports} lamports)`);
                 }
-                console.log(`  Total: ${numericAmount + feeAmount} ${currentToken.symbol} (${giftAmountLamports + feeAmountLamports} lamports)`);
+                console.log(`  Total fees: ${totalFeeAmount.toFixed(6)} ${currentToken.symbol} (${totalFeeLamports} lamports)`);
+                console.log(`  Total: ${numericAmount + totalFeeAmount} ${currentToken.symbol} (${giftAmountLamports + totalFeeLamports} lamports)`);
                 
                 // Add gift amount transfer to TipLink
                 transaction.add(
@@ -786,17 +948,17 @@ const GiftPage: React.FC = () => {
                     })
                 );
                 
-                // Add fee transfer to fee wallet if configured (only transaction fee, card is free)
-                if (feeWalletAddress && feeAmountLamports > 0) {
-                    console.log(`💼 Adding fee transfer to fee wallet: ${feeWalletAddress} (transaction fee only)`);
+                // Add fee transfer to fee wallet if configured (service fee + card fee)
+                if (feeWalletAddress && totalFeeLamports > 0) {
+                    console.log(`💼 Adding fee transfer to fee wallet: ${feeWalletAddress} (service + card fees)`);
                     transaction.add(
                         SystemProgram.transfer({
                             fromPubkey: senderPubkey,
                             toPubkey: new PublicKey(feeWalletAddress),
-                            lamports: feeAmountLamports,
+                            lamports: totalFeeLamports,
                         })
                     );
-                } else if (feeAmountLamports > 0) {
+                } else if (totalFeeLamports > 0) {
                     console.warn('⚠️ Fee wallet not configured. Fee will not be collected.');
                 }
             } else {
@@ -815,16 +977,23 @@ const GiftPage: React.FC = () => {
                 
                 // Convert amount to token's smallest unit (like lamports for SOL)
                 const giftAmountRaw = Math.round(numericAmount * Math.pow(10, decimals));
-                const feeAmountRaw = Math.round(feeAmount * Math.pow(10, decimals));
-                // Card is free, so no card fee in transaction
+                const serviceFeeRaw = Math.round(serviceFeeAmount * Math.pow(10, decimals));
+                const cardFeeRaw = Math.round(cardFeeAmount * Math.pow(10, decimals));
+                const totalFeesRaw = serviceFeeRaw + cardFeeRaw;
+                const feesInTokenRaw = Math.round(feesToCollectInToken * Math.pow(10, decimals));
                 
                 console.log(`💰 Transaction breakdown (SPL Token):`);
                 console.log(`  Gift amount: ${numericAmount} ${currentToken.symbol} (${giftAmountRaw} raw units)`);
-                console.log(`  Fee (${feePercentage * 100}%): ${feeAmount} ${currentToken.symbol} (${feeAmountRaw} raw units)`);
-                if (cardFee > 0) {
-                    console.log(`  Card fee: ${cardFee} ${currentToken.symbol} (FREE - not charged)`);
+                console.log(`  Service fee: $1.00 = ${serviceFeeAmount.toFixed(6)} ${currentToken.symbol} (${serviceFeeRaw} raw units)`);
+                if (cardFeeAmount > 0) {
+                    console.log(`  Card fee: $1.00 = ${cardFeeAmount.toFixed(6)} ${currentToken.symbol} (${cardFeeRaw} raw units)`);
                 }
-                console.log(`  Total: ${numericAmount + feeAmount} ${currentToken.symbol} (${giftAmountRaw + feeAmountRaw} raw units)`);
+                console.log(`  Total fees: ${totalFeeAmount.toFixed(6)} ${currentToken.symbol} (${totalFeesRaw} raw units)`);
+                console.log(`  Fees in token: ${feesToCollectInToken.toFixed(6)} ${currentToken.symbol} (${feesInTokenRaw} raw units)`);
+                if (feesToCollectInSOL > 0) {
+                    console.log(`  Fees in SOL (fallback): ${feesToCollectInSOL.toFixed(6)} ${currentToken.symbol}`);
+                }
+                console.log(`  Total: ${numericAmount + totalFeeAmount} ${currentToken.symbol} (${giftAmountRaw + totalFeesRaw} raw units)`);
                 
                 // Get associated token addresses (ATAs)
                 const senderATA = await getAssociatedTokenAddress(
@@ -846,8 +1015,15 @@ const GiftPage: React.FC = () => {
                     const senderAccount = await getAccount(connection, senderATA);
                     console.log(`✅ Sender ATA exists: ${senderATA.toBase58()}, balance: ${senderAccount.amount.toString()}`);
                     
-                    if (senderAccount.amount < BigInt(giftAmountRaw + feeAmountRaw)) {
-                        throw new Error(`Insufficient ${currentToken.symbol} balance. Required: ${numericAmount + feeAmount} ${currentToken.symbol}, Available: ${Number(senderAccount.amount) / Math.pow(10, decimals)} ${currentToken.symbol}`);
+                    // Check if user has enough for gift + fees (or at least gift if fees will be collected in SOL)
+                    const requiredInToken = giftAmountRaw + feesInTokenRaw;
+                    if (senderAccount.amount < BigInt(requiredInToken)) {
+                        const available = Number(senderAccount.amount) / Math.pow(10, decimals);
+                        if (senderAccount.amount < BigInt(giftAmountRaw)) {
+                            throw new Error(`Insufficient ${currentToken.symbol} balance. Required: ${numericAmount} ${currentToken.symbol} for gift. Available: ${available.toFixed(6)} ${currentToken.symbol}`);
+                        }
+                        // If we have enough for gift but not fees, fees will be collected in SOL
+                        console.log(`⚠️ Not enough ${currentToken.symbol} for fees, will collect fees in SOL`);
                     }
                 } catch (error: any) {
                     if (error.name === 'TokenAccountNotFoundError') {
@@ -889,9 +1065,9 @@ const GiftPage: React.FC = () => {
                     )
                 );
                 
-                // Add fee transfer to fee wallet if configured (only transaction fee, card is free)
-                if (feeWalletAddress && feeAmountRaw > 0) {
-                    console.log(`💼 Adding fee transfer to fee wallet: ${feeWalletAddress} (transaction fee only)`);
+                // Add fee transfer to fee wallet if configured (service fee + card fee, collected in token)
+                if (feeWalletAddress && feesToCollectInToken > 0) {
+                    console.log(`💼 Adding fee transfer to fee wallet: ${feeWalletAddress} (service + card fees in ${currentToken.symbol})`);
                     const feeWalletPubkey = new PublicKey(feeWalletAddress);
                     const feeWalletATA = await getAssociatedTokenAddress(
                         mintPubkey,
@@ -926,13 +1102,28 @@ const GiftPage: React.FC = () => {
                             senderATA, // source
                             feeWalletATA, // destination
                             senderPubkey, // owner
-                            BigInt(feeAmountRaw), // amount (transaction fee only, card is free)
+                            BigInt(feesInTokenRaw), // amount (service + card fees)
                             [], // multiSigners
                             TOKEN_PROGRAM_ID
                         )
                     );
-                } else if (feeAmountRaw > 0) {
+                } else if (feesToCollectInToken > 0) {
                     console.warn('⚠️ Fee wallet not configured. Fee will not be collected.');
+                }
+                
+                // If fees need to be collected in SOL (fallback), add SOL transfer
+                if (feesToCollectInSOL > 0 && feeWalletAddress) {
+                    const solPrice = await priceService.getTokenPrice('So11111111111111111111111111111111111111112');
+                    const feesInSOL = solPrice && solPrice > 0 ? feesToCollectInSOL / solPrice : 0;
+                    const feesInSOLlamports = Math.round(feesInSOL * LAMPORTS_PER_SOL);
+                    console.log(`💼 Adding SOL fee transfer to fee wallet: ${feeWalletAddress} (${feesInSOL.toFixed(6)} SOL for fees)`);
+                    transaction.add(
+                        SystemProgram.transfer({
+                            fromPubkey: senderPubkey,
+                            toPubkey: new PublicKey(feeWalletAddress),
+                            lamports: feesInSOLlamports,
+                        })
+                    );
                 }
             }
 
@@ -1234,24 +1425,23 @@ const GiftPage: React.FC = () => {
                                     )}
                                 </div>
                                 
-                                {/* Transaction fee - USD */}
+                                {/* Service Fee - Flat $1 */}
                                 <div className="pb-3 border-b border-slate-700">
-                                    <p className="text-slate-400 text-xs mb-1">Transaction fee</p>
-                                    {confirmDetails.usdFee !== null ? (
-                                        <p className="text-slate-300 font-medium">${confirmDetails.usdFee.toFixed(3)} USD</p>
-                                    ) : (
-                                        <p className="text-slate-300 font-medium">{confirmDetails.fee.toFixed(6)} {confirmDetails.token}</p>
-                                    )}
-                                    {confirmDetails.usdFee !== null && (
+                                    <p className="text-slate-400 text-xs mb-1">Service Fee</p>
+                                    <p className="text-slate-300 font-medium">$1.00 USD</p>
+                                    {confirmDetails.fee > 0 && (
                                         <p className="text-slate-500 text-xs mt-1">{confirmDetails.fee.toFixed(6)} {confirmDetails.token}</p>
                                     )}
                                 </div>
                                 
-                                {/* Greeting Card (free) */}
+                                {/* Greeting Card - $1 if selected */}
                                 {confirmDetails.hasCard && (
                                     <div className="pb-3 border-b border-slate-700">
-                                        <p className="text-slate-400 text-xs mb-1">Greeting Card</p>
-                                        <p className="text-green-400 font-medium">FREE</p>
+                                        <p className="text-slate-400 text-xs mb-1">Greeting Card (add-on)</p>
+                                        <p className="text-green-400 font-medium">$1.00 USD</p>
+                                        {confirmDetails.cardFee > 0 && (
+                                            <p className="text-slate-500 text-xs mt-1">{confirmDetails.cardFee.toFixed(6)} {confirmDetails.token}</p>
+                                        )}
                                     </div>
                                 )}
                                 
@@ -1523,9 +1713,17 @@ const GiftPage: React.FC = () => {
                                 type="number"
                                 id="amount"
                                 value={tokenAmount}
-                                onChange={(e) => {
-                                    setTokenAmount(e.target.value);
-                                    setAmount(e.target.value); // Keep existing amount state for compatibility
+                                onChange={async (e) => {
+                                    const value = e.target.value;
+                                    setTokenAmount(value);
+                                    setAmount(value); // Keep existing amount state for compatibility
+                                    setBalanceError(null); // Clear previous error
+                                    
+                                    // Validate balance in real-time
+                                    const numValue = parseFloat(value);
+                                    if (!isNaN(numValue) && numValue > 0) {
+                                        await validateBalance(numValue);
+                                    }
                                 }}
                                 required
                                 min="0"
@@ -1540,14 +1738,22 @@ const GiftPage: React.FC = () => {
                                     type="number"
                                     id="amount"
                                     value={usdAmount}
-                                    onChange={(e) => {
-                                        setUsdAmount(e.target.value);
+                                    onChange={async (e) => {
+                                        const value = e.target.value;
+                                        setUsdAmount(value);
                                         // Calculate token amount but don't update amount state until submission
                                         if (tokenPrice) {
-                                            const calculatedTokenAmount = (parseFloat(e.target.value) / tokenPrice).toString();
+                                            const calculatedTokenAmount = (parseFloat(value) / tokenPrice).toString();
                                             setTokenAmount(calculatedTokenAmount);
                                             setAmount(calculatedTokenAmount);
+                                            
+                                            // Validate balance in real-time
+                                            const numValue = parseFloat(calculatedTokenAmount);
+                                            if (!isNaN(numValue) && numValue > 0) {
+                                                await validateBalance(numValue);
+                                            }
                                         }
+                                        setBalanceError(null); // Clear previous error
                                     }}
                                     required
                                     min="0"
@@ -1583,6 +1789,13 @@ const GiftPage: React.FC = () => {
                             </div>
                         )}
                         
+                        {/* Balance Error */}
+                        {balanceError && (
+                            <div className="mt-2 text-xs text-red-400">
+                                {balanceError}
+                            </div>
+                        )}
+                        
                         {/* Loading Indicator */}
                         {priceLoading && (
                             <div className="mt-2 text-xs text-slate-400">
@@ -1601,19 +1814,25 @@ const GiftPage: React.FC = () => {
                         {((amountMode === 'token' && tokenAmount) || (amountMode === 'usd' && usdAmount)) && 
                          !isNaN(parseFloat(amountMode === 'token' ? tokenAmount : (usdAmount && tokenPrice ? (parseFloat(usdAmount) / tokenPrice).toString() : '0'))) && 
                          parseFloat(amountMode === 'token' ? tokenAmount : (usdAmount && tokenPrice ? (parseFloat(usdAmount) / tokenPrice).toString() : '0')) > 0 && 
-                         feeWalletAddress && (() => {
+                         (() => {
                             const tokenAmountValue = amountMode === 'token' 
                                 ? parseFloat(tokenAmount) 
                                 : (usdAmount && tokenPrice ? parseFloat(usdAmount) / tokenPrice : 0);
-                            const tokenFee = tokenAmountValue * feePercentage;
-                            const tokenTotal = tokenAmountValue + tokenFee;
                             
-                            // Calculate USD values if in USD mode
+                            // Flat $1 service fee + $1 card fee
+                            const FLAT_SERVICE_FEE_USD = 1.00;
+                            const CARD_FEE_USD = selectedCard ? 1.00 : 0;
+                            const serviceFeeInTokens = tokenPrice && tokenPrice > 0 ? FLAT_SERVICE_FEE_USD / tokenPrice : 0;
+                            const cardFeeInTokens = selectedCard && tokenPrice && tokenPrice > 0 ? CARD_FEE_USD / tokenPrice : 0;
+                            const totalFeesInTokens = serviceFeeInTokens + cardFeeInTokens;
+                            const tokenTotal = tokenAmountValue + totalFeesInTokens;
+                            
+                            // Calculate USD values
                             const usdAmountValue = amountMode === 'usd' && tokenPrice
                                 ? parseFloat(usdAmount)
                                 : (amountMode === 'token' && tokenPrice ? parseFloat(tokenAmount) * tokenPrice : 0);
-                            const usdFee = usdAmountValue * feePercentage;
-                            const usdTotal = usdAmountValue + usdFee;
+                            const usdTotalFees = FLAT_SERVICE_FEE_USD + CARD_FEE_USD;
+                            const usdTotal = usdAmountValue + usdTotalFees;
                             
                             return (
                                 <div className="mt-3 p-3 bg-slate-900/30 border border-slate-700 rounded-lg">
@@ -1626,13 +1845,15 @@ const GiftPage: React.FC = () => {
                                         </span>
                                     </div>
                                     <div className="flex justify-between text-sm mb-1">
-                                        <span className="text-slate-400">Fee ({feePercentage * 100}%):</span>
-                                        <span className="text-slate-300">
-                                            {amountMode === 'usd' && tokenPrice
-                                                ? `$${usdFee.toFixed(3)}`
-                                                : `${tokenFee.toFixed(6)} ${selectedToken?.symbol}`}
-                                        </span>
+                                        <span className="text-slate-400">Service Fee:</span>
+                                        <span className="text-slate-300">$1.00 USD</span>
                                     </div>
+                                    {selectedCard && (
+                                        <div className="flex justify-between text-sm mb-1">
+                                            <span className="text-slate-400">Greeting Card (add-on):</span>
+                                            <span className="text-green-400">$1.00 USD</span>
+                                        </div>
+                                    )}
                                     <div className="flex justify-between text-sm pt-2 border-t border-slate-700">
                                         <span className="text-slate-300 font-medium">Total:</span>
                                         <span className="text-white font-medium">
@@ -1641,6 +1862,7 @@ const GiftPage: React.FC = () => {
                                                 : `${tokenTotal.toFixed(6)} ${selectedToken?.symbol}`}
                                         </span>
                                     </div>
+                                    <p className="text-xs text-slate-500 mt-2">Network fees (SOL) are paid separately</p>
                                 </div>
                             );
                         })()}

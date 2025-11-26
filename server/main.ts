@@ -115,15 +115,39 @@ const giftInfoLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// ✅ CORS configuration - allow Vercel frontend and localhost
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'https://sher-gifting.vercel.app',
-  'https://sher-gifting-4behyaor6-aniketde9s-projects.vercel.app', // Vercel preview URLs
-  FRONTEND_URL,
-];
+// ✅ CORS configuration - uses environment variables only
+// CORS_ORIGIN: Comma-separated list of allowed origins (e.g., "https://cryptogifting.app,https://www.cryptogifting.app")
+// FRONTEND_URL: Single frontend URL (fallback if CORS_ORIGIN not set)
+const CORS_ORIGIN = process.env.CORS_ORIGIN;
+const FRONTEND_URL = process.env.FRONTEND_URL;
+
+// Build allowed origins from environment variables
+const allowedOrigins: string[] = [];
+
+// Add localhost for development (always allowed)
+if (process.env.NODE_ENV !== 'production') {
+  allowedOrigins.push('http://localhost:5173', 'http://localhost:3000');
+}
+
+// Parse CORS_ORIGIN if provided (comma-separated list)
+if (CORS_ORIGIN) {
+  const origins = CORS_ORIGIN.split(',').map(origin => origin.trim()).filter(origin => origin.length > 0);
+  allowedOrigins.push(...origins);
+  console.log(`✅ CORS origins from CORS_ORIGIN: ${origins.join(', ')}`);
+}
+
+// Add FRONTEND_URL as fallback if CORS_ORIGIN not provided
+if (FRONTEND_URL && !CORS_ORIGIN) {
+  allowedOrigins.push(FRONTEND_URL);
+  console.log(`✅ CORS origin from FRONTEND_URL: ${FRONTEND_URL}`);
+}
+
+// Log final allowed origins
+if (allowedOrigins.length > 0) {
+  console.log(`✅ CORS allowed origins: ${allowedOrigins.join(', ')}`);
+} else {
+  console.warn('⚠️ No CORS origins configured. Set CORS_ORIGIN or FRONTEND_URL environment variable.');
+}
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -134,16 +158,18 @@ app.use(cors({
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      // For development, allow all origins
-      if (process.env.NODE_ENV !== 'production') {
+      // For development, allow all origins if no CORS_ORIGIN is set
+      if (process.env.NODE_ENV !== 'production' && !CORS_ORIGIN && !FRONTEND_URL) {
+        console.warn(`⚠️ Allowing origin in development: ${origin}`);
         callback(null, true);
       } else {
+        console.warn(`❌ CORS blocked origin: ${origin}`);
         callback(new Error('Not allowed by CORS'));
       }
     }
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 

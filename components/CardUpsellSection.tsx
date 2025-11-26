@@ -41,15 +41,9 @@ export const CardUpsellSection: React.FC<CardUpsellSectionProps> = ({
           className="cursor-pointer text-lg font-semibold text-white flex items-center gap-2"
         >
           Add a Greeting Card
-          {CARD_UPSELL_PRICE > 0 ? (
-            <span className="bg-sky-500 text-white px-3 py-1 rounded-full text-sm font-bold">
-              +${CARD_UPSELL_PRICE}
-            </span>
-          ) : (
-            <span className="bg-green-500 text-white px-3 py-1 rounded-full text-sm font-bold">
-              FREE
-            </span>
-          )}
+          <span className="bg-sky-500 text-white px-3 py-1 rounded-full text-sm font-bold">
+            +$1.00
+          </span>
         </label>
       </div>
       
