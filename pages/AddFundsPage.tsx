@@ -11,12 +11,32 @@ const AddFundsPage: React.FC = () => {
   const { user } = useAuth();
   const { user: privyUser, getAccessToken } = usePrivy();
   const { fundWallet } = useFundWallet();
-  const { wallets, ready } = useWallets();
+  const { wallets, ready: walletsReady } = useWallets();
   const navigate = useNavigate();
   const [selectedOption, setSelectedOption] = useState<'bank' | 'wallet' | null>(null);
   const [copied, setCopied] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
   const [isLoadingOnramp, setIsLoadingOnramp] = useState(false);
+
+  // Get wallet address from multiple sources (fallback chain)
+  const walletAddress = wallets?.[0]?.address || privyUser?.wallet?.address || user?.wallet_address;
+  
+  // Button should be enabled if we have any wallet address, even if useWallets isn't ready
+  // This handles cases where the wallet exists but useWallets hasn't initialized yet
+  const canFundWallet = Boolean(walletAddress) && !isLoadingOnramp;
+  
+  // Debug logging
+  useEffect(() => {
+    console.log('🔍 AddFundsPage wallet status:', {
+      hasWallets: Boolean(wallets && wallets.length > 0),
+      walletsReady,
+      walletFromWallets: wallets?.[0]?.address,
+      walletFromPrivy: privyUser?.wallet?.address,
+      walletFromUser: user?.wallet_address,
+      finalWalletAddress: walletAddress,
+      canFundWallet,
+    });
+  }, [wallets, walletsReady, privyUser?.wallet?.address, user?.wallet_address, walletAddress, canFundWallet]);
 
   const handleCopy = () => {
     if (user?.wallet_address) {
@@ -53,8 +73,12 @@ const AddFundsPage: React.FC = () => {
   }, [selectedOption, user?.wallet_address]);
 
   const handleOnRamp = async () => {
-    if (!wallets || wallets.length === 0 || !ready) {
-      console.error('❌ No wallet available or wallets not ready');
+    if (!walletAddress) {
+      console.error('❌ No wallet address available', {
+        wallets: wallets?.length || 0,
+        privyWallet: privyUser?.wallet?.address,
+        userWallet: user?.wallet_address,
+      });
       return;
     }
 
@@ -66,7 +90,6 @@ const AddFundsPage: React.FC = () => {
       // Get current balance before funding
       const getCurrentBalance = async () => {
         try {
-          const walletAddress = wallets[0]?.address;
           if (!walletAddress) return 0;
           
           const response = await fetch(`/api/wallet/balances/${walletAddress}`);
@@ -86,7 +109,7 @@ const AddFundsPage: React.FC = () => {
 
       // Use the correct Solana-specific fundWallet
       await fundWallet({
-        address: wallets[0]?.address,
+        address: walletAddress,
       });
 
       console.log('✅ Funding flow completed');
@@ -100,8 +123,6 @@ const AddFundsPage: React.FC = () => {
           // Call backend to detect transaction and issue credit
           const token = await getAccessToken() || '';
           setAuthToken(token);
-          const walletAddress = wallets[0]?.address;
-          
           if (walletAddress) {
             const response = await fetch('/api/onramp/detect-transaction', {
               method: 'POST',
@@ -142,7 +163,7 @@ const AddFundsPage: React.FC = () => {
         <div className="grid md:grid-cols-2 gap-6">
           <button 
             onClick={handleOnRamp}
-            disabled={!wallets || wallets.length === 0 || !ready || isLoadingOnramp}
+            disabled={!canFundWallet}
             className="p-8 bg-slate-800 hover:bg-slate-700/50 border border-slate-700 rounded-2xl text-center transition-all duration-300 ease-in-out transform hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <BanknotesIcon className="w-12 h-12 mx-auto mb-4 text-sky-400" />
