@@ -65,10 +65,156 @@ const AddFundsPage: React.FC = () => {
 
     if (selectedOption === 'bank') {
       return (
-        <div className="text-center">
-            <h3 className="text-2xl font-bold mb-4">Transfer from Bank</h3>
-            <p className="text-slate-400 mb-6">Our integration with OnMeta is coming soon. This will allow you to purchase crypto directly.</p>
-            <button onClick={() => setSelectedOption(null)} className="bg-slate-600 hover:bg-slate-500 text-white font-bold py-2 px-4 rounded-lg transition-colors">Back</button>
+        <div className="max-w-4xl mx-auto">
+          <h3 className="text-2xl font-bold mb-2 text-center">🎁 FUND YOUR GIFTING APP - FASTEST WAY (DEBIT CARD)</h3>
+          <div className="mt-6 space-y-6 max-h-[70vh] overflow-y-auto pr-2">
+            {/* Step 1 */}
+            <div className="bg-slate-900/50 border border-slate-700 rounded-xl p-6">
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0 w-8 h-8 bg-sky-500 rounded-full flex items-center justify-center font-bold text-white">1</div>
+                <div className="flex-1">
+                  <h4 className="text-lg font-bold mb-2">Sign Up on Coinbase (2 min)</h4>
+                  <p className="text-slate-300 mb-2">
+                    Go to <a href="https://coinbase.com/signup" target="_blank" rel="noopener noreferrer" className="text-sky-400 hover:text-sky-300 underline">coinbase.com/signup</a> → Click "Sign Up"
+                  </p>
+                  <ul className="list-disc list-inside text-slate-400 space-y-1 ml-4">
+                    <li>Email, password, name → Verify email</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 2 */}
+            <div className="bg-slate-900/50 border border-slate-700 rounded-xl p-6">
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0 w-8 h-8 bg-sky-500 rounded-full flex items-center justify-center font-bold text-white">2</div>
+                <div className="flex-1">
+                  <h4 className="text-lg font-bold mb-2">Secure Your Account (2 min)</h4>
+                  <ul className="list-disc list-inside text-slate-300 space-y-1 ml-4">
+                    <li>Enter phone number</li>
+                    <li>Enter code from text message</li>
+                    <li className="text-green-400">✅ Account secured</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 3 */}
+            <div className="bg-slate-900/50 border border-slate-700 rounded-xl p-6">
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0 w-8 h-8 bg-sky-500 rounded-full flex items-center justify-center font-bold text-white">3</div>
+                <div className="flex-1">
+                  <h4 className="text-lg font-bold mb-2">Verify Your Identity (10 min)</h4>
+                  <p className="text-slate-300 mb-2">Upload these 3 things:</p>
+                  <ul className="list-disc list-inside text-slate-300 space-y-1 ml-4 mb-2">
+                    <li><strong>ID photo</strong> (front + back) - Driver's license, passport, or state ID</li>
+                    <li><strong>Selfie</strong> - Just your face, good lighting</li>
+                    <li><strong>Proof of address</strong> - Recent utility bill, bank statement, or lease (dated within 3 months)</li>
+                  </ul>
+                  <p className="text-slate-400 text-sm italic">All must be clear photos/scans, not screenshots.</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 4 */}
+            <div className="bg-slate-900/50 border border-slate-700 rounded-xl p-6">
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0 w-8 h-8 bg-sky-500 rounded-full flex items-center justify-center font-bold text-white">4</div>
+                <div className="flex-1">
+                  <h4 className="text-lg font-bold mb-2">Wait for Approval (5 min - 1 hour)</h4>
+                  <ul className="list-disc list-inside text-slate-300 space-y-1 ml-4">
+                    <li>Coinbase reviews your docs</li>
+                    <li>Check email for approval notification</li>
+                    <li className="text-green-400">✅ Ready to fund</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 5 */}
+            <div className="bg-slate-900/50 border border-slate-700 rounded-xl p-6">
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0 w-8 h-8 bg-sky-500 rounded-full flex items-center justify-center font-bold text-white">5</div>
+                <div className="flex-1">
+                  <h4 className="text-lg font-bold mb-2">Add Debit Card (INSTANT) ⚡</h4>
+                  <ul className="list-disc list-inside text-slate-300 space-y-1 ml-4">
+                    <li>Go to Settings → Payment Methods → Add</li>
+                    <li>Select Debit Card</li>
+                    <li>Enter card number, expiration, CVV</li>
+                    <li>Address must match your bank records</li>
+                    <li className="text-green-400">✅ Card added & ready instantly</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 6 */}
+            <div className="bg-slate-900/50 border border-slate-700 rounded-xl p-6">
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0 w-8 h-8 bg-sky-500 rounded-full flex items-center justify-center font-bold text-white">6</div>
+                <div className="flex-1">
+                  <h4 className="text-lg font-bold mb-2">Buy Solana (2 min)</h4>
+                  <ul className="list-disc list-inside text-slate-300 space-y-1 ml-4">
+                    <li>Click "Buy / Sell" on dashboard</li>
+                    <li>Search "Solana" or "SOL"</li>
+                    <li>Enter amount ($25-50 to start)</li>
+                    <li>Select your Debit Card as payment method</li>
+                    <li>Click "Buy Solana" → Enter 2FA code</li>
+                    <li className="text-green-400">✅ SOL in your wallet instantly</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 7 */}
+            <div className="bg-slate-900/50 border border-slate-700 rounded-xl p-6">
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0 w-8 h-8 bg-sky-500 rounded-full flex items-center justify-center font-bold text-white">7</div>
+                <div className="flex-1">
+                  <h4 className="text-lg font-bold mb-2">Get Your Gifting App Wallet Address (1 min)</h4>
+                  <ul className="list-disc list-inside text-slate-300 space-y-1 ml-4">
+                    <li>Open Gifting App</li>
+                    <li>Tap "Add Funds"</li>
+                    <li>Select "Transfer from Wallet"</li>
+                    <li>Tap the Copy icon</li>
+                    <li className="text-green-400">✅ Address copied</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 8 */}
+            <div className="bg-slate-900/50 border border-slate-700 rounded-xl p-6">
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0 w-8 h-8 bg-sky-500 rounded-full flex items-center justify-center font-bold text-white">8</div>
+                <div className="flex-1">
+                  <h4 className="text-lg font-bold mb-2">Send SOL to Your App (2 min)</h4>
+                  <ul className="list-disc list-inside text-slate-300 space-y-1 ml-4 mb-3">
+                    <li>In Coinbase, find your SOL balance</li>
+                    <li>Click "Send" or "Withdraw"</li>
+                    <li>Select Solana network (only option for SOL)</li>
+                    <li>Paste the address you just copied</li>
+                    <li>Enter amount (leave $1-2 for fees)</li>
+                  </ul>
+                  <div className="bg-slate-800/50 border border-slate-600 rounded-lg p-4 mb-3">
+                    <p className="text-slate-300 font-semibold mb-2">✅ Verify checklist:</p>
+                    <ul className="space-y-1 text-slate-300">
+                      <li>☑ Network = Solana</li>
+                      <li>☑ Address matches the one you copied</li>
+                      <li>☑ Amount is correct</li>
+                    </ul>
+                  </div>
+                  <ul className="list-disc list-inside text-slate-300 space-y-1 ml-4">
+                    <li>Click "Send" → Enter 2FA code</li>
+                    <li className="text-green-400">✅ Done! SOL arrives in 30 seconds - 2 minutes</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="mt-6 text-center">
+            <button onClick={() => setSelectedOption(null)} className="bg-slate-600 hover:bg-slate-500 text-white font-bold py-2 px-6 rounded-lg transition-colors">Back</button>
+          </div>
         </div>
       );
     }
