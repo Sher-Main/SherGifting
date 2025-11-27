@@ -1,15 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { usePrivy } from '@privy-io/react-auth';
+import { useFundWallet, useWallets } from '@privy-io/react-auth/solana';
 import { BanknotesIcon, ArrowDownTrayIcon, ArrowLeftIcon } from '../components/icons';
 import QRCode from 'qrcode';
+import { setAuthToken } from '../services/api';
 
 const AddFundsPage: React.FC = () => {
   const { user } = useAuth();
+  const { user: privyUser, getAccessToken } = usePrivy();
+  const { fundWallet } = useFundWallet();
+  const { wallets, ready } = useWallets();
   const navigate = useNavigate();
   const [selectedOption, setSelectedOption] = useState<'bank' | 'wallet' | null>(null);
   const [copied, setCopied] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
+  const [isLoadingOnramp, setIsLoadingOnramp] = useState(false);
 
   const handleCopy = () => {
     if (user?.wallet_address) {
@@ -45,14 +52,104 @@ const AddFundsPage: React.FC = () => {
     generateQRCode();
   }, [selectedOption, user?.wallet_address]);
 
+  const handleOnRamp = async () => {
+    if (!wallets || wallets.length === 0 || !ready) {
+      console.error('❌ No wallet available or wallets not ready');
+      return;
+    }
+
+    setIsLoadingOnramp(true);
+
+    try {
+      console.log('🚀 Opening Privy funding flow for user:', privyUser?.id);
+
+      // Get current balance before funding
+      const getCurrentBalance = async () => {
+        try {
+          const walletAddress = wallets[0]?.address;
+          if (!walletAddress) return 0;
+          
+          const response = await fetch(`/api/wallet/balances/${walletAddress}`);
+          if (response.ok) {
+            const balances = await response.json();
+            const solBalance = balances.find((b: any) => b.symbol === 'SOL');
+            return solBalance?.balance || 0;
+          }
+        } catch (error) {
+          console.error('Error fetching balance:', error);
+        }
+        return 0;
+      };
+
+      const previousBalance = await getCurrentBalance();
+      console.log(`   Previous balance: ${previousBalance} SOL`);
+
+      // Use the correct Solana-specific fundWallet
+      await fundWallet({
+        address: wallets[0]?.address,
+      });
+
+      console.log('✅ Funding flow completed');
+
+      // Wait a moment for transaction to settle, then check for balance increase
+      setTimeout(async () => {
+        try {
+          const currentBalance = await getCurrentBalance();
+          console.log(`   Current balance: ${currentBalance} SOL`);
+
+          // Call backend to detect transaction and issue credit
+          const token = await getAccessToken() || '';
+          setAuthToken(token);
+          const walletAddress = wallets[0]?.address;
+          
+          if (walletAddress) {
+            const response = await fetch('/api/onramp/detect-transaction', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                walletAddress,
+                previousBalance,
+                currentBalance,
+              }),
+            });
+
+            if (response.ok) {
+              const result = await response.json();
+              if (result.transactionDetected && result.creditIssued) {
+                console.log('✨ Credit issued!', result);
+                // Optionally show a success message to user
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error detecting transaction:', error);
+        }
+      }, 3000); // Wait 3 seconds for transaction to settle
+
+    } catch (error) {
+      console.error('❌ Error opening funding flow:', error);
+    } finally {
+      setIsLoadingOnramp(false);
+    }
+  };
+
   const renderContent = () => {
     if (!selectedOption) {
       return (
         <div className="grid md:grid-cols-2 gap-6">
-          <button onClick={() => setSelectedOption('bank')} className="p-8 bg-slate-800 hover:bg-slate-700/50 border border-slate-700 rounded-2xl text-center transition-all duration-300 ease-in-out transform hover:-translate-y-1">
+          <button 
+            onClick={handleOnRamp}
+            disabled={!wallets || wallets.length === 0 || !ready || isLoadingOnramp}
+            className="p-8 bg-slate-800 hover:bg-slate-700/50 border border-slate-700 rounded-2xl text-center transition-all duration-300 ease-in-out transform hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
             <BanknotesIcon className="w-12 h-12 mx-auto mb-4 text-sky-400" />
             <h3 className="text-xl font-bold">Transfer from Bank</h3>
-            <p className="text-slate-400 mt-2">Purchase crypto with fiat currency.</p>
+            <p className="text-slate-400 mt-2">
+              {isLoadingOnramp ? 'Opening funding flow...' : 'Purchase crypto with card. Get $5 credit!'}
+            </p>
           </button>
           <button onClick={() => setSelectedOption('wallet')} className="p-8 bg-slate-800 hover:bg-slate-700/50 border border-slate-700 rounded-2xl text-center transition-all duration-300 ease-in-out transform hover:-translate-y-1">
             <ArrowDownTrayIcon className="w-12 h-12 mx-auto mb-4 text-sky-400" />

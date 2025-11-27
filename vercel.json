@@ -4,6 +4,12 @@
       "source": "/(.*)",
       "destination": "/index.html"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/cleanup-expired-credits",
+      "schedule": "0 0 * * *"
+    }
   ]
 }
 
