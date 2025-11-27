@@ -6,7 +6,10 @@ import { useSignAndSendTransaction, useWallets } from '@privy-io/react-auth/sola
 import { heliusService, feeService, priceService, withdrawalService } from '../services/api';
 import { TokenBalance } from '../types';
 import Spinner from '../components/Spinner';
-import { BanknotesIcon, ArrowUpTrayIcon, ArrowLeftIcon } from '../components/icons';
+import { Building, ArrowUpRight, ChevronLeft } from 'lucide-react';
+import GlassCard from '../components/UI/GlassCard';
+import GlowButton from '../components/UI/GlowButton';
+import InputField from '../components/UI/InputField';
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import { connection } from '../services/solana';
 import bs58 from 'bs58';
@@ -503,27 +506,57 @@ const WithdrawPage: React.FC = () => {
     }
   };
 
+  // OptionCard component
+  interface OptionCardProps {
+    icon: React.ComponentType<{ size?: number; className?: string }>;
+    title: string;
+    desc: string;
+    disabled?: boolean;
+    subtext?: string;
+    onClick: () => void;
+  }
+
+  const OptionCard: React.FC<OptionCardProps> = ({ icon: Icon, title, desc, disabled = false, subtext, onClick }) => (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`flex flex-col items-center justify-center p-8 rounded-3xl text-center h-64 w-full transition-all ${
+        disabled
+          ? 'bg-[#1E293B]/20 border-white/5 opacity-50 cursor-not-allowed'
+          : 'bg-[#1E293B]/40 border-white/10 hover:border-[#BE123C] hover:bg-[#1E293B]/60 group'
+      } border`}
+    >
+      <div className={`w-16 h-16 rounded-2xl bg-[#0F172A] flex items-center justify-center mb-6 transition-transform border border-white/5 ${
+        !disabled && 'group-hover:scale-110'
+      }`}>
+        <Icon size={32} className={disabled ? 'text-gray-600' : 'text-[#BE123C]'} />
+      </div>
+      {subtext && (
+        <span className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] mb-2">{subtext}</span>
+      )}
+      <h3 className="text-xl font-bold text-white mb-2">{title}</h3>
+      <p className={`text-sm px-4 ${disabled ? 'text-gray-600' : 'text-[#94A3B8]'}`}>{desc}</p>
+    </button>
+  );
+
   const renderContent = () => {
     if (!selectedOption) {
       return (
         <div className="grid md:grid-cols-2 gap-6">
-          <button 
-            onClick={() => {}} 
+          <OptionCard
+            icon={Building}
+            title="Withdraw to Bank"
+            desc="Convert crypto to fiat currency."
             disabled
-            className="p-8 bg-slate-800/50 border border-slate-700 rounded-2xl text-center transition-all duration-300 ease-in-out opacity-50 cursor-not-allowed"
-          >
-            <BanknotesIcon className="w-12 h-12 mx-auto mb-4 text-slate-500" />
-            <h3 className="text-xl font-bold text-slate-500">Withdraw to Bank</h3>
-            <p className="text-slate-500 mt-2">Coming soon</p>
-          </button>
-          <button 
-            onClick={() => setSelectedOption('wallet')} 
-            className="p-8 bg-slate-800 hover:bg-slate-700/50 border border-slate-700 rounded-2xl text-center transition-all duration-300 ease-in-out transform hover:-translate-y-1"
-          >
-            <ArrowUpTrayIcon className="w-12 h-12 mx-auto mb-4 text-sky-400" />
-            <h3 className="text-xl font-bold">Withdraw to Wallet</h3>
-            <p className="text-slate-400 mt-2">Send funds to an external Solana wallet.</p>
-          </button>
+            subtext="Coming Soon"
+            onClick={() => {}}
+          />
+          <OptionCard
+            icon={ArrowUpRight}
+            title="Withdraw to Wallet"
+            desc="Send funds to an external Solana wallet."
+            onClick={() => setSelectedOption('wallet')}
+          />
         </div>
       );
     }
@@ -531,9 +564,9 @@ const WithdrawPage: React.FC = () => {
     if (selectedOption === 'bank') {
       return (
         <div className="text-center">
-          <h3 className="text-2xl font-bold mb-4">Withdraw to Bank</h3>
-          <p className="text-slate-400 mb-6">This feature is coming soon.</p>
-          <button onClick={() => setSelectedOption(null)} className="bg-slate-600 hover:bg-slate-500 text-white font-bold py-2 px-4 rounded-lg transition-colors">Back</button>
+          <h3 className="text-2xl font-bold mb-4 text-white">Withdraw to Bank</h3>
+          <p className="text-[#94A3B8] mb-6">This feature is coming soon.</p>
+          <GlowButton variant="secondary" onClick={() => setSelectedOption(null)}>Back</GlowButton>
         </div>
       );
     }
@@ -548,139 +581,133 @@ const WithdrawPage: React.FC = () => {
       }
 
       return (
-        <form onSubmit={handleWithdraw} className="space-y-6 max-w-2xl mx-auto">
-          {/* Warning Banner */}
-          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4">
-            <p className="text-yellow-200 text-sm font-medium">
-              ⚠️ <strong>Important:</strong> Only enter valid Solana or SPL token addresses for withdrawal. Using addresses from other networks may result in permanent loss of funds.
-            </p>
-          </div>
+        <GlassCard>
+          <form onSubmit={handleWithdraw} className="space-y-6 max-w-2xl mx-auto">
+            {/* Warning Banner */}
+            <div className="bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-lg p-4">
+              <p className="text-[#FCD34D] text-sm font-medium">
+                ⚠️ <strong>Important:</strong> Only enter valid Solana or SPL token addresses for withdrawal. Using addresses from other networks may result in permanent loss of funds.
+              </p>
+            </div>
 
-          {/* User Balance Info */}
-          {selectedToken && (
-            <div className="bg-gradient-to-r from-sky-500/10 to-purple-500/10 border border-sky-500/30 rounded-lg p-4">
-              <p className="text-slate-400 text-sm">Your Balance</p>
-              {tokenPrice && tokenPrice > 0 ? (
-                <>
+            {/* User Balance Info */}
+            {selectedToken && (
+              <div className="bg-gradient-to-r from-[#1E293B] to-[#0F172A] border border-white/10 rounded-lg p-4">
+                <p className="text-[#94A3B8] text-sm">Your Balance</p>
+                {tokenPrice && tokenPrice > 0 ? (
+                  <>
+                    <p className="text-2xl font-bold text-white">
+                      ${(userBalance * tokenPrice).toFixed(3)} USD
+                    </p>
+                    <p className="text-sm text-[#94A3B8] mt-1">
+                      {userBalance.toFixed(4)} {selectedToken.symbol}
+                    </p>
+                  </>
+                ) : (
                   <p className="text-2xl font-bold text-white">
-                    ${(userBalance * tokenPrice).toFixed(3)} USD
-                  </p>
-                  <p className="text-sm text-slate-400 mt-1">
                     {userBalance.toFixed(4)} {selectedToken.symbol}
                   </p>
-                </>
-              ) : (
-                <p className="text-2xl font-bold text-white">
-                  {userBalance.toFixed(4)} {selectedToken.symbol}
-                </p>
-              )}
-              <p className="text-xs text-slate-500 mt-1">Available for withdrawal</p>
-              {userBalance < 0.01 && (
-                <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-                  <p className="text-yellow-200 text-sm">
-                    ⚠️ Low balance. Add {selectedToken.symbol} to your wallet in the "Add Funds" page.
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Token Selector */}
-          <div>
-            <label htmlFor="token" className="block text-sm font-medium text-slate-300 mb-2">
-              Token
-            </label>
-            <select
-              id="token"
-              value={selectedToken?.mint || ''}
-              onChange={(e) => {
-                const token = tokens.find(t => t.mint === e.target.value);
-                setSelectedToken(token || null);
-                setUsdAmount('');
-                setTokenAmount('');
-              }}
-              className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
-            >
-              {tokens.map(token => (
-                <option key={token.mint} value={token.mint}>
-                  {token.symbol} - {token.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Withdrawal Address */}
-          <div>
-            <label htmlFor="withdrawalAddress" className="block text-sm font-medium text-slate-300 mb-2">
-              Withdrawal Address
-            </label>
-            <input
-              type="text"
-              id="withdrawalAddress"
-              value={withdrawalAddress}
-              onChange={(e) => handleAddressChange(e.target.value)}
-              required
-              placeholder="Enter Solana or SPL token address"
-              className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
-            />
-            {addressError && (
-              <p className="text-red-400 text-sm mt-1">{addressError}</p>
+                )}
+                <p className="text-xs text-[#64748B] mt-1">Available for withdrawal</p>
+                {userBalance < 0.01 && (
+                  <div className="mt-3 p-3 bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-lg">
+                    <p className="text-[#FCD34D] text-sm">
+                      ⚠️ Low balance. Add {selectedToken.symbol} to your wallet in the "Add Funds" page.
+                    </p>
+                  </div>
+                )}
+              </div>
             )}
-          </div>
 
-          {/* Amount Input with Mode Toggle */}
-          <div>
-            <label htmlFor="amount" className="block text-sm font-medium text-slate-300 mb-2">
-              Amount
-            </label>
-            
-            <div className="flex gap-2 mb-3">
-              <button
-                type="button"
-                onClick={() => handleModeSwitch('token')}
-                className={`flex-1 py-2 px-4 rounded-lg font-medium transition-colors ${
-                  amountMode === 'token'
-                    ? 'bg-sky-500 text-white'
-                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                }`}
-              >
-                Token Amount
-              </button>
-              <button
-                type="button"
-                onClick={() => handleModeSwitch('usd')}
-                disabled={!tokenPrice || priceLoading}
-                className={`flex-1 py-2 px-4 rounded-lg font-medium transition-colors ${
-                  amountMode === 'usd'
-                    ? 'bg-sky-500 text-white'
-                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                } disabled:opacity-50 disabled:cursor-not-allowed`}
-              >
-                USD Amount
-              </button>
-            </div>
-            
-            {amountMode === 'token' ? (
-              <input
-                type="number"
-                id="amount"
-                value={tokenAmount}
+            {/* Token Selector */}
+            <div>
+              <label htmlFor="token" className="block text-sm font-medium text-white mb-2">
+                Token
+              </label>
+              <select
+                id="token"
+                value={selectedToken?.mint || ''}
                 onChange={(e) => {
-                  setTokenAmount(e.target.value);
-                  if (tokenPrice && e.target.value) {
-                    setUsdAmount((parseFloat(e.target.value) * tokenPrice).toFixed(2));
-                  }
+                  const token = tokens.find(t => t.mint === e.target.value);
+                  setSelectedToken(token || null);
+                  setUsdAmount('');
+                  setTokenAmount('');
                 }}
+                className="w-full bg-[#0F172A]/50 border border-white/10 rounded-xl px-4 py-3.5 text-white focus:border-[#BE123C] focus:ring-4 focus:ring-[#BE123C]/10 transition"
+              >
+                {tokens.map(token => (
+                  <option key={token.mint} value={token.mint}>
+                    {token.symbol} - {token.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Withdrawal Address */}
+            <div>
+              <InputField
+                label="Withdrawal Address"
+                placeholder="Enter Solana or SPL token address"
+                value={withdrawalAddress}
+                onChange={(e) => handleAddressChange(e.target.value)}
                 required
-                min="0"
-                step="0.000001"
-                placeholder="0.00"
-                className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
               />
-            ) : (
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-white text-lg font-medium">$</span>
-                <input
+              {addressError && (
+                <p className="text-[#EF4444] text-sm mt-1">{addressError}</p>
+              )}
+            </div>
+
+            {/* Amount Input with Mode Toggle */}
+            <div>
+              <label htmlFor="amount" className="block text-sm font-medium text-white mb-2">
+                Amount
+              </label>
+              
+              <div className="grid grid-cols-2 gap-0 bg-[#0F172A] p-1 rounded-xl border border-white/10 mb-3">
+                <button
+                  type="button"
+                  onClick={() => handleModeSwitch('token')}
+                  className={`py-2 px-4 rounded-lg font-medium transition-colors ${
+                    amountMode === 'token'
+                      ? 'bg-[#1E293B] text-white border border-white/10'
+                      : 'text-[#64748B] hover:text-[#94A3B8]'
+                  }`}
+                >
+                  Token Amount
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleModeSwitch('usd')}
+                  disabled={!tokenPrice || priceLoading}
+                  className={`py-2 px-4 rounded-lg font-medium transition-colors ${
+                    amountMode === 'usd'
+                      ? 'bg-[#06B6D4] text-white border border-white/10'
+                      : 'text-[#64748B] hover:text-[#94A3B8]'
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                  USD Amount
+                </button>
+              </div>
+              
+              {amountMode === 'token' ? (
+                <InputField
+                  type="number"
+                  id="amount"
+                  value={tokenAmount}
+                  onChange={(e) => {
+                    setTokenAmount(e.target.value);
+                    if (tokenPrice && e.target.value) {
+                      setUsdAmount((parseFloat(e.target.value) * tokenPrice).toFixed(2));
+                    }
+                  }}
+                  required
+                  min="0"
+                  step="0.000001"
+                  placeholder="0.00"
+                  rightElement={<span className="text-[#94A3B8]">{selectedToken?.symbol}</span>}
+                />
+              ) : (
+                <InputField
                   type="number"
                   id="amount"
                   value={usdAmount}
@@ -695,183 +722,188 @@ const WithdrawPage: React.FC = () => {
                   min="0"
                   step="0.01"
                   placeholder="0.00"
-                  className="w-full bg-slate-900/50 border border-slate-600 rounded-lg pl-8 pr-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
+                  rightElement={<span className="text-[#94A3B8]">$</span>}
                 />
+              )}
+              
+              {tokenPrice && (
+                <div className="mt-2 text-sm text-[#94A3B8]">
+                  {amountMode === 'token' && tokenAmount && !isNaN(parseFloat(tokenAmount)) ? (
+                    <span>≈ ${(parseFloat(tokenAmount) * tokenPrice).toFixed(2)} USD</span>
+                  ) : amountMode === 'usd' && usdAmount && !isNaN(parseFloat(usdAmount)) ? (
+                    <span>≈ {(parseFloat(usdAmount) / tokenPrice).toFixed(6)} {selectedToken?.symbol}</span>
+                  ) : null}
+                </div>
+              )}
+            </div>
+
+            {/* Fee Breakdown */}
+            {(tokenAmount || usdAmount) && !isNaN(parseFloat(tokenAmount || usdAmount)) && parseFloat(tokenAmount || usdAmount) > 0 && (
+              <div className="p-3 bg-[#0F172A]/30 border border-white/5 rounded-lg">
+                <div className="flex justify-between text-sm mb-1">
+                  <span className="text-[#94A3B8]">Withdrawal Amount:</span>
+                  <span className="text-white">
+                    {amountMode === 'usd' && tokenPrice
+                      ? `$${parseFloat(usdAmount).toFixed(3)}`
+                      : `${parseFloat(tokenAmount).toFixed(6)} ${selectedToken?.symbol}`}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm mb-1">
+                  <span className="text-[#94A3B8]">Fee (0.1%):</span>
+                  <span className="text-[#94A3B8]">
+                    {amountMode === 'usd' && tokenPrice
+                      ? `$${(parseFloat(usdAmount) * feePercentage).toFixed(3)}`
+                      : `${(parseFloat(tokenAmount) * feePercentage).toFixed(6)} ${selectedToken?.symbol}`}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm pt-2 border-t border-white/5">
+                  <span className="text-white font-medium">Total:</span>
+                  <span className="text-white font-medium">
+                    {amountMode === 'usd' && tokenPrice
+                      ? `$${(parseFloat(usdAmount) * (1 + feePercentage)).toFixed(3)}`
+                      : `${(parseFloat(tokenAmount) * (1 + feePercentage)).toFixed(6)} ${selectedToken?.symbol}`}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {error && (
+              <div className="bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-lg p-3">
+                <p className="text-[#EF4444] text-sm">{error}</p>
               </div>
             )}
             
-            {tokenPrice && (
-              <div className="mt-2 text-sm text-slate-400">
-                {amountMode === 'token' && tokenAmount && !isNaN(parseFloat(tokenAmount)) ? (
-                  <span>≈ ${(parseFloat(tokenAmount) * tokenPrice).toFixed(2)} USD</span>
-                ) : amountMode === 'usd' && usdAmount && !isNaN(parseFloat(usdAmount)) ? (
-                  <span>≈ {(parseFloat(usdAmount) / tokenPrice).toFixed(6)} {selectedToken?.symbol}</span>
-                ) : null}
+            {successMessage && (
+              <div className="bg-[#064E3B]/20 border border-[#10B981]/20 rounded-lg p-3">
+                <p className="text-[#10B981] text-sm">{successMessage}</p>
               </div>
             )}
-          </div>
 
-          {/* Fee Breakdown */}
-          {(tokenAmount || usdAmount) && !isNaN(parseFloat(tokenAmount || usdAmount)) && parseFloat(tokenAmount || usdAmount) > 0 && (
-            <div className="p-3 bg-slate-900/30 border border-slate-700 rounded-lg">
-              <div className="flex justify-between text-sm mb-1">
-                <span className="text-slate-400">Withdrawal Amount:</span>
-                <span className="text-white">
-                  {amountMode === 'usd' && tokenPrice
-                    ? `$${parseFloat(usdAmount).toFixed(3)}`
-                    : `${parseFloat(tokenAmount).toFixed(6)} ${selectedToken?.symbol}`}
-                </span>
-              </div>
-              <div className="flex justify-between text-sm mb-1">
-                <span className="text-slate-400">Fee (0.1%):</span>
-                <span className="text-slate-300">
-                  {amountMode === 'usd' && tokenPrice
-                    ? `$${(parseFloat(usdAmount) * feePercentage).toFixed(3)}`
-                    : `${(parseFloat(tokenAmount) * feePercentage).toFixed(6)} ${selectedToken?.symbol}`}
-                </span>
-              </div>
-              <div className="flex justify-between text-sm pt-2 border-t border-slate-700">
-                <span className="text-slate-300 font-medium">Total:</span>
-                <span className="text-white font-medium">
-                  {amountMode === 'usd' && tokenPrice
-                    ? `$${(parseFloat(usdAmount) * (1 + feePercentage)).toFixed(3)}`
-                    : `${(parseFloat(tokenAmount) * (1 + feePercentage)).toFixed(6)} ${selectedToken?.symbol}`}
-                </span>
-              </div>
+            <div className="flex gap-3">
+              <GlowButton
+                type="button"
+                variant="secondary"
+                fullWidth
+                onClick={() => {
+                  setSelectedOption(null);
+                  setWithdrawalAddress('');
+                  setUsdAmount('');
+                  setTokenAmount('');
+                  setError(null);
+                  setSuccessMessage(null);
+                }}
+              >
+                Back
+              </GlowButton>
+              <GlowButton
+                type="submit"
+                variant="cyan"
+                fullWidth
+                disabled={isWithdrawing || !user || userBalance < 0.001 || !!addressError}
+              >
+                {isWithdrawing ? (
+                  <>
+                    <Spinner size="6" color="border-white" />
+                    <span className="ml-2">Withdrawing...</span>
+                  </>
+                ) : (
+                  'Preview Withdrawal'
+                )}
+              </GlowButton>
             </div>
-          )}
-
-          {error && (
-            <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-              <p className="text-red-400 text-sm">{error}</p>
-            </div>
-          )}
-          
-          {successMessage && (
-            <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-3">
-              <p className="text-green-400 text-sm">{successMessage}</p>
-            </div>
-          )}
-
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedOption(null);
-                setWithdrawalAddress('');
-                setUsdAmount('');
-                setTokenAmount('');
-                setError(null);
-                setSuccessMessage(null);
-              }}
-              className="flex-1 bg-slate-600 hover:bg-slate-500 text-white font-bold py-3 px-4 rounded-lg transition-colors"
-            >
-              Back
-            </button>
-            <button
-              type="submit"
-              disabled={isWithdrawing || !user || userBalance < 0.001 || !!addressError}
-              className="flex-1 bg-sky-500 hover:bg-sky-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-colors"
-            >
-              {isWithdrawing ? (
-                <>
-                  <Spinner size="6" color="border-white" />
-                  <span className="ml-2">Withdrawing...</span>
-                </>
-              ) : (
-                'Preview Withdrawal'
-              )}
-            </button>
-          </div>
-        </form>
+          </form>
+        </GlassCard>
       );
     }
   };
 
   return (
-    <div className="animate-fade-in">
+    <div className="max-w-4xl mx-auto px-4 py-10 animate-fade-in-up">
       <button 
-        onClick={() => navigate(-1)} 
-        className="mb-4 text-sky-400 hover:text-sky-300 flex items-center gap-1 transition-colors font-medium"
+        onClick={() => selectedOption ? setSelectedOption(null) : navigate(-1)} 
+        className="flex items-center gap-2 text-[#94A3B8] hover:text-white mb-8 transition-colors"
       >
-        <ArrowLeftIcon className="w-5 h-5" />
+        <ChevronLeft size={20} />
         <span>Back</span>
       </button>
-      <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-8 shadow-lg">
-        <h1 className="text-3xl font-bold text-center mb-8">Withdraw Funds</h1>
-        
-        {/* Confirmation Modal */}
-        {showConfirmModal && confirmDetails && (
-          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 shadow-2xl max-w-md w-full animate-scale-in">
-              <h2 className="text-2xl font-bold text-white mb-4 text-center">Confirm Withdrawal</h2>
-              
-              <div className="space-y-4 mb-6">
-                <div className="bg-slate-900/50 rounded-lg p-4 space-y-3">
-                  <div className="pb-3 border-b border-slate-700">
-                    <p className="text-slate-400 text-xs mb-1">Withdrawal Address</p>
-                    <p className="text-white font-mono text-sm break-all">{confirmDetails.withdrawalAddress}</p>
-                  </div>
-                  
-                  <div className="pb-3 border-b border-slate-700">
-                    <p className="text-slate-400 text-xs mb-1">Amount</p>
-                    {confirmDetails.usdValue !== null ? (
-                      <p className="text-white font-bold text-xl">${confirmDetails.usdValue.toFixed(3)} USD</p>
-                    ) : (
-                      <p className="text-white font-bold text-xl">{confirmDetails.amount.toFixed(6)} {confirmDetails.token}</p>
-                    )}
-                    {confirmDetails.usdValue !== null && (
-                      <p className="text-slate-400 text-xs mt-1">{confirmDetails.amount.toFixed(6)} {confirmDetails.token}</p>
-                    )}
-                  </div>
-                  
-                  <div className="pb-3 border-b border-slate-700">
-                    <p className="text-slate-400 text-xs mb-1">Fee (0.1%)</p>
-                    {confirmDetails.usdFee !== null ? (
-                      <p className="text-slate-300 font-medium">${confirmDetails.usdFee.toFixed(3)} USD</p>
-                    ) : (
-                      <p className="text-slate-300 font-medium">{confirmDetails.fee.toFixed(6)} {confirmDetails.token}</p>
-                    )}
-                  </div>
-                  
-                  <div>
-                    <p className="text-slate-400 text-xs mb-1">What's left in your wallet</p>
-                    {confirmDetails.remainingBalanceUsd !== null ? (
-                      <>
-                        <p className="text-white font-medium">${confirmDetails.remainingBalanceUsd.toFixed(3)} USD</p>
-                        <p className="text-slate-400 text-xs mt-1">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
-                      </>
-                    ) : (
-                      <p className="text-white font-medium">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
-                    )}
-                  </div>
+      
+      {!selectedOption && (
+        <h1 className="text-3xl font-bold text-white mb-10 text-center">Withdraw Funds</h1>
+      )}
+      
+      {/* Confirmation Modal */}
+      {showConfirmModal && confirmDetails && (
+        <div className="fixed inset-0 bg-[#0B1120]/85 backdrop-blur-md flex items-center justify-center z-50 p-4">
+          <GlassCard className="max-w-md w-full animate-scale-in">
+            <h2 className="text-2xl font-bold text-white mb-4 text-center">Confirm Withdrawal</h2>
+            
+            <div className="space-y-4 mb-6">
+              <div className="bg-[#0F172A]/30 rounded-lg p-4 space-y-3 border border-white/5">
+                <div className="pb-3 border-b border-white/5">
+                  <p className="text-[#94A3B8] text-xs mb-1">Withdrawal Address</p>
+                  <p className="text-white font-mono text-sm break-all">{confirmDetails.withdrawalAddress}</p>
+                </div>
+                
+                <div className="pb-3 border-b border-white/5">
+                  <p className="text-[#94A3B8] text-xs mb-1">Amount</p>
+                  {confirmDetails.usdValue !== null ? (
+                    <p className="text-white font-bold text-xl">${confirmDetails.usdValue.toFixed(3)} USD</p>
+                  ) : (
+                    <p className="text-white font-bold text-xl">{confirmDetails.amount.toFixed(6)} {confirmDetails.token}</p>
+                  )}
+                  {confirmDetails.usdValue !== null && (
+                    <p className="text-[#94A3B8] text-xs mt-1">{confirmDetails.amount.toFixed(6)} {confirmDetails.token}</p>
+                  )}
+                </div>
+                
+                <div className="pb-3 border-b border-white/5">
+                  <p className="text-[#94A3B8] text-xs mb-1">Fee (0.1%)</p>
+                  {confirmDetails.usdFee !== null ? (
+                    <p className="text-[#94A3B8] font-medium">${confirmDetails.usdFee.toFixed(3)} USD</p>
+                  ) : (
+                    <p className="text-[#94A3B8] font-medium">{confirmDetails.fee.toFixed(6)} {confirmDetails.token}</p>
+                  )}
+                </div>
+                
+                <div>
+                  <p className="text-[#94A3B8] text-xs mb-1">What's left in your wallet</p>
+                  {confirmDetails.remainingBalanceUsd !== null ? (
+                    <>
+                      <p className="text-white font-medium">${confirmDetails.remainingBalanceUsd.toFixed(3)} USD</p>
+                      <p className="text-[#94A3B8] text-xs mt-1">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
+                    </>
+                  ) : (
+                    <p className="text-white font-medium">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
+                  )}
                 </div>
               </div>
-              
-              <div className="flex gap-3">
-                <button
-                  onClick={() => {
-                    setShowConfirmModal(false);
-                    setConfirmDetails(null);
-                  }}
-                  className="flex-1 bg-slate-600 hover:bg-slate-500 text-white font-bold py-3 px-4 rounded-lg transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleConfirmWithdraw}
-                  disabled={isWithdrawing}
-                  className="flex-1 bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isWithdrawing ? 'Withdrawing...' : 'Confirm & Withdraw'}
-                </button>
-              </div>
             </div>
-          </div>
-        )}
-        
-        {renderContent()}
-      </div>
+            
+            <div className="flex gap-3">
+              <GlowButton
+                variant="secondary"
+                fullWidth
+                onClick={() => {
+                  setShowConfirmModal(false);
+                  setConfirmDetails(null);
+                }}
+              >
+                Cancel
+              </GlowButton>
+              <GlowButton
+                variant="cyan"
+                fullWidth
+                onClick={handleConfirmWithdraw}
+                disabled={isWithdrawing}
+              >
+                {isWithdrawing ? 'Withdrawing...' : 'Confirm & Withdraw'}
+              </GlowButton>
+            </div>
+          </GlassCard>
+        </div>
+      )}
+      
+      {renderContent()}
     </div>
   );
 };

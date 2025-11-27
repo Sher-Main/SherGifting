@@ -1,54 +1,62 @@
 
 import React from 'react';
 import { useAuth } from '../context/AuthContext';
-import { NavLink } from 'react-router-dom';
-import { GiftIcon, HistoryIcon, WalletIcon } from './icons';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { Gift, History, LogOut } from 'lucide-react';
+import GlowButton from './UI/GlowButton';
 
 const Header: React.FC = () => {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const truncateAddress = (address: string) => {
     if (!address) return '';
     return `${address.slice(0, 4)}...${address.slice(-4)}`;
   };
-  
-  const activeLinkStyle = {
-    backgroundColor: 'rgb(30 41 59)',
-    color: 'rgb(56 189 248)',
-  };
 
   return (
-    <header className="bg-slate-900/70 backdrop-blur-lg sticky top-0 z-10 border-b border-slate-700/50">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16">
-          <div className="flex items-center space-x-4">
-             <NavLink to="/" className="flex items-center gap-2 text-sky-400 hover:text-sky-300 transition-colors">
-                 <GiftIcon className="w-8 h-8" />
-                 <span className="text-xl font-bold">Crypto Gifting App</span>
-             </NavLink>
-            <nav className="hidden md:flex items-center space-x-2 bg-slate-900/50 p-1 rounded-lg">
-                <NavLink to="/" end style={({ isActive }) => isActive ? activeLinkStyle : {}} className="px-3 py-2 rounded-md text-sm font-medium text-slate-300 hover:bg-slate-700 transition-colors flex items-center gap-2"><WalletIcon className="w-4 h-4" /> Portfolio</NavLink>
-                <NavLink to="/history" style={({ isActive }) => isActive ? activeLinkStyle : {}} className="px-3 py-2 rounded-md text-sm font-medium text-slate-300 hover:bg-slate-700 transition-colors flex items-center gap-2"><HistoryIcon className="w-4 h-4" /> History</NavLink>
-            </nav>
+    <header className="fixed top-0 w-full z-50 bg-[#0B1120]/80 backdrop-blur-md border-b border-white/5">
+      <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-2 text-[#BE123C] cursor-pointer" onClick={() => navigate('/')}>
+            <Gift className="drop-shadow-[0_0_8px_rgba(190,18,60,0.5)]" size={24} />
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-lg text-white hidden md:inline">
+                Crypto<span className="text-[#BE123C]">Gifting</span>
+              </span>
+              <span className="text-xs text-[#94A3B8] font-normal hidden lg:inline">
+                powered by <span className="text-[#D97706]">sher</span>
+              </span>
+            </div>
           </div>
-          <div className="flex items-center">
-            {user && (
-              <div className="flex items-center space-x-4">
-                <div className="text-right">
-                    <p className="text-sm font-medium text-slate-200">
-                      {user.username || user.email}
-                    </p>
-                    <p className="text-xs text-slate-400">{truncateAddress(user.wallet_address)}</p>
-                </div>
-                <button
-                  onClick={logout}
-                  className="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg transition-colors text-sm"
-                >
-                  Logout
-                </button>
+          <button 
+            onClick={() => navigate('/')} 
+            className={`text-sm font-medium transition-colors ${location.pathname === '/' ? 'text-white' : 'text-[#94A3B8] hover:text-white'}`}
+          >
+            Portfolio
+          </button>
+          <button 
+            onClick={() => navigate('/history')} 
+            className={`flex items-center gap-2 text-sm font-medium transition-colors ${location.pathname === '/history' ? 'text-white' : 'text-[#94A3B8] hover:text-white'}`}
+          >
+            <History size={16} /> History
+          </button>
+        </div>
+
+        <div className="flex items-center gap-6">
+          <div className="h-4 w-px bg-white/10 mx-2" />
+          {user && (
+            <>
+              <div className="text-right hidden md:block">
+                <div className="text-xs text-white font-bold">{user.username || user.email}</div>
+                <div className="text-[10px] text-[#94A3B8]">{truncateAddress(user.wallet_address || '')}</div>
               </div>
-            )}
-          </div>
+              <GlowButton variant="primary" className="!py-2 !px-4 !text-xs" onClick={logout} icon={LogOut}>
+                Logout
+              </GlowButton>
+            </>
+          )}
         </div>
       </div>
     </header>

@@ -6,7 +6,10 @@ import { useSignAndSendTransaction, useWallets } from '@privy-io/react-auth/sola
 import { tokenService, giftService, tiplinkService, heliusService, feeService, priceService, usernameService } from '../services/api';
 import { Token, TokenBalance, ResolveRecipientResponse } from '../types';
 import Spinner from '../components/Spinner';
-import { ArrowLeftIcon } from '../components/icons';
+import { Gift, ChevronLeft, AlertTriangle, Mail, QrCode, Copy, ArrowUpRight, Check } from 'lucide-react';
+import GlassCard from '../components/UI/GlassCard';
+import GlowButton from '../components/UI/GlowButton';
+import InputField from '../components/UI/InputField';
 import { CARD_UPSELL_PRICE } from '../lib/cardTemplates';
 import QRCode from 'qrcode';
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
@@ -1387,77 +1390,84 @@ const GiftPage: React.FC = () => {
             setError('Failed to copy link');
         }
     };
+    const formatCurrency = (value: number) => {
+        return new Intl.NumberFormat('en-US', { 
+            style: 'currency', 
+            currency: 'USD',
+            minimumFractionDigits: 3,
+            maximumFractionDigits: 3
+        }).format(value);
+    };
+
     return (
-        <div className="animate-fade-in">
+        <div className="max-w-2xl mx-auto px-4 py-10 animate-fade-in-up pb-24">
             {/* Confirmation Modal */}
             {showConfirmModal && confirmDetails && (
-                <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                    <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 shadow-2xl max-w-md w-full animate-scale-in relative">
+                <div className="fixed inset-0 bg-[#0B1120]/85 backdrop-blur-md flex items-center justify-center z-50 p-4">
+                    <GlassCard className="max-w-md w-full animate-scale-in relative">
                         {/* Loading Overlay */}
                         {isSending && (
-                            <div className="absolute inset-0 bg-slate-800/95 backdrop-blur-sm rounded-2xl flex flex-col items-center justify-center z-10">
-                                <Spinner size="8" color="border-sky-400" />
+                            <div className="absolute inset-0 bg-[#0B1120]/95 backdrop-blur-sm rounded-3xl flex flex-col items-center justify-center z-10">
+                                <Spinner size="8" color="border-[#06B6D4]" />
                                 <p className="text-white font-medium mt-4 text-lg">Processing Transaction...</p>
-                                <p className="text-slate-400 text-sm mt-2">Please wait while we sign and send your gift</p>
+                                <p className="text-[#94A3B8] text-sm mt-2">Please wait while we sign and send your gift</p>
                             </div>
                         )}
                         
-                        <h2 className="text-2xl font-bold text-white mb-4 text-center">Confirm Transaction</h2>
+                        <h2 className="text-2xl font-bold text-white mb-4 text-center">Confirm Gift</h2>
                         
                         <div className="space-y-4 mb-6">
-                            <div className="bg-slate-900/50 rounded-lg p-4 space-y-3">
-                                {/* What I am sending - Token */}
-                                <div className="pb-3 border-b border-slate-700">
-                                    <p className="text-slate-400 text-xs mb-1">What I am sending</p>
-                                    <p className="text-white font-medium">{confirmDetails.token} - {confirmDetails.tokenName}</p>
+                            <div className="bg-[#0F172A]/30 rounded-lg p-4 space-y-3 border border-white/5">
+                                {/* Recipient */}
+                                <div className="pb-3 border-b border-white/5">
+                                    <p className="text-[#94A3B8] text-xs mb-1">Recipient</p>
+                                    <p className="text-white font-mono text-sm break-all">{confirmDetails.recipientLabel}</p>
                                 </div>
                                 
-                                {/* Amount being sent - USD value */}
-                                <div className="pb-3 border-b border-slate-700">
-                                    <p className="text-slate-400 text-xs mb-1">Amount being sent</p>
+                                {/* Amount */}
+                                <div className="pb-3 border-b border-white/5">
+                                    <p className="text-[#94A3B8] text-xs mb-1">Amount</p>
                                     {confirmDetails.usdValue !== null ? (
                                         <p className="text-white font-bold text-xl">${confirmDetails.usdValue.toFixed(3)} USD</p>
                                     ) : (
                                         <p className="text-white font-bold text-xl">{confirmDetails.amount.toFixed(6)} {confirmDetails.token}</p>
                                     )}
                                     {confirmDetails.usdValue !== null && (
-                                        <p className="text-slate-400 text-xs mt-1">{confirmDetails.amount.toFixed(6)} {confirmDetails.token}</p>
+                                        <p className="text-[#94A3B8] text-xs mt-1">{confirmDetails.amount.toFixed(6)} {confirmDetails.token}</p>
                                     )}
                                 </div>
                                 
-                                {/* Service Fee - Flat $1 */}
-                                <div className="pb-3 border-b border-slate-700">
-                                    <p className="text-slate-400 text-xs mb-1">Service Fee</p>
-                                    <p className="text-slate-300 font-medium">$1.00 USD</p>
-                                    {confirmDetails.fee > 0 && (
-                                        <p className="text-slate-500 text-xs mt-1">{confirmDetails.fee.toFixed(6)} {confirmDetails.token}</p>
-                                    )}
+                                {/* Service Fee */}
+                                <div className="pb-3 border-b border-white/5">
+                                    <p className="text-[#94A3B8] text-xs mb-1">Service Fee</p>
+                                    <p className="text-[#94A3B8] font-medium">$1.00 USD</p>
                                 </div>
                                 
                                 {/* Greeting Card - $1 if selected */}
                                 {confirmDetails.hasCard && (
-                                    <div className="pb-3 border-b border-slate-700">
-                                        <p className="text-slate-400 text-xs mb-1">Greeting Card (add-on)</p>
-                                        <p className="text-green-400 font-medium">$1.00 USD</p>
-                                        {confirmDetails.cardFee > 0 && (
-                                            <p className="text-slate-500 text-xs mt-1">{confirmDetails.cardFee.toFixed(6)} {confirmDetails.token}</p>
-                                        )}
+                                    <div className="pb-3 border-b border-white/5">
+                                        <p className="text-[#94A3B8] text-xs mb-1">Greeting Card</p>
+                                        <p className="text-[#94A3B8] font-medium">$1.00 USD</p>
                                     </div>
                                 )}
                                 
-                                {/* To whom */}
-                                <div className="pb-3 border-b border-slate-700">
-                                    <p className="text-slate-400 text-xs mb-1">To whom</p>
-                                    <p className="text-white font-medium">{confirmDetails.recipientLabel}</p>
+                                {/* Total */}
+                                <div>
+                                    <p className="text-[#94A3B8] text-xs mb-1">Total</p>
+                                    {confirmDetails.usdTotal !== null ? (
+                                        <p className="text-white font-medium">${confirmDetails.usdTotal.toFixed(3)} USD</p>
+                                    ) : (
+                                        <p className="text-white font-medium">{confirmDetails.total.toFixed(6)} {confirmDetails.token}</p>
+                                    )}
                                 </div>
                                 
-                                {/* Wallet balance - What's left */}
+                                {/* Remaining balance */}
                                 <div>
-                                    <p className="text-slate-400 text-xs mb-1">What's left in your wallet</p>
+                                    <p className="text-[#94A3B8] text-xs mb-1">What's left in your wallet</p>
                                     {confirmDetails.remainingBalanceUsd !== null ? (
                                         <>
                                             <p className="text-white font-medium">${confirmDetails.remainingBalanceUsd.toFixed(3)} USD</p>
-                                            <p className="text-slate-400 text-xs mt-1">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
+                                            <p className="text-[#94A3B8] text-xs mt-1">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
                                         </>
                                     ) : (
                                         <p className="text-white font-medium">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
@@ -1466,15 +1476,17 @@ const GiftPage: React.FC = () => {
                             </div>
                             
                             {confirmDetails.message && (
-                                <div className="bg-slate-900/50 rounded-lg p-4">
-                                    <p className="text-slate-400 text-sm mb-1">Message:</p>
+                                <div className="bg-[#0F172A]/30 rounded-lg p-4 border border-white/5">
+                                    <p className="text-[#94A3B8] text-sm mb-1">Message:</p>
                                     <p className="text-white text-sm italic">"{confirmDetails.message}"</p>
                                 </div>
                             )}
                         </div>
                         
                         <div className="flex gap-3">
-                            <button
+                            <GlowButton
+                                variant="secondary"
+                                fullWidth
                                 onClick={() => {
                                     if (!isSending) {
                                         setShowConfirmModal(false);
@@ -1482,184 +1494,218 @@ const GiftPage: React.FC = () => {
                                     }
                                 }}
                                 disabled={isSending}
-                                className="flex-1 bg-slate-600 hover:bg-slate-500 text-white font-bold py-3 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 Cancel
-                            </button>
-                            <button
+                            </GlowButton>
+                            <GlowButton
+                                variant="cyan"
+                                fullWidth
                                 onClick={handleConfirmSend}
                                 disabled={isSending}
-                                className="flex-1 bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                {isSending ? 'Sending...' : 'Confirm & Send'}
-                            </button>
+                                {isSending ? 'Sending...' : 'Confirm & Send Gift'}
+                            </GlowButton>
                         </div>
-                    </div>
+                    </GlassCard>
                 </div>
             )}
             
             {/* Success Modal */}
             {showSuccessModal && giftDetails && (
-                <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                    <div className="bg-slate-800 border border-slate-700 rounded-2xl p-5 shadow-2xl max-w-md w-full animate-scale-in">
-                        <div className="text-center mb-4">
-                            <div className="w-14 h-14 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-3">
-                                <svg className="w-7 h-7 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                </svg>
+                <div className="fixed inset-0 bg-[#0B1120]/85 backdrop-blur-md flex items-center justify-center z-50 p-4">
+                    <GlassCard className="max-w-lg w-full animate-scale-in">
+                        <div className="text-center mb-6">
+                            <div className="w-16 h-16 bg-[#064E3B]/20 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-[#10B981]/20">
+                                <Check size={32} className="text-[#10B981]" />
                             </div>
-                            <h2 className="text-xl font-bold text-white mb-1">Gift Sent Successfully! 🎁</h2>
-                            <p className="text-slate-400 text-sm">
+                            <h2 className="text-2xl font-bold text-white mb-2">Gift Sent!</h2>
+                            <p className="text-[#94A3B8] mb-8">Your gift has been sent successfully</p>
+                        </div>
+
+                        {/* Gift Details */}
+                        <div className="bg-[#0F172A]/30 rounded-lg p-4 mb-6 border border-white/5">
+                            <p className="text-3xl font-bold text-white text-center mb-2">
                                 {giftDetails.usdValue !== null ? (
-                                    <>
-                                        <span className="text-white font-semibold">${giftDetails.usdValue.toFixed(3)} USD</span>
-                                        {' '}({parseFloat(giftDetails.amount).toFixed(3)} {giftDetails.token}) sent to {giftDetails.recipient}
-                                    </>
+                                    `$${giftDetails.usdValue.toFixed(3)}`
                                 ) : (
-                                    <>
-                                        {parseFloat(giftDetails.amount).toFixed(3)} {giftDetails.token} sent to {giftDetails.recipient}
-                                    </>
+                                    `${parseFloat(giftDetails.amount).toFixed(3)} ${giftDetails.token}`
                                 )}
                             </p>
+                            {giftDetails.usdValue !== null && (
+                                <p className="text-[#94A3B8] text-sm text-center">{parseFloat(giftDetails.amount).toFixed(3)} {giftDetails.token}</p>
+                            )}
+                            <p className="text-[#94A3B8] text-sm text-center mt-2">To: {giftDetails.recipient}</p>
                         </div>
 
                         {/* QR Code */}
-                        <div className="bg-white p-3 rounded-lg mb-4">
-                            <img src={giftDetails.qrCode} alt="Gift QR Code" className="w-full" />
+                        <div className="bg-white p-4 rounded-2xl inline-block mx-auto mb-6">
+                            <img src={giftDetails.qrCode} alt="Gift QR Code" className="w-48 h-48" />
                         </div>
 
                         {/* Gift Link */}
-                        <div className="mb-4">
-                            <label className="block text-sm font-medium text-slate-300 mb-2">Gift Link</label>
-                            <div className="flex gap-2">
-                                <input
-                                    type="text"
-                                    value={giftDetails.claim_url}
-                                    readOnly
-                                    className="flex-1 bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-2 text-white text-xs"
-                                />
-                                <button
+                        <div className="mb-6">
+                            <label className="block text-xs font-bold uppercase tracking-widest text-[#94A3B8] mb-2">Gift Link</label>
+                            <div className="bg-[#0F172A] p-4 rounded-xl flex items-center justify-between border border-white/10">
+                                <span className="text-[#FCD34D] text-sm truncate mr-4 font-mono">{giftDetails.claim_url}</span>
+                                <GlowButton
+                                    variant="secondary"
+                                    className="!py-2 !px-4 !text-xs flex-shrink-0"
                                     onClick={() => copyToClipboard(giftDetails.claim_url)}
-                                    className="bg-sky-500 hover:bg-sky-600 text-white px-3 py-2 rounded-lg transition-colors text-sm"
+                                    icon={Copy}
                                 >
                                     Copy
-                                </button>
+                                </GlowButton>
                             </div>
                         </div>
 
-                        {/* Action Button */}
-                        <button
-                            onClick={() => {
-                                setShowSuccessModal(false);
-                                setGiftDetails(null);
-                            }}
-                            className="w-full bg-sky-500 hover:bg-sky-600 text-white font-bold py-2.5 px-4 rounded-lg transition-colors"
-                        >
-                            Done
-                        </button>
-                    </div>
+                        {/* Action Buttons */}
+                        <div className="flex flex-col gap-3">
+                            <GlowButton
+                                variant="cyan"
+                                fullWidth
+                                icon={Mail}
+                                onClick={() => {
+                                    const subject = encodeURIComponent('You received a crypto gift!');
+                                    const body = encodeURIComponent(`You've received a gift! Claim it here: ${giftDetails.claim_url}`);
+                                    window.open(`mailto:?subject=${subject}&body=${body}`);
+                                }}
+                            >
+                                Send via Email
+                            </GlowButton>
+                            <a
+                                href={`https://solscan.io/tx/${giftDetails.signature}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="w-full"
+                            >
+                                <GlowButton
+                                    variant="secondary"
+                                    fullWidth
+                                    icon={ArrowUpRight}
+                                >
+                                    View Transaction
+                                </GlowButton>
+                            </a>
+                            <GlowButton
+                                variant="primary"
+                                fullWidth
+                                onClick={() => {
+                                    setShowSuccessModal(false);
+                                    setGiftDetails(null);
+                                    navigate('/');
+                                }}
+                            >
+                                Done
+                            </GlowButton>
+                        </div>
+                    </GlassCard>
                 </div>
             )}
 
             <button 
                 onClick={() => navigate(-1)} 
-                className="mb-4 text-sky-400 hover:text-sky-300 flex items-center gap-1 transition-colors font-medium"
+                className="flex items-center gap-2 text-[#94A3B8] hover:text-white mb-8 transition-colors"
             >
-                <ArrowLeftIcon className="w-5 h-5" />
+                <ChevronLeft size={20} />
                 <span>Back</span>
             </button>
             
-            <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-8 shadow-lg">
-                <h1 className="text-3xl font-bold text-center mb-6">Send a Gift 🎁</h1>
+            <div className="text-center mb-8">
+                <h1 className="text-3xl font-bold text-white flex items-center justify-center gap-3">
+                    Send a Gift <Gift className="text-[#BE123C]" />
+                </h1>
+            </div>
+            
+            <GlassCard glow className="p-0 space-y-8">
 
                 {showFormSkeleton ? (
-                    <GiftFormSkeleton />
+                    <div className="p-8">
+                        <GiftFormSkeleton />
+                    </div>
                 ) : (
                     <>
-                        {/* User Balance Info */}
-                        <div className="bg-gradient-to-r from-sky-500/10 to-purple-500/10 border border-sky-500/30 rounded-lg p-4 mb-6">
-                            <p className="text-slate-400 text-sm">Your Balance</p>
+                        {/* Balance Header Section */}
+                        <div className="p-8 bg-gradient-to-r from-[#1E293B] to-[#0F172A] border-b border-white/5">
+                            <span className="text-xs text-[#94A3B8] uppercase tracking-wider mb-1">Your Balance</span>
                             {tokenPrice && tokenPrice > 0 ? (
                                 <>
-                                    <p className="text-2xl font-bold text-white">
-                                        ${(userBalance * tokenPrice).toFixed(3)} USD
-                                    </p>
-                                    <p className="text-sm text-slate-400 mt-1">
+                                    <h2 className="text-3xl font-bold text-white mt-2">{formatCurrency(userBalance * tokenPrice)}</h2>
+                                    <p className="text-xs text-[#94A3B8] mt-1">
                                         {userBalance.toFixed(4)} {selectedToken?.symbol || 'SOL'}
                                     </p>
                                 </>
                             ) : (
-                                <p className="text-2xl font-bold text-white">
+                                <h2 className="text-3xl font-bold text-white mt-2">
                                     {userBalance.toFixed(4)} {selectedToken?.symbol || 'SOL'}
-                                </p>
+                                </h2>
                             )}
-                            <p className="text-xs text-slate-500 mt-1">Available for gifting</p>
+                            <p className="text-xs text-[#94A3B8] mt-1">Available for gifting</p>
                             {userBalance < 0.01 && (
-                                <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-                                    <p className="text-yellow-200 text-sm">
-                                        ⚠️ Low balance. Add {selectedToken?.symbol || 'tokens'} to your wallet in the "Add Funds" page.
+                                <div className="mt-4 flex items-center gap-3 bg-[#7F1D1D]/20 border border-[#EF4444]/20 p-3 rounded-lg">
+                                    <AlertTriangle size={16} className="text-[#EF4444] shrink-0" />
+                                    <p className="text-xs text-[#FCD34D]">
+                                        Low balance. Add SOL to your wallet in the 'Add Funds' page.
                                     </p>
                                 </div>
                             )}
                         </div>
 
-                        <form onSubmit={handleSendGift} className="space-y-6">
+                        <form onSubmit={handleSendGift} className="p-8 space-y-8">
                     {/* Token Selector */}
                     <div>
-                        <label htmlFor="token" className="block text-sm font-medium text-slate-300 mb-2">
+                        <label htmlFor="token" className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] ml-1 mb-2 block">
                             Token
                         </label>
-                        <select
-                            id="token"
-                            value={selectedToken?.mint || ''}
-                            onChange={(e) => {
-                                const token = tokens.find(t => t.mint === e.target.value);
-                                setSelectedToken(token || null);
-                                // Reset amount fields when token changes
-                                setAmount('');
-                                setTokenAmount('');
-                                setUsdAmount('');
-                            }}
-                            className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
-                        >
-                            {tokens.map(token => (
-                                <option key={token.mint} value={token.mint}>
-                                    {token.symbol} - {token.name}
-                                </option>
-                            ))}
-                        </select>
+                        <div className="relative">
+                            <select
+                                id="token"
+                                value={selectedToken?.mint || ''}
+                                onChange={(e) => {
+                                    const token = tokens.find(t => t.mint === e.target.value);
+                                    setSelectedToken(token || null);
+                                    // Reset amount fields when token changes
+                                    setAmount('');
+                                    setTokenAmount('');
+                                    setUsdAmount('');
+                                }}
+                                className="w-full bg-[#0F172A]/50 border border-white/10 rounded-xl px-4 py-3.5 text-white outline-none appearance-none focus:border-[#BE123C] focus:ring-4 focus:ring-[#BE123C]/10 transition"
+                            >
+                                {tokens.map(token => (
+                                    <option key={token.mint} value={token.mint}>
+                                        {token.symbol} - {token.name}
+                                    </option>
+                                ))}
+                            </select>
+                            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-[#94A3B8]">▼</div>
+                        </div>
                     </div>
 
                     {/* Recipient (Email or Username) */}
                     <div>
-                        <label htmlFor="recipientIdentifier" className="block text-sm font-medium text-slate-300 mb-2">
-                            Recipient Email / @Username
-                        </label>
-                        <input
-                            type="text"
-                            id="recipientIdentifier"
+                        <InputField
+                            label="Recipient Email / @Username"
+                            placeholder="recipient@example.com or @username"
                             value={recipientInput}
                             onChange={(e) => setRecipientInput(e.target.value)}
                             required
-                            placeholder="recipient@example.com or @username"
-                            className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
+                            icon={Mail}
                         />
                         <div className="mt-2 text-sm">
                             {recipientError && (
-                                <p className="text-rose-400">{recipientError}</p>
+                                <p className="text-[#EF4444]">{recipientError}</p>
                             )}
                             {isUsernameRecipient ? (
                                 <>
                                     {resolvingRecipient && (
-                                        <p className="text-slate-400">Resolving username...</p>
+                                        <p className="text-[#94A3B8]">Resolving username...</p>
                                     )}
                                     {!resolvingRecipient && resolvedRecipient && (
-                                        <p className="text-emerald-300">✓ Username linked to {resolvedRecipient.email}</p>
+                                        <p className="text-[#10B981]">✓ Username linked to {resolvedRecipient.email}</p>
                                     )}
                                 </>
                             ) : (
                                 trimmedRecipient && (
-                                    <p className="text-slate-400">Gift will be sent to {trimmedRecipient}</p>
+                                    <p className="text-[#94A3B8]">Gift will be sent to {trimmedRecipient}</p>
                                 )
                             )}
                         </div>
@@ -1676,19 +1722,19 @@ const GiftPage: React.FC = () => {
 
                     {/* Amount Input with Mode Toggle */}
                     <div>
-                        <label htmlFor="amount" className="block text-sm font-medium text-slate-300 mb-2">
+                        <label htmlFor="amount" className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] ml-1 mb-2 block">
                             Amount
                         </label>
                         
                         {/* Mode Toggle */}
-                        <div className="flex gap-2 mb-3">
+                        <div className="grid grid-cols-2 gap-0 bg-[#0F172A] p-1 rounded-xl mb-4 border border-white/10">
                             <button
                                 type="button"
                                 onClick={() => handleModeSwitch('token')}
-                                className={`flex-1 py-2 px-4 rounded-lg font-medium transition-colors ${
+                                className={`py-3 text-sm font-bold rounded-lg transition-all ${
                                     amountMode === 'token'
-                                        ? 'bg-sky-500 text-white'
-                                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                                        ? 'bg-[#1E293B] text-white shadow-lg border border-white/10'
+                                        : 'text-[#64748B] hover:text-[#94A3B8]'
                                 }`}
                             >
                                 Token Amount
@@ -1697,10 +1743,10 @@ const GiftPage: React.FC = () => {
                                 type="button"
                                 onClick={() => handleModeSwitch('usd')}
                                 disabled={!tokenPrice || priceLoading}
-                                className={`flex-1 py-2 px-4 rounded-lg font-medium transition-colors ${
+                                className={`py-3 text-sm font-bold rounded-lg transition-all ${
                                     amountMode === 'usd'
-                                        ? 'bg-sky-500 text-white'
-                                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                                        ? 'bg-[#06B6D4] text-white shadow-lg border border-white/10'
+                                        : 'text-[#64748B] hover:text-[#94A3B8]'
                                 } disabled:opacity-50 disabled:cursor-not-allowed`}
                             >
                                 USD Amount
@@ -1709,7 +1755,7 @@ const GiftPage: React.FC = () => {
                         
                         {/* Amount Input */}
                         {amountMode === 'token' ? (
-                            <input
+                            <InputField
                                 type="number"
                                 id="amount"
                                 value={tokenAmount}
@@ -1729,44 +1775,41 @@ const GiftPage: React.FC = () => {
                                 min="0"
                                 step="0.000001"
                                 placeholder="0.00"
-                                className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
+                                rightElement={<span className="text-[#94A3B8]">{selectedToken?.symbol}</span>}
                             />
                         ) : (
-                            <div className="relative">
-                                <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-white text-lg font-medium">$</span>
-                                <input
-                                    type="number"
-                                    id="amount"
-                                    value={usdAmount}
-                                    onChange={async (e) => {
-                                        const value = e.target.value;
-                                        setUsdAmount(value);
-                                        // Calculate token amount but don't update amount state until submission
-                                        if (tokenPrice) {
-                                            const calculatedTokenAmount = (parseFloat(value) / tokenPrice).toString();
-                                            setTokenAmount(calculatedTokenAmount);
-                                            setAmount(calculatedTokenAmount);
-                                            
-                                            // Validate balance in real-time
-                                            const numValue = parseFloat(calculatedTokenAmount);
-                                            if (!isNaN(numValue) && numValue > 0) {
-                                                await validateBalance(numValue);
-                                            }
+                            <InputField
+                                type="number"
+                                id="amount"
+                                value={usdAmount}
+                                onChange={async (e) => {
+                                    const value = e.target.value;
+                                    setUsdAmount(value);
+                                    // Calculate token amount but don't update amount state until submission
+                                    if (tokenPrice) {
+                                        const calculatedTokenAmount = (parseFloat(value) / tokenPrice).toString();
+                                        setTokenAmount(calculatedTokenAmount);
+                                        setAmount(calculatedTokenAmount);
+                                        
+                                        // Validate balance in real-time
+                                        const numValue = parseFloat(calculatedTokenAmount);
+                                        if (!isNaN(numValue) && numValue > 0) {
+                                            await validateBalance(numValue);
                                         }
-                                        setBalanceError(null); // Clear previous error
-                                    }}
-                                    required
-                                    min="0"
-                                    step="0.01"
-                                    placeholder="0.00"
-                                    className="w-full bg-slate-900/50 border border-slate-600 rounded-lg pl-8 pr-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
-                                />
-                            </div>
+                                    }
+                                    setBalanceError(null); // Clear previous error
+                                }}
+                                required
+                                min="0"
+                                step="0.01"
+                                placeholder="0.00"
+                                rightElement={<span className="text-[#94A3B8]">$</span>}
+                            />
                         )}
                         
                         {/* Conversion Preview */}
                         {tokenPrice && (
-                            <div className="mt-2 text-sm text-slate-400">
+                            <div className="mt-2 text-sm text-[#94A3B8]">
                                 {amountMode === 'token' && tokenAmount && !isNaN(parseFloat(tokenAmount)) ? (
                                     <span>≈ ${(parseFloat(tokenAmount) * tokenPrice).toFixed(2)} USD</span>
                                 ) : amountMode === 'usd' && usdAmount && !isNaN(parseFloat(usdAmount)) ? (
@@ -1777,35 +1820,35 @@ const GiftPage: React.FC = () => {
                         
                         {/* Price Status */}
                         {priceLastUpdated && (
-                            <div className="mt-1 text-xs text-slate-500">
+                            <div className="mt-1 text-xs text-[#94A3B8]">
                                 Price updated {Math.floor((Date.now() - priceLastUpdated) / 1000)}s ago
                             </div>
                         )}
                         
                         {/* Price Error */}
                         {priceError && (
-                            <div className="mt-2 text-xs text-yellow-400">
+                            <div className="mt-2 text-xs text-[#FCD34D]">
                                 {priceError}
                             </div>
                         )}
                         
                         {/* Balance Error */}
                         {balanceError && (
-                            <div className="mt-2 text-xs text-red-400">
+                            <div className="mt-2 text-xs text-[#EF4444]">
                                 {balanceError}
                             </div>
                         )}
                         
                         {/* Loading Indicator */}
                         {priceLoading && (
-                            <div className="mt-2 text-xs text-slate-400">
+                            <div className="mt-2 text-xs text-[#94A3B8]">
                                 Loading price...
                             </div>
                         )}
                         
                         {/* Available Balance Info */}
                         {selectedToken?.isNative && (
-                            <p className="text-xs text-slate-400 mt-2">
+                            <p className="text-xs text-[#94A3B8] mt-2">
                                 Available: {userBalance.toFixed(4)} {selectedToken.symbol}
                             </p>
                         )}
@@ -1835,9 +1878,9 @@ const GiftPage: React.FC = () => {
                             const usdTotal = usdAmountValue + usdTotalFees;
                             
                             return (
-                                <div className="mt-3 p-3 bg-slate-900/30 border border-slate-700 rounded-lg">
+                                <div className="mt-3 p-3 bg-[#0F172A]/30 border border-white/5 rounded-lg">
                                     <div className="flex justify-between text-sm mb-1">
-                                        <span className="text-slate-400">Gift Amount:</span>
+                                        <span className="text-[#94A3B8]">Gift Amount:</span>
                                         <span className="text-white">
                                             {amountMode === 'usd' && tokenPrice
                                                 ? `$${usdAmountValue.toFixed(3)}`
@@ -1845,24 +1888,24 @@ const GiftPage: React.FC = () => {
                                         </span>
                                     </div>
                                     <div className="flex justify-between text-sm mb-1">
-                                        <span className="text-slate-400">Service Fee:</span>
-                                        <span className="text-slate-300">$1.00 USD</span>
+                                        <span className="text-[#94A3B8]">Service Fee:</span>
+                                        <span className="text-[#94A3B8]">$1.00 USD</span>
                                     </div>
                                     {selectedCard && (
                                         <div className="flex justify-between text-sm mb-1">
-                                            <span className="text-slate-400">Greeting Card (add-on):</span>
-                                            <span className="text-green-400">$1.00 USD</span>
+                                            <span className="text-[#94A3B8]">Greeting Card (add-on):</span>
+                                            <span className="text-[#06B6D4]">$1.00 USD</span>
                                         </div>
                                     )}
-                                    <div className="flex justify-between text-sm pt-2 border-t border-slate-700">
-                                        <span className="text-slate-300 font-medium">Total:</span>
+                                    <div className="flex justify-between text-sm pt-2 border-t border-white/5">
+                                        <span className="text-white font-medium">Total:</span>
                                         <span className="text-white font-medium">
                                             {amountMode === 'usd' && tokenPrice
                                                 ? `$${usdTotal.toFixed(3)}`
                                                 : `${tokenTotal.toFixed(6)} ${selectedToken?.symbol}`}
                                         </span>
                                     </div>
-                                    <p className="text-xs text-slate-500 mt-2">Network fees (SOL) are paid separately</p>
+                                    <p className="text-xs text-[#64748B] mt-2">Network fees (SOL) are paid separately</p>
                                 </div>
                             );
                         })()}
@@ -1870,7 +1913,7 @@ const GiftPage: React.FC = () => {
 
                     {/* Message */}
                     <div>
-                        <label htmlFor="message" className="block text-sm font-medium text-slate-300 mb-2">
+                        <label htmlFor="message" className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] ml-1 mb-2 block">
                             Message (Optional)
                         </label>
                         <textarea
@@ -1879,26 +1922,28 @@ const GiftPage: React.FC = () => {
                             onChange={(e) => setMessage(e.target.value)}
                             rows={3}
                             placeholder="Add a personal message..."
-                            className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition resize-none"
+                            className="w-full bg-[#0F172A]/50 border border-white/10 rounded-xl px-4 py-3.5 outline-none text-white placeholder:text-[#475569] focus:border-[#BE123C] focus:ring-4 focus:ring-[#BE123C]/10 transition-all resize-none min-h-[100px]"
                         />
                     </div>
 
                     {error && (
-                        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-                            <p className="text-red-400 text-sm">{error}</p>
+                        <div className="bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-lg p-3">
+                            <p className="text-[#EF4444] text-sm">{error}</p>
                         </div>
                     )}
                     
                     {successMessage && (
-                        <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-3">
-                            <p className="text-green-400 text-sm">{successMessage}</p>
+                        <div className="bg-[#064E3B]/20 border border-[#10B981]/20 rounded-lg p-3">
+                            <p className="text-[#10B981] text-sm">{successMessage}</p>
                         </div>
                     )}
 
-                    <button
+                    <GlowButton
                         type="submit"
+                        fullWidth
+                        variant="cyan"
+                        icon={Gift}
                         disabled={isSending || !user || userBalance < 0.001}
-                        className="w-full bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-600 hover:to-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 ease-in-out flex items-center justify-center text-lg shadow-lg"
                     >
                         {isSending ? (
                             <>
@@ -1906,29 +1951,29 @@ const GiftPage: React.FC = () => {
                                 <span className="ml-3">Sending Gift...</span>
                             </>
                         ) : (
-                            '🎁 Send Gift'
+                            'Send Gift'
                         )}
-                    </button>
+                    </GlowButton>
                         </form>
                     </>
                 )}
-            </div>
+            </GlassCard>
         </div>
     );
 };
 
 const GiftFormSkeleton: React.FC = () => (
     <div className="space-y-6 animate-pulse">
-        <div className="h-24 rounded-xl bg-slate-900/40 border border-slate-700" />
+        <div className="h-24 rounded-xl bg-[#1E293B]/40 border border-white/10" />
         {Array.from({ length: 3 }).map((_, index) => (
-            <div key={index} className="h-28 rounded-xl bg-slate-900/40 border border-slate-700" />
+            <div key={index} className="h-28 rounded-xl bg-[#1E293B]/40 border border-white/10" />
         ))}
-        <div className="h-12 rounded-xl bg-slate-900/40 border border-slate-700" />
+        <div className="h-12 rounded-xl bg-[#1E293B]/40 border border-white/10" />
     </div>
 );
 
 const CardUpsellFallback: React.FC = () => (
-    <div className="h-48 rounded-2xl border border-slate-700 bg-slate-900/40 animate-pulse" />
+    <div className="h-48 rounded-2xl border border-white/10 bg-[#1E293B]/40 animate-pulse" />
 );
 
 export default GiftPage;

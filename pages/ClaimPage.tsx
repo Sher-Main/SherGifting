@@ -6,6 +6,9 @@ import { giftService } from '../services/api';
 import { GiftInfo } from '../types';
 import Spinner from '../components/Spinner';
 import { ProgressLoader } from '../components/ProgressLoader';
+import { Gift, Check, AlertTriangle, Lock, Clock, ArrowRight, ArrowUpRight, X } from 'lucide-react';
+import GlassCard from '../components/UI/GlassCard';
+import GlowButton from '../components/UI/GlowButton';
 
 const ClaimPage: React.FC = () => {
     const [searchParams] = useSearchParams();
@@ -218,23 +221,23 @@ const ClaimPage: React.FC = () => {
     if (error && !giftInfo) {
         return (
             <div className="min-h-screen flex items-center justify-center p-4">
-                <div className="bg-slate-800/50 border border-red-500/30 rounded-2xl p-8 shadow-lg max-w-md w-full">
+                <GlassCard className="max-w-md w-full animate-fade-in-up">
                     <div className="text-center">
-                        <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
+                        <div className="w-16 h-16 bg-[#7F1D1D]/20 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-[#EF4444]/20">
+                            <X size={32} className="text-[#EF4444]" />
                         </div>
                         <h2 className="text-2xl font-bold text-white mb-2">Gift Not Found</h2>
-                        <p className="text-slate-400 mb-6">{error}</p>
-                        <button
+                        <p className="text-[#94A3B8] mb-6">{error}</p>
+                        <GlowButton
                             onClick={() => navigate('/')}
-                            className="w-full bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 px-4 rounded-lg transition-colors"
+                            variant="primary"
+                            fullWidth
+                            icon={ArrowRight}
                         >
                             Go to Homepage
-                        </button>
+                        </GlowButton>
                     </div>
-                </div>
+                </GlassCard>
             </div>
         );
     }
@@ -242,49 +245,52 @@ const ClaimPage: React.FC = () => {
     if (claimSuccess && giftInfo) {
         return (
             <div className="min-h-screen flex items-center justify-center p-4">
-                <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-8 shadow-lg max-w-md w-full">
+                <GlassCard className="max-w-md w-full animate-scale-in">
                     <div className="text-center">
-                        <div className="w-20 h-20 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-6 animate-bounce">
-                            <svg className="w-10 h-10 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                            </svg>
+                        <div className="w-20 h-20 bg-[#064E3B]/20 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-[#10B981]/20">
+                            <Check size={40} className="text-[#10B981]" />
                         </div>
                         <h2 className="text-3xl font-bold text-white mb-2">Gift Claimed! 🎉</h2>
-                        <p className="text-slate-400 mb-6">
+                        <p className="text-[#94A3B8] mb-6">
                             You received <span className="text-white font-bold">{giftInfo.amount} {giftInfo.token_symbol}</span>
                         </p>
 
                         {/* Transaction Link */}
                         {claimSignature && (
-                            <div className="bg-slate-900/50 rounded-lg p-4 mb-6">
-                                <p className="text-slate-400 text-sm mb-2">Transaction:</p>
+                            <div className="bg-[#0F172A]/30 rounded-lg p-4 mb-6 border border-white/5">
+                                <p className="text-[#94A3B8] text-sm mb-2">Transaction:</p>
                                 <a
                                     href={`https://explorer.solana.com/tx/${claimSignature}?cluster=mainnet-beta`}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="text-sky-400 hover:text-sky-300 text-sm font-mono break-all"
+                                    className="text-[#06B6D4] hover:text-[#0891B2] text-sm font-mono break-all flex items-center gap-2 justify-center"
                                 >
                                     {claimSignature.slice(0, 16)}...{claimSignature.slice(-16)}
+                                    <ArrowUpRight size={14} />
                                 </a>
                             </div>
                         )}
 
                         <div className="space-y-3">
-                            <button
+                            <GlowButton
                                 onClick={() => navigate('/')}
-                                className="w-full bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-600 hover:to-cyan-500 text-white font-bold py-3 px-4 rounded-lg transition-all"
+                                variant="cyan"
+                                fullWidth
+                                icon={ArrowRight}
                             >
                                 View Dashboard
-                            </button>
-                            <button
+                            </GlowButton>
+                            <GlowButton
                                 onClick={() => navigate('/gift')}
-                                className="w-full bg-purple-500 hover:bg-purple-600 text-white font-bold py-3 px-4 rounded-lg transition-colors"
+                                variant="primary"
+                                fullWidth
+                                icon={Gift}
                             >
                                 Send a Gift 🎁
-                            </button>
+                            </GlowButton>
                         </div>
                     </div>
-                </div>
+                </GlassCard>
             </div>
         );
     }
@@ -302,26 +308,26 @@ const ClaimPage: React.FC = () => {
     if (emailMismatch) {
         return (
             <div className="min-h-screen flex items-center justify-center p-4">
-                <div className="bg-slate-800/50 border border-red-500/30 rounded-2xl p-8 shadow-lg max-w-md w-full">
+                <GlassCard className="max-w-md w-full animate-fade-in-up">
                     <div className="text-center">
-                        <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                            </svg>
+                        <div className="w-16 h-16 bg-[#7F1D1D]/20 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-[#EF4444]/20">
+                            <Lock size={32} className="text-[#EF4444]" />
                         </div>
                         <h2 className="text-2xl font-bold text-white mb-2">Gift Not For Your Account</h2>
-                        <p className="text-slate-300 mb-2 font-medium">This gift can only be claimed by the recipient email address.</p>
-                        <p className="text-slate-400 text-sm mb-6">
+                        <p className="text-white mb-2 font-medium">This gift can only be claimed by the recipient email address.</p>
+                        <p className="text-[#94A3B8] text-sm mb-6">
                             If you received this link by mistake, please contact the sender.
                         </p>
-                        <button
+                        <GlowButton
                             onClick={() => navigate('/')}
-                            className="w-full bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 px-4 rounded-lg transition-colors"
+                            variant="primary"
+                            fullWidth
+                            icon={ArrowRight}
                         >
                             Go to Homepage
-                        </button>
+                        </GlowButton>
                     </div>
-                </div>
+                </GlassCard>
             </div>
         );
     }
@@ -334,32 +340,32 @@ const ClaimPage: React.FC = () => {
         
         return (
             <div className="min-h-screen flex items-center justify-center p-4">
-                <div className="bg-slate-800/50 border border-yellow-500/30 rounded-2xl p-8 shadow-lg max-w-md w-full">
+                <GlassCard className="max-w-md w-full animate-fade-in-up">
                     <div className="text-center">
-                        <div className="w-16 h-16 bg-yellow-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <svg className="w-8 h-8 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            </svg>
+                        <div className="w-16 h-16 bg-[#F59E0B]/10 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-[#F59E0B]/20">
+                            <Lock size={32} className="text-[#F59E0B]" />
                         </div>
                         <h2 className="text-2xl font-bold text-white mb-2">Gift Temporarily Locked</h2>
-                        <p className="text-slate-400 mb-2">This gift has been temporarily locked due to multiple failed claim attempts.</p>
-                        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 mb-6">
-                            <p className="text-yellow-400 font-semibold text-lg mb-1">
+                        <p className="text-[#94A3B8] mb-2">This gift has been temporarily locked due to multiple failed claim attempts.</p>
+                        <div className="bg-[#F59E0B]/10 border border-[#F59E0B]/20 rounded-lg p-4 mb-6">
+                            <p className="text-[#FCD34D] font-semibold text-lg mb-1">
                                 {hoursRemaining > 0 
                                     ? `${hoursRemaining}h ${minsRemaining}m remaining`
                                     : `${minsRemaining} minutes remaining`
                                 }
                             </p>
-                            <p className="text-slate-400 text-sm">You can try claiming again after the lock expires.</p>
+                            <p className="text-[#94A3B8] text-sm">You can try claiming again after the lock expires.</p>
                         </div>
-                        <button
+                        <GlowButton
                             onClick={() => navigate('/')}
-                            className="w-full bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 px-4 rounded-lg transition-colors"
+                            variant="primary"
+                            fullWidth
+                            icon={ArrowRight}
                         >
                             Go to Homepage
-                        </button>
+                        </GlowButton>
                     </div>
-                </div>
+                </GlassCard>
             </div>
         );
     }
@@ -368,54 +374,54 @@ const ClaimPage: React.FC = () => {
     if (giftInfo.status === 'CLAIMED') {
         return (
             <div className="min-h-screen flex items-center justify-center p-4">
-                <div className="bg-slate-800/50 border border-yellow-500/30 rounded-2xl p-8 shadow-lg max-w-md w-full">
+                <GlassCard className="max-w-md w-full animate-fade-in-up">
                     <div className="text-center">
-                        <div className="w-16 h-16 bg-yellow-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <svg className="w-8 h-8 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                            </svg>
+                        <div className="w-16 h-16 bg-[#F59E0B]/10 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-[#F59E0B]/20">
+                            <AlertTriangle size={32} className="text-[#F59E0B]" />
                         </div>
                         <h2 className="text-2xl font-bold text-white mb-2">Already Claimed</h2>
-                        <p className="text-slate-400 mb-6">
+                        <p className="text-[#94A3B8] mb-6">
                             This gift has already been claimed.
                         </p>
-                        <button
+                        <GlowButton
                             onClick={() => navigate('/')}
-                            className="w-full bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 px-4 rounded-lg transition-colors"
+                            variant="primary"
+                            fullWidth
+                            icon={ArrowRight}
                         >
                             Go to Homepage
-                        </button>
+                        </GlowButton>
                     </div>
-                </div>
+                </GlassCard>
             </div>
         );
     }
 
     return (
-        <div className="min-h-screen flex items-center justify-center p-4 fade-in">
-            <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-8 shadow-lg max-w-md w-full">
+        <div className="min-h-screen flex items-center justify-center p-4 animate-fade-in-up">
+            <GlassCard glow className="max-w-md w-full">
                 {/* Gift Preview */}
                 <div className="text-center mb-8">
-                    <div className="w-20 h-20 bg-gradient-to-r from-purple-500/20 to-pink-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <span className="text-4xl">🎁</span>
+                    <div className="w-20 h-20 bg-gradient-to-r from-[#BE123C]/20 to-[#FCD34D]/20 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-white/10">
+                        <Gift size={48} className="text-[#BE123C]" />
                     </div>
                     <h2 className="text-2xl font-bold text-white mb-2">You Have a Gift!</h2>
-                    <p className="text-slate-400 text-sm mb-4">
+                    <p className="text-[#94A3B8] text-sm mb-4">
                         From <span className="text-white font-semibold">{giftInfo.sender_email}</span>
                     </p>
                     
                     {/* Gift Amount */}
-                    <div className="bg-gradient-to-r from-sky-500/10 to-purple-500/10 border border-sky-500/30 rounded-lg p-6 mb-4">
-                        <p className="text-slate-400 text-sm mb-1">Gift Amount</p>
+                    <div className="bg-gradient-to-r from-[#1E293B] to-[#0F172A] border border-white/10 rounded-xl p-6 mb-6">
+                        <p className="text-xs text-[#94A3B8] uppercase tracking-wider mb-1">Gift Amount</p>
                         <p className="text-4xl font-bold text-white">
-                            {giftInfo.amount} <span className="text-2xl text-sky-400">{giftInfo.token_symbol}</span>
+                            {giftInfo.amount} <span className="text-2xl text-[#06B6D4]">{giftInfo.token_symbol}</span>
                         </p>
                     </div>
 
                     {/* Gift Message */}
                     {giftInfo.message && (
-                        <div className="bg-slate-900/50 rounded-lg p-4 mb-6">
-                            <p className="text-slate-400 text-xs mb-2">Message:</p>
+                        <div className="bg-[#0F172A]/30 rounded-lg p-4 mb-6 border border-white/5">
+                            <p className="text-[#94A3B8] text-xs mb-2">Message:</p>
                             <p className="text-white text-sm italic">"{giftInfo.message}"</p>
                         </div>
                     )}
@@ -424,13 +430,14 @@ const ClaimPage: React.FC = () => {
                 {/* Claim Action */}
                 {!authenticated ? (
                     <div>
-                        <p className="text-slate-400 text-sm text-center mb-4">
+                        <p className="text-[#94A3B8] text-sm text-center mb-4">
                             Sign in with your Google account to claim this gift
                         </p>
-                        <button
+                        <GlowButton
                             onClick={handleLogin}
                             disabled={!ready}
-                            className="w-full bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-600 hover:to-cyan-500 disabled:opacity-50 text-white font-bold py-3 px-4 rounded-lg transition-all flex items-center justify-center gap-2"
+                            variant="cyan"
+                            fullWidth
                         >
                             <svg className="w-5 h-5" viewBox="0 0 24 24">
                                 <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -439,30 +446,30 @@ const ClaimPage: React.FC = () => {
                                 <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
                             </svg>
                             Sign in with Google
-                        </button>
-                        <p className="text-slate-500 text-xs text-center mt-4">
+                        </GlowButton>
+                        <p className="text-[#64748B] text-xs text-center mt-4">
                             A wallet will be automatically created for you
                         </p>
                     </div>
                 ) : (
                     <div>
-                        <p className="text-green-400 text-sm text-center mb-4 flex items-center justify-center gap-2">
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                            </svg>
+                        <p className="text-[#10B981] text-sm text-center mb-4 flex items-center justify-center gap-2">
+                            <Check size={16} className="text-[#10B981]" />
                             Signed in as {user?.email}
                         </p>
                         
                         {error && (
-                            <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 mb-4">
-                                <p className="text-red-400 text-sm">{error}</p>
+                            <div className="bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-lg p-3 mb-4">
+                                <p className="text-[#EF4444] text-sm">{error}</p>
                             </div>
                         )}
 
-                        <button
+                        <GlowButton
                             onClick={handleClaim}
                             disabled={isClaiming}
-                            className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 disabled:opacity-50 text-white font-bold py-3 px-4 rounded-lg transition-all flex items-center justify-center gap-2"
+                            variant="cyan"
+                            fullWidth
+                            icon={Gift}
                         >
                             {isClaiming ? (
                                 <>
@@ -470,14 +477,12 @@ const ClaimPage: React.FC = () => {
                                     <span>Claiming Gift...</span>
                                 </>
                             ) : (
-                                <>
-                                    <span>🎁 Claim Gift</span>
-                                </>
+                                'Claim Gift'
                             )}
-                        </button>
+                        </GlowButton>
                     </div>
                 )}
-            </div>
+            </GlassCard>
         </div>
     );
 };

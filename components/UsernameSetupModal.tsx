@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { usernameService } from '../services/api';
-import './UsernameSetupModal.css';
+import { AtSign, Check } from 'lucide-react';
+import GlassCard from './UI/GlassCard';
+import InputField from './UI/InputField';
+import GlowButton from './UI/GlowButton';
 
 interface UsernameSetupModalProps {
   isOpen: boolean;
@@ -117,66 +120,72 @@ const UsernameSetupModal: React.FC<UsernameSetupModalProps> = ({
   const canSubmit = Boolean(username && available && !checking && !submitting);
 
   return (
-    <div className="username-modal__overlay" role="dialog" aria-modal="true">
-      <div className="username-modal__content">
-        <h2>Choose your username</h2>
-        <p className="username-modal__subtitle">
-          This will be your @handle for receiving gifts.
-        </p>
+    <div className="fixed inset-0 flex items-center justify-center p-4 z-[2000] bg-[#0B1120]/85 backdrop-blur-md" role="dialog" aria-modal="true">
+      <GlassCard className="w-full max-w-md p-8 md:p-10 animate-scale-in">
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 bg-[#BE123C]/10 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-[#BE123C]/20 shadow-[0_0_15px_rgba(190,18,60,0.2)]">
+            <AtSign strokeWidth={1.5} size={32} className="text-[#BE123C]" />
+          </div>
+          <h2 className="text-2xl font-bold text-white">Choose your username</h2>
+          <p className="text-[#94A3B8] mt-2">This will be your @handle for receiving gifts.</p>
+        </div>
 
-        <form onSubmit={handleSubmit}>
-          <label htmlFor="username-input">Username</label>
-          <input
-            id="username-input"
-            type="text"
-            value={username}
-            onChange={handleInputChange}
-            placeholder="@yourname"
-            maxLength={30}
-            autoFocus
-            disabled={submitting}
-            className={
-              username
-                ? available
-                  ? 'username-modal__input success'
-                  : available === false
-                    ? 'username-modal__input error'
-                    : 'username-modal__input'
-                : 'username-modal__input'
-            }
-          />
-
-          <div className="username-modal__feedback">
-            {checking && <span>Checking availability...</span>}
-            {!checking && username.length >= USERNAME_MIN_LENGTH && available && (
-              <span className="success">✓ Available</span>
-            )}
-            {!checking && username.length >= USERNAME_MIN_LENGTH && available === false && !error && (
-              <span className="error">✗ Taken</span>
-            )}
-            {error && <span className="error">{error}</span>}
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div>
+            <InputField
+              label="Username"
+              placeholder="@yourname"
+              value={username}
+              onChange={handleInputChange}
+              maxLength={30}
+              autoFocus
+              disabled={submitting}
+            />
+            <div className="mt-2 min-h-[24px]">
+              {checking && (
+                <span className="text-xs text-[#94A3B8] text-center block">Checking availability...</span>
+              )}
+              {!checking && username.length >= USERNAME_MIN_LENGTH && available && (
+                <span className="text-xs text-[#10B981] text-center block">✓ Available</span>
+              )}
+              {!checking && username.length >= USERNAME_MIN_LENGTH && available === false && !error && (
+                <span className="text-xs text-[#EF4444] text-center block">✗ Taken</span>
+              )}
+            </div>
           </div>
 
-          <div className="username-modal__rules">
-            <p>Username rules:</p>
-            <ul>
-              <li>Must start with @</li>
-              <li>4-30 characters</li>
-              <li>Letters, numbers, underscores only</li>
-            </ul>
+          {error && (
+            <div className="bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-lg p-3 text-xs text-[#EF4444]">
+              {error}
+            </div>
+          )}
+
+          <div className="bg-[#0F172A]/40 rounded-xl p-4 text-xs space-y-2 border border-white/5 text-[#94A3B8]">
+            <p className="font-bold uppercase tracking-wider text-[#64748B] mb-2">Username Rules:</p>
+            <div className="flex items-center gap-2">
+              <Check size={12} className="text-[#10B981]" />
+              <span>Must start with @</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Check size={12} className="text-[#10B981]" />
+              <span>4-30 characters</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Check size={12} className="text-[#10B981]" />
+              <span>Letters, numbers, underscores only</span>
+            </div>
           </div>
 
-          <div className="username-modal__actions">
-            <button
-              type="submit"
-              className="w-full bg-sky-500 hover:bg-sky-600 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-xl transition-colors"
-              disabled={!canSubmit}
-            >
-              {submitting ? 'Saving...' : 'Confirm username'}
-            </button>
-          </div>
+          <GlowButton
+            type="submit"
+            fullWidth
+            variant="primary"
+            disabled={!canSubmit}
+          >
+            {submitting ? 'Saving...' : 'Confirm Username'}
+          </GlowButton>
         </form>
-      </div>
+      </GlassCard>
     </div>
   );
 };

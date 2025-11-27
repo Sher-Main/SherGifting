@@ -4,7 +4,9 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { heliusService } from '../services/api';
 import { TokenBalance } from '../types';
-import { GiftIcon, WalletIcon, ArrowUpTrayIcon } from '../components/icons';
+import { ArrowUpRight, ArrowDownLeft, Gift } from 'lucide-react';
+import GlassCard from '../components/UI/GlassCard';
+import GlowButton from '../components/UI/GlowButton';
 
 const HomePage: React.FC = () => {
   const { user, isLoading: authLoading } = useAuth();
@@ -88,96 +90,107 @@ const HomePage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-8 animate-fade-in">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+    <div className="max-w-6xl mx-auto px-4 py-10 animate-fade-in-up">
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
         
-        {/* Left Column: Summary and Actions */}
-        <div className="lg:col-span-1 space-y-8">
-            <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-6 shadow-lg space-y-6">
-                <div>
-                  <p className="text-slate-400 text-sm">Total Balance</p>
-                  {showSkeleton ? (
-                    <div className="mt-2 h-10 w-40 rounded-lg bg-slate-700 animate-pulse" />
-                  ) : (
-                    <p className="text-4xl font-bold text-white">{formatCurrency(totalBalanceUSD)}</p>
-                  )}
-                </div>
-                <div className="flex flex-col space-y-3">
-                    <button 
-                      onClick={() => navigate('/add-funds')} 
-                      className="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 px-6 rounded-lg transition-colors flex items-center justify-center gap-2 text-base"
-                    >
-                      <WalletIcon className="w-5 h-5" /> Add Funds
-                    </button>
-                    <button 
-                      onClick={() => navigate('/gift')} 
-                      className="w-full bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-600 hover:to-cyan-500 text-white font-bold py-3 px-6 rounded-lg transition-all duration-300 ease-in-out flex items-center justify-center gap-2 text-base shadow-lg"
-
-                    >
-                      <GiftIcon className="w-5 h-5" /> Send Gift
-                    </button>
-                    <button 
-                      onClick={() => navigate('/withdraw')} 
-                      className="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 px-6 rounded-lg transition-colors flex items-center justify-center gap-2 text-base"
-                    >
-                      <ArrowUpTrayIcon className="w-5 h-5" /> Withdraw Funds
-                    </button>
-                </div>
+        {/* Left Column: Balance & Actions */}
+        <div className="md:col-span-5 space-y-6">
+          <GlassCard className="flex flex-col gap-6">
+            <div>
+              <span className="text-xs font-bold uppercase tracking-wider text-[#94A3B8]">Total Balance</span>
+              {showSkeleton ? (
+                <div className="mt-2 h-12 w-40 rounded-lg bg-[#1E293B]/40 animate-pulse" />
+              ) : (
+                <h2 className="text-5xl font-bold text-white mt-2">{formatCurrency(totalBalanceUSD)}</h2>
+              )}
             </div>
+
+            <div className="space-y-3">
+              <GlowButton 
+                fullWidth 
+                variant="secondary" 
+                icon={ArrowUpRight} 
+                onClick={() => navigate('/add-funds')}
+              >
+                Add Funds
+              </GlowButton>
+              <GlowButton 
+                fullWidth 
+                variant="cyan" 
+                icon={Gift} 
+                onClick={() => navigate('/gift')}
+              >
+                Send Gift
+              </GlowButton>
+              <GlowButton 
+                fullWidth 
+                variant="secondary" 
+                icon={ArrowDownLeft} 
+                onClick={() => navigate('/withdraw')}
+              >
+                Withdraw Funds
+              </GlowButton>
+            </div>
+          </GlassCard>
         </div>
 
-        {/* Right Column: Token List */}
-        <div className="lg:col-span-2 bg-slate-800/50 border border-slate-700 rounded-2xl shadow-lg">
-          <h2 className="text-xl font-bold p-6 border-b border-slate-700">Your Assets</h2>
-          {showSkeleton ? (
-            <div className="p-6 space-y-4">
-              {Array.from({ length: 3 }).map((_, index) => (
-                <BalanceRowSkeleton key={index} />
-              ))}
-            </div>
-          ) : error ? (
-            <div className="flex justify-center items-center h-64">
-              <p className="text-center text-red-400 px-6">{error}</p>
-            </div>
-          ) : balances.length === 0 ? (
-            <div className="flex justify-center items-center h-64">
-              <p className="text-center text-slate-400 px-6">You don't have any tokens yet. Click "Add Funds" to get started.</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
-                <thead className="text-xs text-slate-400 uppercase">
-                  <tr>
-                    <th scope="col" className="px-6 py-3">Asset</th>
-                    <th scope="col" className="px-6 py-3 text-right">Balance</th>
-                    <th scope="col" className="px-6 py-3 text-right">Value</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {balances.map((token) => (
-                    <tr key={token.address} className="border-t border-slate-700 hover:bg-slate-800 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-4">
-                          <img src={token.logoURI} alt={token.name} className="w-10 h-10 rounded-full bg-slate-700" />
-                          <div>
-                            <p className="font-bold text-white">{token.symbol}</p>
-                            <p className="text-sm text-slate-400">{token.name}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <p className="font-medium text-white">{token.balance.toLocaleString(undefined, { maximumFractionDigits: 4 })}</p>
-                         <p className="text-sm text-slate-500">{token.symbol}</p>
-                      </td>
-                       <td className="px-6 py-4 text-right font-medium text-white">
-                        {formatCurrency(token.usdValue)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+        {/* Right Column: Assets */}
+        <div className="md:col-span-7">
+          <GlassCard className="h-full">
+            <h3 className="text-lg font-bold text-white mb-6">Your Assets</h3>
+            {showSkeleton ? (
+              <div className="space-y-4">
+                {Array.from({ length: 3 }).map((_, index) => (
+                  <BalanceRowSkeleton key={index} />
+                ))}
+              </div>
+            ) : error ? (
+              <div className="flex justify-center items-center h-64">
+                <p className="text-center text-[#EF4444] px-6">{error}</p>
+              </div>
+            ) : balances.length === 0 ? (
+              <div className="flex justify-center items-center h-64">
+                <p className="text-center text-[#94A3B8] px-6">You don't have any tokens yet. Click "Add Funds" to get started.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex justify-between text-xs font-bold uppercase text-[#64748B] px-4 pb-2 border-b border-white/5">
+                  <span>Asset</span>
+                  <div className="flex gap-12">
+                    <span>Balance</span>
+                    <span>Value</span>
+                  </div>
+                </div>
+                
+                {balances.map((token) => (
+                  <div key={token.address} className="flex items-center justify-between p-4 rounded-xl hover:bg-white/5 transition-colors group cursor-pointer">
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 rounded-full bg-[#0F172A] border border-white/10 flex items-center justify-center overflow-hidden">
+                        {token.logoURI ? (
+                          <img src={token.logoURI} alt={token.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <span className="text-white font-bold text-xs">{token.symbol.charAt(0)}</span>
+                        )}
+                      </div>
+                      <div>
+                        <div className="font-bold text-white">{token.symbol}</div>
+                        <div className="text-xs text-[#94A3B8]">{token.name}</div>
+                      </div>
+                    </div>
+                    <div className="flex gap-8 text-right">
+                      <div>
+                        <div className="font-bold text-white">{token.balance.toLocaleString(undefined, { maximumFractionDigits: 4 })}</div>
+                        <div className="text-xs text-[#94A3B8]">{token.symbol}</div>
+                      </div>
+                      <div className="w-16">
+                        <div className="font-bold text-white">{formatCurrency(token.usdValue)}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </GlassCard>
         </div>
       </div>
     </div>
@@ -187,17 +200,22 @@ const HomePage: React.FC = () => {
 export default HomePage;
 
 const BalanceRowSkeleton: React.FC = () => (
-  <div className="flex items-center justify-between border border-slate-700 rounded-xl p-4 animate-pulse bg-slate-900/40">
+  <div className="flex items-center justify-between p-4 rounded-xl animate-pulse bg-[#1E293B]/40">
     <div className="flex items-center gap-4">
-      <div className="w-12 h-12 rounded-full bg-slate-700" />
+      <div className="w-10 h-10 rounded-full bg-[#0F172A] border border-white/10" />
       <div className="space-y-2">
-        <div className="h-4 w-24 bg-slate-700 rounded" />
-        <div className="h-3 w-32 bg-slate-800 rounded" />
+        <div className="h-4 w-24 bg-[#0F172A] rounded" />
+        <div className="h-3 w-32 bg-[#0F172A] rounded" />
       </div>
     </div>
-    <div className="space-y-2 text-right">
-      <div className="h-4 w-16 bg-slate-700 rounded" />
-      <div className="h-3 w-20 bg-slate-800 rounded" />
+    <div className="flex gap-8 text-right">
+      <div className="space-y-2">
+        <div className="h-4 w-16 bg-[#0F172A] rounded" />
+        <div className="h-3 w-12 bg-[#0F172A] rounded" />
+      </div>
+      <div className="w-16">
+        <div className="h-4 w-12 bg-[#0F172A] rounded" />
+      </div>
     </div>
   </div>
 );
