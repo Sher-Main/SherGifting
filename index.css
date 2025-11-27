@@ -2,18 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Sher Brand Design Tokens */
-:root {
-  --bg: #0B1120;
-  --brand: #FFB217;
-  --accent: #21D9D3;
-  --cta: #BE123C;
-  --surface: rgba(255, 255, 255, 0.06);
-  --border: rgba(255, 255, 255, 0.10);
+/* Sher Branding Replacement Styles */
+#protected-by-privy {
+  color: currentColor;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 400;
+  display: inline-block;
+  transition: opacity 0.2s ease;
 }
 
-html {
-  scroll-behavior: smooth;
+#protected-by-privy:hover {
+  opacity: 0.8;
 }
 
 body {

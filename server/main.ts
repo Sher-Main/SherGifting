@@ -21,8 +21,12 @@ import {
   pool,
   DbUser,
 } from './database';
+import { handleCardAdd } from './lib/onramp';
 import userRoutes from './routes/user';
+import onrampRoutes from './routes/onramp';
+import cronRoutes from './routes/cron';
 import { startGiftExpiryJob } from './jobs/giftExpiryJob';
+import { startCreditCleanupJob } from './jobs/creditCleanupJob';
 
 
 // --- Types (duplicated from frontend for simplicity) ---
@@ -174,6 +178,8 @@ app.use(cors({
 }));
 
 app.use('/api/user', userRoutes);
+app.use('/api', onrampRoutes);
+app.use('/api/cron', cronRoutes);
 
 // --- ENV VARS & MOCKS ---
 const PORT = process.env.PORT || 3001;
@@ -873,6 +879,20 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
 
     console.log('✅ Funding transaction verified!');
 
+    // Check if this card is FREE (using onramp credit)
+    let cardResult = null;
+    try {
+      cardResult = await handleCardAdd(sender_did);
+      console.log(`📤 Card credit check:`, {
+        isFree: cardResult.isFree,
+        freeRemaining: cardResult.cardAddsFreeRemaining,
+        creditsRemaining: cardResult.creditsRemaining,
+      });
+    } catch (creditError) {
+      console.error('⚠️ Error checking credit (continuing with normal flow):', creditError);
+      // Don't fail gift creation if credit check fails
+    }
+
     // Fetch token price and calculate USD value for storage (before creating gift record)
     let usdValue: number | null = null;
     try {
@@ -1015,7 +1035,10 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       gift_id: newGift.id,
       claim_url: claimUrl,
       tiplink_public_key,
-      signature: funding_signature
+      signature: funding_signature,
+      cardWasFree: cardResult?.isFree || false,
+      creditsRemaining: cardResult?.creditsRemaining || 0,
+      freeAddsRemaining: cardResult?.cardAddsFreeRemaining || 0,
     });
   } catch (error: any) {
     console.error('❌ Error creating gift:', error);
@@ -1753,5 +1776,6 @@ if (KEEP_ALIVE_URL && process.env.NODE_ENV === 'production') {
 // Initialize background jobs
 console.log('🚀 Initializing background jobs...');
 startGiftExpiryJob();
+startCreditCleanupJob();
 
 app.listen(PORT, () => console.log(`Server listening on http://localhost:${PORT}`));

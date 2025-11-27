@@ -6,7 +6,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { ProgressLoader } from './components/ProgressLoader';
 import UsernameSetupModal from './components/UsernameSetupModal';
 import Spinner from './components/Spinner';
-import AnimatedBackground from './components/AnimatedBackground';
+import { usePrivyBrandingReplacer } from './hooks/usePrivyBrandingReplacer';
 
 const HomePage = React.lazy(() => import('./pages/HomePage'));
 const LoginPage = React.lazy(() => import('./pages/LoginPage'));
@@ -18,6 +18,9 @@ const ClaimPage = React.lazy(() => import('./pages/ClaimPage'));
 const NotFoundPage = React.lazy(() => import('./pages/NotFoundPage'));
 
 const App: React.FC = () => {
+  // Replace Privy branding with Sher branding in all modals
+  usePrivyBrandingReplacer();
+  
   useEffect(() => {
     if (typeof window === 'undefined' || !('performance' in window)) {
       return;

@@ -1,17 +1,42 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Building, ArrowDownLeft, ChevronLeft, Copy, QrCode } from 'lucide-react';
-import GlassCard from '../components/UI/GlassCard';
-import GlowButton from '../components/UI/GlowButton';
+import { usePrivy } from '@privy-io/react-auth';
+import { useFundWallet, useWallets } from '@privy-io/react-auth/solana';
+import { BanknotesIcon, ArrowDownTrayIcon, ArrowLeftIcon } from '../components/icons';
 import QRCode from 'qrcode';
+import { setAuthToken } from '../services/api';
 
 const AddFundsPage: React.FC = () => {
   const { user } = useAuth();
+  const { user: privyUser, getAccessToken } = usePrivy();
+  const { fundWallet } = useFundWallet();
+  const { wallets, ready: walletsReady } = useWallets();
   const navigate = useNavigate();
   const [selectedOption, setSelectedOption] = useState<'bank' | 'wallet' | null>(null);
   const [copied, setCopied] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
+  const [isLoadingOnramp, setIsLoadingOnramp] = useState(false);
+
+  // Get wallet address from multiple sources (fallback chain)
+  const walletAddress = wallets?.[0]?.address || privyUser?.wallet?.address || user?.wallet_address;
+  
+  // Button should be enabled if we have any wallet address, even if useWallets isn't ready
+  // This handles cases where the wallet exists but useWallets hasn't initialized yet
+  const canFundWallet = Boolean(walletAddress) && !isLoadingOnramp;
+  
+  // Debug logging
+  useEffect(() => {
+    console.log('🔍 AddFundsPage wallet status:', {
+      hasWallets: Boolean(wallets && wallets.length > 0),
+      walletsReady,
+      walletFromWallets: wallets?.[0]?.address,
+      walletFromPrivy: privyUser?.wallet?.address,
+      walletFromUser: user?.wallet_address,
+      finalWalletAddress: walletAddress,
+      canFundWallet,
+    });
+  }, [wallets, walletsReady, privyUser?.wallet?.address, user?.wallet_address, walletAddress, canFundWallet]);
 
   const handleCopy = () => {
     if (user?.wallet_address) {
@@ -47,43 +72,111 @@ const AddFundsPage: React.FC = () => {
     generateQRCode();
   }, [selectedOption, user?.wallet_address]);
 
-  // OptionCard component
-  interface OptionCardProps {
-    icon: React.ComponentType<{ size?: number; className?: string }>;
-    title: string;
-    desc: string;
-    onClick: () => void;
-  }
+  const handleOnRamp = async () => {
+    if (!walletAddress) {
+      console.error('❌ No wallet address available', {
+        wallets: wallets?.length || 0,
+        privyWallet: privyUser?.wallet?.address,
+        userWallet: user?.wallet_address,
+      });
+      return;
+    }
 
-  const OptionCard: React.FC<OptionCardProps> = ({ icon: Icon, title, desc, onClick }) => (
-    <button
-      onClick={onClick}
-      className="flex flex-col items-center justify-center p-8 rounded-3xl bg-[#1E293B]/40 border border-white/10 hover:border-[#BE123C] hover:bg-[#1E293B]/60 transition-all group text-center h-64 w-full"
-    >
-      <div className="w-16 h-16 rounded-2xl bg-[#0F172A] flex items-center justify-center mb-6 group-hover:scale-110 transition-transform border border-white/5">
-        <Icon size={32} className="text-[#BE123C]" />
-      </div>
-      <h3 className="text-xl font-bold text-white mb-2">{title}</h3>
-      <p className="text-[#94A3B8] text-sm px-4">{desc}</p>
-    </button>
-  );
+    setIsLoadingOnramp(true);
+
+    try {
+      console.log('🚀 Opening Privy funding flow for user:', privyUser?.id);
+
+      // Get current balance before funding
+      const getCurrentBalance = async () => {
+        try {
+          if (!walletAddress) return 0;
+          
+          const response = await fetch(`/api/wallet/balances/${walletAddress}`);
+          if (response.ok) {
+            const balances = await response.json();
+            const solBalance = balances.find((b: any) => b.symbol === 'SOL');
+            return solBalance?.balance || 0;
+          }
+        } catch (error) {
+          console.error('Error fetching balance:', error);
+        }
+        return 0;
+      };
+
+      const previousBalance = await getCurrentBalance();
+      console.log(`   Previous balance: ${previousBalance} SOL`);
+
+      // Use the correct Solana-specific fundWallet
+      await fundWallet({
+        address: walletAddress,
+      });
+
+      console.log('✅ Funding flow completed');
+
+      // Wait a moment for transaction to settle, then check for balance increase
+      setTimeout(async () => {
+        try {
+          const currentBalance = await getCurrentBalance();
+          console.log(`   Current balance: ${currentBalance} SOL`);
+
+          // Call backend to detect transaction and issue credit
+          const token = await getAccessToken() || '';
+          setAuthToken(token);
+          if (walletAddress) {
+            const response = await fetch('/api/onramp/detect-transaction', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                walletAddress,
+                previousBalance,
+                currentBalance,
+              }),
+            });
+
+            if (response.ok) {
+              const result = await response.json();
+              if (result.transactionDetected && result.creditIssued) {
+                console.log('✨ Credit issued!', result);
+                // Optionally show a success message to user
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error detecting transaction:', error);
+        }
+      }, 3000); // Wait 3 seconds for transaction to settle
+
+    } catch (error) {
+      console.error('❌ Error opening funding flow:', error);
+    } finally {
+      setIsLoadingOnramp(false);
+    }
+  };
 
   const renderContent = () => {
     if (!selectedOption) {
       return (
         <div className="grid md:grid-cols-2 gap-6">
-          <OptionCard
-            icon={Building}
-            title="Transfer from Bank"
-            desc="Purchase crypto with fiat currency."
-            onClick={() => alert('Bank transfer coming soon!')}
-          />
-          <OptionCard
-            icon={ArrowDownLeft}
-            title="Transfer from Wallet"
-            desc="Send funds from an external wallet."
-            onClick={() => setSelectedOption('wallet')}
-          />
+          <button 
+            onClick={handleOnRamp}
+            disabled={!canFundWallet}
+            className="p-8 bg-slate-800 hover:bg-slate-700/50 border border-slate-700 rounded-2xl text-center transition-all duration-300 ease-in-out transform hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <BanknotesIcon className="w-12 h-12 mx-auto mb-4 text-sky-400" />
+            <h3 className="text-xl font-bold">Transfer from Bank</h3>
+            <p className="text-slate-400 mt-2">
+              {isLoadingOnramp ? 'Opening funding flow...' : 'Purchase crypto with card. Get $5 credit!'}
+            </p>
+          </button>
+          <button onClick={() => setSelectedOption('wallet')} className="p-8 bg-slate-800 hover:bg-slate-700/50 border border-slate-700 rounded-2xl text-center transition-all duration-300 ease-in-out transform hover:-translate-y-1">
+            <ArrowDownTrayIcon className="w-12 h-12 mx-auto mb-4 text-sky-400" />
+            <h3 className="text-xl font-bold">Transfer from Wallet</h3>
+            <p className="text-slate-400 mt-2">Send funds from an external wallet.</p>
+          </button>
         </div>
       );
     }

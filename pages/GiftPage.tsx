@@ -6,10 +6,8 @@ import { useSignAndSendTransaction, useWallets } from '@privy-io/react-auth/sola
 import { tokenService, giftService, tiplinkService, heliusService, feeService, priceService, usernameService } from '../services/api';
 import { Token, TokenBalance, ResolveRecipientResponse } from '../types';
 import Spinner from '../components/Spinner';
-import { Gift, ChevronLeft, AlertTriangle, Mail, QrCode, Copy, ArrowUpRight, Check } from 'lucide-react';
-import GlassCard from '../components/UI/GlassCard';
-import GlowButton from '../components/UI/GlowButton';
-import InputField from '../components/UI/InputField';
+import { ArrowLeftIcon } from '../components/icons';
+import { OnrampCreditPopup } from '../components/OnrampCreditPopup';
 import { CARD_UPSELL_PRICE } from '../lib/cardTemplates';
 import QRCode from 'qrcode';
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
@@ -69,6 +67,10 @@ const GiftPage: React.FC = () => {
     // Card upsell state
     const [selectedCard, setSelectedCard] = useState<string | null>(null);
     const [recipientName, setRecipientName] = useState<string>('');
+    
+    // Onramp credit state
+    const [onrampCredit, setOnrampCredit] = useState<any | null>(null);
+    const [showCreditPopup, setShowCreditPopup] = useState(false);
     
     // Confirmation modal state
     const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -323,6 +325,39 @@ const GiftPage: React.FC = () => {
             setRecipientName('');
         }
     }, [isUsernameRecipient, resolvedRecipient, trimmedRecipient]);
+
+    // Check for active onramp credit when component mounts
+    useEffect(() => {
+        const checkOnrampCredit = async () => {
+            if (!user?.privy_did) return;
+
+            try {
+                const response = await fetch(
+                    `/api/users/${user.privy_did}/onramp-credit`
+                );
+
+                if (!response.ok) {
+                    throw new Error('Failed to fetch credit status');
+                }
+
+                const data = await response.json();
+
+                // Only show popup if credit is active
+                if (data.isActive && data.creditsRemaining > 0) {
+                    setOnrampCredit(data);
+                    setShowCreditPopup(true);
+                    
+                    console.log('✨ User has active onramp credit:', data);
+                }
+
+            } catch (err) {
+                console.error('Error checking onramp credit:', err);
+                // Don't block the UI if credit check fails
+            }
+        };
+
+        checkOnrampCredit();
+    }, [user?.privy_did]);
 
     // Helper function to parse simulation errors into user-friendly messages
     const parseSimulationError = (err: any): string => {
@@ -1600,6 +1635,14 @@ const GiftPage: React.FC = () => {
                         </div>
                     </GlassCard>
                 </div>
+            )}
+
+            {/* Show popup if user has active credit */}
+            {showCreditPopup && onrampCredit && (
+                <OnrampCreditPopup
+                    credit={onrampCredit}
+                    onClose={() => setShowCreditPopup(false)}
+                />
             )}
 
             <button 
