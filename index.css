@@ -2,6 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Sher Branding Replacement Styles */
+#protected-by-privy {
+  color: currentColor;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 400;
+  display: inline-block;
+  transition: opacity 0.2s ease;
+}
+
+#protected-by-privy:hover {
+  opacity: 0.8;
+}
+
 body {
   @apply bg-slate-900 text-slate-200 font-sans;
 }
