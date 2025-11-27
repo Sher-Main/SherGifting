@@ -16,6 +16,20 @@ html {
   scroll-behavior: smooth;
 }
 
+/* Sher Branding Replacement Styles */
+#protected-by-privy {
+  color: currentColor;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 400;
+  display: inline-block;
+  transition: opacity 0.2s ease;
+}
+
+#protected-by-privy:hover {
+  opacity: 0.8;
+}
+
 body {
   @apply bg-[#0B1120] text-[#F8FAFC] font-sans;
   font-family: 'Inter', sans-serif;

@@ -10,6 +10,8 @@ import { Gift, ChevronLeft, AlertTriangle, Mail, QrCode, Copy, ArrowUpRight, Che
 import GlassCard from '../components/UI/GlassCard';
 import GlowButton from '../components/UI/GlowButton';
 import InputField from '../components/UI/InputField';
+import { ArrowLeftIcon } from '../components/icons';
+import { OnrampCreditPopup } from '../components/OnrampCreditPopup';
 import { CARD_UPSELL_PRICE } from '../lib/cardTemplates';
 import QRCode from 'qrcode';
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
@@ -69,6 +71,10 @@ const GiftPage: React.FC = () => {
     // Card upsell state
     const [selectedCard, setSelectedCard] = useState<string | null>(null);
     const [recipientName, setRecipientName] = useState<string>('');
+    
+    // Onramp credit state
+    const [onrampCredit, setOnrampCredit] = useState<any | null>(null);
+    const [showCreditPopup, setShowCreditPopup] = useState(false);
     
     // Confirmation modal state
     const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -323,6 +329,39 @@ const GiftPage: React.FC = () => {
             setRecipientName('');
         }
     }, [isUsernameRecipient, resolvedRecipient, trimmedRecipient]);
+
+    // Check for active onramp credit when component mounts
+    useEffect(() => {
+        const checkOnrampCredit = async () => {
+            if (!user?.privy_did) return;
+
+            try {
+                const response = await fetch(
+                    `/api/users/${user.privy_did}/onramp-credit`
+                );
+
+                if (!response.ok) {
+                    throw new Error('Failed to fetch credit status');
+                }
+
+                const data = await response.json();
+
+                // Only show popup if credit is active
+                if (data.isActive && data.creditsRemaining > 0) {
+                    setOnrampCredit(data);
+                    setShowCreditPopup(true);
+                    
+                    console.log('✨ User has active onramp credit:', data);
+                }
+
+            } catch (err) {
+                console.error('Error checking onramp credit:', err);
+                // Don't block the UI if credit check fails
+            }
+        };
+
+        checkOnrampCredit();
+    }, [user?.privy_did]);
 
     // Helper function to parse simulation errors into user-friendly messages
     const parseSimulationError = (err: any): string => {
@@ -1589,17 +1628,25 @@ const GiftPage: React.FC = () => {
                             <GlowButton
                                 variant="primary"
                                 fullWidth
-                                onClick={() => {
-                                    setShowSuccessModal(false);
-                                    setGiftDetails(null);
+                            onClick={() => {
+                                setShowSuccessModal(false);
+                                setGiftDetails(null);
                                     navigate('/');
-                                }}
-                            >
-                                Done
+                            }}
+                        >
+                            Done
                             </GlowButton>
-                        </div>
+                    </div>
                     </GlassCard>
                 </div>
+            )}
+
+            {/* Show popup if user has active credit */}
+            {showCreditPopup && onrampCredit && (
+                <OnrampCreditPopup
+                    credit={onrampCredit}
+                    onClose={() => setShowCreditPopup(false)}
+                />
             )}
 
             <button 
@@ -1620,7 +1667,7 @@ const GiftPage: React.FC = () => {
 
                 {showFormSkeleton ? (
                     <div className="p-8">
-                        <GiftFormSkeleton />
+                    <GiftFormSkeleton />
                     </div>
                 ) : (
                     <>
@@ -1657,25 +1704,25 @@ const GiftPage: React.FC = () => {
                             Token
                         </label>
                         <div className="relative">
-                            <select
-                                id="token"
-                                value={selectedToken?.mint || ''}
-                                onChange={(e) => {
-                                    const token = tokens.find(t => t.mint === e.target.value);
-                                    setSelectedToken(token || null);
-                                    // Reset amount fields when token changes
-                                    setAmount('');
-                                    setTokenAmount('');
-                                    setUsdAmount('');
-                                }}
+                        <select
+                            id="token"
+                            value={selectedToken?.mint || ''}
+                            onChange={(e) => {
+                                const token = tokens.find(t => t.mint === e.target.value);
+                                setSelectedToken(token || null);
+                                // Reset amount fields when token changes
+                                setAmount('');
+                                setTokenAmount('');
+                                setUsdAmount('');
+                            }}
                                 className="w-full bg-[#0F172A]/50 border border-white/10 rounded-xl px-4 py-3.5 text-white outline-none appearance-none focus:border-[#BE123C] focus:ring-4 focus:ring-[#BE123C]/10 transition"
-                            >
-                                {tokens.map(token => (
-                                    <option key={token.mint} value={token.mint}>
-                                        {token.symbol} - {token.name}
-                                    </option>
-                                ))}
-                            </select>
+                        >
+                            {tokens.map(token => (
+                                <option key={token.mint} value={token.mint}>
+                                    {token.symbol} - {token.name}
+                                </option>
+                            ))}
+                        </select>
                             <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-[#94A3B8]">▼</div>
                         </div>
                     </div>
@@ -1779,32 +1826,32 @@ const GiftPage: React.FC = () => {
                             />
                         ) : (
                             <InputField
-                                type="number"
-                                id="amount"
-                                value={usdAmount}
-                                onChange={async (e) => {
-                                    const value = e.target.value;
-                                    setUsdAmount(value);
-                                    // Calculate token amount but don't update amount state until submission
-                                    if (tokenPrice) {
-                                        const calculatedTokenAmount = (parseFloat(value) / tokenPrice).toString();
-                                        setTokenAmount(calculatedTokenAmount);
-                                        setAmount(calculatedTokenAmount);
-                                        
-                                        // Validate balance in real-time
-                                        const numValue = parseFloat(calculatedTokenAmount);
-                                        if (!isNaN(numValue) && numValue > 0) {
-                                            await validateBalance(numValue);
+                                    type="number"
+                                    id="amount"
+                                    value={usdAmount}
+                                    onChange={async (e) => {
+                                        const value = e.target.value;
+                                        setUsdAmount(value);
+                                        // Calculate token amount but don't update amount state until submission
+                                        if (tokenPrice) {
+                                            const calculatedTokenAmount = (parseFloat(value) / tokenPrice).toString();
+                                            setTokenAmount(calculatedTokenAmount);
+                                            setAmount(calculatedTokenAmount);
+                                            
+                                            // Validate balance in real-time
+                                            const numValue = parseFloat(calculatedTokenAmount);
+                                            if (!isNaN(numValue) && numValue > 0) {
+                                                await validateBalance(numValue);
+                                            }
                                         }
-                                    }
-                                    setBalanceError(null); // Clear previous error
-                                }}
-                                required
-                                min="0"
-                                step="0.01"
-                                placeholder="0.00"
+                                        setBalanceError(null); // Clear previous error
+                                    }}
+                                    required
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="0.00"
                                 rightElement={<span className="text-[#94A3B8]">$</span>}
-                            />
+                                />
                         )}
                         
                         {/* Conversion Preview */}
