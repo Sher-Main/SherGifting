@@ -6,6 +6,7 @@ import { useFundWallet, useWallets } from '@privy-io/react-auth/solana';
 import { BanknotesIcon, ArrowDownTrayIcon, ArrowLeftIcon } from '../components/icons';
 import QRCode from 'qrcode';
 import { setAuthToken } from '../services/api';
+import { getApiUrl } from '../services/apiConfig';
 
 const AddFundsPage: React.FC = () => {
   const { user } = useAuth();
@@ -92,7 +93,7 @@ const AddFundsPage: React.FC = () => {
         try {
           if (!walletAddress) return 0;
           
-          const response = await fetch(`/api/wallet/balances/${walletAddress}`);
+          const response = await fetch(getApiUrl(`wallet/balances/${walletAddress}`));
           if (response.ok) {
             const balances = await response.json();
             const solBalance = balances.find((b: any) => b.symbol === 'SOL');
@@ -140,7 +141,7 @@ const AddFundsPage: React.FC = () => {
             
             if (walletAddress) {
               console.log('   📞 Calling detect-transaction endpoint...');
-              const response = await fetch('/api/onramp/detect-transaction', {
+              const response = await fetch(getApiUrl('onramp/detect-transaction'), {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',

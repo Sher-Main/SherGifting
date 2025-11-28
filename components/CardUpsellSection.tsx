@@ -56,9 +56,9 @@ export const CardUpsellSection: React.FC<CardUpsellSectionProps> = ({
               <span>FREE ✨</span>
             </span>
           ) : (
-            <span className="bg-sky-500 text-white px-3 py-1 rounded-full text-sm font-bold">
-              +$1.00
-            </span>
+          <span className="bg-sky-500 text-white px-3 py-1 rounded-full text-sm font-bold">
+            +$1.00
+          </span>
           )}
         </label>
       </div>

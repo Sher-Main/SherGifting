@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { usePrivy } from '@privy-io/react-auth';
 import { useSignAndSendTransaction, useWallets } from '@privy-io/react-auth/solana';
 import { tokenService, giftService, tiplinkService, heliusService, feeService, priceService, usernameService } from '../services/api';
+import { getApiUrl } from '../services/apiConfig';
 import { Token, TokenBalance, ResolveRecipientResponse } from '../types';
 import Spinner from '../components/Spinner';
 import { ArrowLeftIcon } from '../components/icons';
@@ -338,7 +339,7 @@ const GiftPage: React.FC = () => {
 
             try {
                 const response = await fetch(
-                    `/api/users/${user.privy_did}/onramp-credit`
+                    getApiUrl(`users/${user.privy_did}/onramp-credit`)
                 );
 
                 if (!response.ok) {
@@ -1541,9 +1542,9 @@ const GiftPage: React.FC = () => {
                                             </div>
                                         ) : (
                                             <>
-                                                <p className="text-green-400 font-medium">$1.00 USD</p>
-                                                {confirmDetails.cardFee > 0 && (
-                                                    <p className="text-slate-500 text-xs mt-1">{confirmDetails.cardFee.toFixed(6)} {confirmDetails.token}</p>
+                                        <p className="text-green-400 font-medium">$1.00 USD</p>
+                                        {confirmDetails.cardFee > 0 && (
+                                            <p className="text-slate-500 text-xs mt-1">{confirmDetails.cardFee.toFixed(6)} {confirmDetails.token}</p>
                                                 )}
                                             </>
                                         )}
@@ -1975,7 +1976,7 @@ const GiftPage: React.FC = () => {
                                             {onrampCredit && onrampCredit.isActive && onrampCredit.cardAddsFreeRemaining > 0 ? (
                                                 <span className="text-green-400 font-bold">FREE ✨</span>
                                             ) : (
-                                                <span className="text-green-400">$1.00 USD</span>
+                                            <span className="text-green-400">$1.00 USD</span>
                                             )}
                                         </div>
                                     )}

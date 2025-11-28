@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePrivy } from '@privy-io/react-auth';
 import { giftService } from '../services/api';
+import { getApiUrl } from '../services/apiConfig';
 import { Gift, GiftStatus } from '../types';
 import Spinner from '../components/Spinner';
 import { ArrowLeftIcon } from '../components/icons';
@@ -54,7 +55,7 @@ const HistoryPage: React.FC = () => {
       setIsLoadingTransactions(true);
       try {
         const token = await getAccessToken();
-        const response = await fetch('/api/users/me/transaction-history', {
+        const response = await fetch(getApiUrl('users/me/transaction-history'), {
           headers: {
             'Authorization': `Bearer ${token || ''}`,
             'Content-Type': 'application/json',
