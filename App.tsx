@@ -8,6 +8,7 @@ import UsernameSetupModal from './components/UsernameSetupModal';
 import Spinner from './components/Spinner';
 import AnimatedBackground from './components/AnimatedBackground';
 import { usePrivyBrandingReplacer } from './hooks/usePrivyBrandingReplacer';
+import { ToastProvider } from './components/UI/ToastContainer';
 
 const HomePage = React.lazy(() => import('./pages/HomePage'));
 const LoginPage = React.lazy(() => import('./pages/LoginPage'));
@@ -58,9 +59,11 @@ const App: React.FC = () => {
     <ErrorBoundary>
       <AuthProvider>
         <BrowserRouter>
-          <div className="min-h-screen font-sans text-white selection:bg-[#BE123C] selection:text-white">
-            <AppContent />
-          </div>
+          <ToastProvider>
+            <div className="min-h-screen font-sans text-white selection:bg-[#BE123C] selection:text-white">
+              <AppContent />
+            </div>
+          </ToastProvider>
         </BrowserRouter>
       </AuthProvider>
     </ErrorBoundary>

@@ -4,11 +4,14 @@ import { useAuth } from '../context/AuthContext';
 import { usePrivy } from '@privy-io/react-auth';
 import { giftService } from '../services/api';
 import { GiftInfo } from '../types';
+import { motion, AnimatePresence } from 'framer-motion';
 import Spinner from '../components/Spinner';
 import { ProgressLoader } from '../components/ProgressLoader';
-import { Gift, Check, AlertTriangle, Lock, Clock, ArrowRight, ArrowUpRight, X } from 'lucide-react';
+import { Gift, Check, AlertTriangle, Lock, Clock, ArrowRight, ArrowUpRight, X, Sparkles, Mail } from 'lucide-react';
 import GlassCard from '../components/UI/GlassCard';
 import GlowButton from '../components/UI/GlowButton';
+import { triggerConfetti } from '../lib/confetti';
+import Stepper from '../components/UI/Stepper';
 
 const ClaimPage: React.FC = () => {
     const [searchParams] = useSearchParams();
@@ -25,6 +28,7 @@ const ClaimPage: React.FC = () => {
     const [claimSignature, setClaimSignature] = useState<string | null>(null);
     const [hasAttemptedClaim, setHasAttemptedClaim] = useState(false); // Prevent retries after error
     const [emailMismatch, setEmailMismatch] = useState(false); // Track email mismatch
+    const [claimStep, setClaimStep] = useState<1 | 2 | 3>(1); // 1: Authenticate, 2: Claiming, 3: Success
 
     // Fetch gift info on mount
     useEffect(() => {
@@ -170,6 +174,7 @@ const ClaimPage: React.FC = () => {
         setIsClaiming(true);
         setError(null);
         setHasAttemptedClaim(true); // Mark that we've attempted claim
+        setClaimStep(2); // Move to claiming step
 
         try {
             console.log('🎁 Claiming gift with secure token...', { 
@@ -182,7 +187,11 @@ const ClaimPage: React.FC = () => {
 
             console.log('✅ Gift claimed successfully!', result);
             setClaimSignature(result.signature);
+            setClaimStep(3);
             setClaimSuccess(true);
+            
+            // Trigger confetti animation
+            triggerConfetti();
             
             // Refresh user to update balance
             await refreshUser();
@@ -245,15 +254,48 @@ const ClaimPage: React.FC = () => {
     if (claimSuccess && giftInfo) {
         return (
             <div className="min-h-screen flex items-center justify-center p-4">
-                <GlassCard className="max-w-md w-full animate-scale-in">
-                    <div className="text-center">
-                        <div className="w-20 h-20 bg-[#064E3B]/20 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-[#10B981]/20">
-                            <Check size={40} className="text-[#10B981]" />
-                        </div>
-                        <h2 className="text-3xl font-bold text-white mb-2">Gift Claimed! 🎉</h2>
-                        <p className="text-[#94A3B8] mb-6">
-                            You received <span className="text-white font-bold">{giftInfo.amount} {giftInfo.token_symbol}</span>
-                        </p>
+                <motion.div
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.5, type: 'spring' }}
+                    className="w-full max-w-2xl"
+                >
+                    <GlassCard className="animate-scale-in">
+                        <div className="text-center">
+                            <motion.div
+                                initial={{ scale: 0 }}
+                                animate={{ scale: 1 }}
+                                transition={{ delay: 0.2, type: 'spring', stiffness: 200 }}
+                                className="w-24 h-24 bg-gradient-to-br from-[#10B981]/20 to-[#06B6D4]/20 rounded-3xl flex items-center justify-center mx-auto mb-6 border-2 border-[#10B981]/30"
+                            >
+                                <Sparkles size={48} className="text-[#10B981]" />
+                            </motion.div>
+                            <motion.h2
+                                initial={{ opacity: 0, y: 20 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.3 }}
+                                className="text-4xl font-bold text-white mb-3"
+                            >
+                                Gift Claimed! 🎉
+                            </motion.h2>
+                            <motion.p
+                                initial={{ opacity: 0, y: 20 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.4 }}
+                                className="text-[#94A3B8] mb-2 text-lg"
+                            >
+                                You received
+                            </motion.p>
+                            <motion.div
+                                initial={{ opacity: 0, scale: 0.8 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                transition={{ delay: 0.5, type: 'spring' }}
+                                className="bg-gradient-to-r from-[#1E293B] to-[#0F172A] border border-white/10 rounded-xl p-6 mb-6 inline-block"
+                            >
+                                <p className="text-5xl font-bold text-white">
+                                    {giftInfo.amount} <span className="text-3xl text-[#06B6D4]">{giftInfo.token_symbol}</span>
+                                </p>
+                            </motion.div>
 
                         {/* Transaction Link */}
                         {claimSignature && (
@@ -300,8 +342,21 @@ const ClaimPage: React.FC = () => {
     }
 
     // Show progress loader during claiming
-    if (isClaiming) {
-        return <ProgressLoader stage="preparing" message="Claiming your gift..." />;
+    if (isClaiming && claimStep === 2) {
+        return (
+            <div className="min-h-screen flex items-center justify-center p-4">
+                <GlassCard className="max-w-md w-full">
+                    <div className="text-center">
+                        <Stepper currentStep={2} completedSteps={[1]} />
+                        <div className="mt-8">
+                            <Spinner size="8" color="border-[#06B6D4]" />
+                            <p className="text-white font-medium mt-4">Claiming your gift...</p>
+                            <p className="text-[#94A3B8] text-sm mt-2">This may take a few moments</p>
+                        </div>
+                    </div>
+                </GlassCard>
+            </div>
+        );
     }
 
     // Show email mismatch error prominently
@@ -399,40 +454,75 @@ const ClaimPage: React.FC = () => {
 
     return (
         <div className="min-h-screen flex items-center justify-center p-4 animate-fade-in-up">
-            <GlassCard glow className="max-w-md w-full">
-                {/* Gift Preview */}
-                <div className="text-center mb-8">
-                    <div className="w-20 h-20 bg-gradient-to-r from-[#BE123C]/20 to-[#FCD34D]/20 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-white/10">
-                        <Gift size={48} className="text-[#BE123C]" />
-                    </div>
-                    <h2 className="text-2xl font-bold text-white mb-2">You Have a Gift!</h2>
-                    <p className="text-[#94A3B8] text-sm mb-4">
-                        From <span className="text-white font-semibold">{giftInfo.sender_email}</span>
-                    </p>
-                    
-                    {/* Gift Amount */}
-                    <div className="bg-gradient-to-r from-[#1E293B] to-[#0F172A] border border-white/10 rounded-xl p-6 mb-6">
-                        <p className="text-xs text-[#94A3B8] uppercase tracking-wider mb-1">Gift Amount</p>
-                        <p className="text-4xl font-bold text-white">
-                            {giftInfo.amount} <span className="text-2xl text-[#06B6D4]">{giftInfo.token_symbol}</span>
-                        </p>
-                    </div>
-
-                    {/* Gift Message */}
-                    {giftInfo.message && (
-                        <div className="bg-[#0F172A]/30 rounded-lg p-4 mb-6 border border-white/5">
-                            <p className="text-[#94A3B8] text-xs mb-2">Message:</p>
-                            <p className="text-white text-sm italic">"{giftInfo.message}"</p>
+            <div className="w-full max-w-2xl">
+                <GlassCard glow className="w-full">
+                    {/* Progress Stepper */}
+                    {!authenticated && (
+                        <div className="mb-8">
+                            <Stepper currentStep={1} completedSteps={[]} />
                         </div>
                     )}
-                </div>
 
-                {/* Claim Action */}
-                {!authenticated ? (
-                    <div>
-                        <p className="text-[#94A3B8] text-sm text-center mb-4">
-                            Sign in with your Google account to claim this gift
+                    {/* Gift Preview */}
+                    <div className="text-center mb-8">
+                        <motion.div
+                            initial={{ scale: 0.9, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            transition={{ duration: 0.5 }}
+                            className="w-24 h-24 bg-gradient-to-br from-[#BE123C]/20 via-[#FCD34D]/20 to-[#06B6D4]/20 rounded-3xl flex items-center justify-center mx-auto mb-6 border-2 border-white/10 shadow-lg"
+                        >
+                            <Gift size={56} className="text-[#BE123C]" />
+                        </motion.div>
+                        <h2 className="text-3xl font-bold text-white mb-2">You Have a Gift! 🎁</h2>
+                        <p className="text-[#94A3B8] text-base mb-6">
+                            From <span className="text-white font-semibold">{giftInfo.sender_email}</span>
                         </p>
+                        
+                        {/* Enhanced Gift Amount Display */}
+                        <motion.div
+                            initial={{ y: 20, opacity: 0 }}
+                            animate={{ y: 0, opacity: 1 }}
+                            transition={{ delay: 0.2 }}
+                            className="bg-gradient-to-br from-[#1E293B] via-[#0F172A] to-[#1E293B] border-2 border-white/10 rounded-2xl p-8 mb-6 shadow-xl"
+                        >
+                            <p className="text-xs text-[#94A3B8] uppercase tracking-wider mb-3 font-bold">Gift Amount</p>
+                            <p className="text-5xl font-bold text-white mb-2">
+                                {giftInfo.amount} <span className="text-3xl text-[#06B6D4]">{giftInfo.token_symbol}</span>
+                            </p>
+                            {giftInfo.created_at && (
+                                <p className="text-xs text-[#64748B] mt-2">
+                                    Sent {new Date(giftInfo.created_at).toLocaleDateString()}
+                                </p>
+                            )}
+                        </motion.div>
+
+                        {/* Enhanced Gift Message */}
+                        {giftInfo.message && (
+                            <motion.div
+                                initial={{ y: 20, opacity: 0 }}
+                                animate={{ y: 0, opacity: 1 }}
+                                transition={{ delay: 0.3 }}
+                                className="bg-[#0F172A]/40 rounded-xl p-6 mb-6 border border-white/10 text-left"
+                            >
+                                <div className="flex items-center gap-2 mb-3">
+                                    <Mail size={16} className="text-[#06B6D4]" />
+                                    <p className="text-[#94A3B8] text-xs font-bold uppercase tracking-wider">Message</p>
+                                </div>
+                                <p className="text-white text-base italic leading-relaxed">"{giftInfo.message}"</p>
+                            </motion.div>
+                        )}
+                    </div>
+
+                    {/* Claim Action */}
+                    {!authenticated ? (
+                        <motion.div
+                            initial={{ y: 20, opacity: 0 }}
+                            animate={{ y: 0, opacity: 1 }}
+                            transition={{ delay: 0.4 }}
+                        >
+                            <p className="text-[#94A3B8] text-base text-center mb-6">
+                                Sign in with your Google account to claim this gift
+                            </p>
                         <GlowButton
                             onClick={handleLogin}
                             disabled={!ready}
@@ -451,40 +541,59 @@ const ClaimPage: React.FC = () => {
                             A wallet will be automatically created for you
                         </p>
                     </div>
-                ) : (
-                    <div>
-                        <p className="text-[#10B981] text-sm text-center mb-4 flex items-center justify-center gap-2">
-                            <Check size={16} className="text-[#10B981]" />
-                            Signed in as {user?.email}
-                        </p>
-                        
-                        {error && (
-                            <div className="bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-lg p-3 mb-4">
-                                <p className="text-[#EF4444] text-sm">{error}</p>
-                            </div>
-                        )}
+                        ) : (
+                            <motion.div
+                                initial={{ y: 20, opacity: 0 }}
+                                animate={{ y: 0, opacity: 1 }}
+                                transition={{ delay: 0.4 }}
+                            >
+                                <div className="mb-6">
+                                    <Stepper currentStep={2} completedSteps={[1]} />
+                                </div>
+                                
+                                <div className="bg-[#064E3B]/20 border border-[#10B981]/20 rounded-xl p-4 mb-6">
+                                    <p className="text-[#10B981] text-sm text-center flex items-center justify-center gap-2 font-medium">
+                                        <Check size={18} className="text-[#10B981]" />
+                                        Signed in as {user?.email}
+                                    </p>
+                                </div>
+                                
+                                {error && (
+                                    <motion.div
+                                        initial={{ opacity: 0, y: -10 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        className="bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-xl p-4 mb-6"
+                                    >
+                                        <p className="text-[#EF4444] text-sm">{error}</p>
+                                    </motion.div>
+                                )}
 
-                        <GlowButton
-                            onClick={handleClaim}
-                            disabled={isClaiming}
-                            variant="cyan"
-                            fullWidth
-                            icon={Gift}
-                        >
-                            {isClaiming ? (
-                                <>
-                                    <Spinner size="5" color="border-white" />
-                                    <span>Claiming Gift...</span>
-                                </>
-                            ) : (
-                                'Claim Gift'
-                            )}
-                        </GlowButton>
-                    </div>
-                )}
-            </GlassCard>
-        </div>
-    );
+                                <GlowButton
+                                    onClick={handleClaim}
+                                    disabled={isClaiming}
+                                    variant="cyan"
+                                    fullWidth
+                                    icon={Gift}
+                                    className="!py-4 !text-lg"
+                                >
+                                    {isClaiming ? (
+                                        <>
+                                            <Spinner size="6" color="border-white" />
+                                            <span>Claiming Gift...</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Gift size={20} />
+                                            <span>Claim Gift</span>
+                                        </>
+                                    )}
+                                </GlowButton>
+                            </motion.div>
+                        )}
+                    </GlassCard>
+                </div>
+            </div>
+        );
 };
 
 export default ClaimPage;

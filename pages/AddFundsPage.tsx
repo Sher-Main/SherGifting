@@ -1,25 +1,31 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Building, ArrowDownLeft, ChevronLeft, Copy, QrCode } from 'lucide-react';
+import { Building, ArrowDownLeft, ChevronLeft, Copy, QrCode, Shield, Clock, CheckCircle, Sparkles, ArrowRight } from 'lucide-react';
+import { motion } from 'framer-motion';
 import GlassCard from '../components/UI/GlassCard';
 import GlowButton from '../components/UI/GlowButton';
+import PageHeader from '../components/UI/PageHeader';
 import { usePrivy } from '@privy-io/react-auth';
 import { useFundWallet, useWallets } from '@privy-io/react-auth/solana';
 import { BanknotesIcon, ArrowDownTrayIcon, ArrowLeftIcon } from '../components/icons';
+import { useToast } from '../components/UI/ToastContainer';
+import { heliusService } from '../services/api';
 import QRCode from 'qrcode';
 import { setAuthToken } from '../services/api';
 
 const AddFundsPage: React.FC = () => {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const { user: privyUser, getAccessToken } = usePrivy();
   const { fundWallet } = useFundWallet();
   const { wallets, ready: walletsReady } = useWallets();
+  const { showToast } = useToast();
   const navigate = useNavigate();
   const [selectedOption, setSelectedOption] = useState<'bank' | 'wallet' | null>(null);
-  const [copied, setCopied] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
   const [isLoadingOnramp, setIsLoadingOnramp] = useState(false);
+  const [currentBalance, setCurrentBalance] = useState<number | null>(null);
+  const [isLoadingBalance, setIsLoadingBalance] = useState(false);
 
   // Get wallet address from multiple sources (fallback chain)
   const walletAddress = wallets?.[0]?.address || privyUser?.wallet?.address || user?.wallet_address;
@@ -41,11 +47,40 @@ const AddFundsPage: React.FC = () => {
     });
   }, [wallets, walletsReady, privyUser?.wallet?.address, user?.wallet_address, walletAddress, canFundWallet]);
 
-  const handleCopy = () => {
+  // Fetch current balance
+  useEffect(() => {
+    const fetchBalance = async () => {
+      if (!user?.wallet_address) return;
+      setIsLoadingBalance(true);
+      try {
+        const balances = await heliusService.getTokenBalances(user.wallet_address);
+        const solBalance = balances.find(b => b.symbol === 'SOL');
+        setCurrentBalance(solBalance?.balance || 0);
+      } catch (err) {
+        console.error('Error fetching balance:', err);
+      } finally {
+        setIsLoadingBalance(false);
+      }
+    };
+    fetchBalance();
+    const interval = setInterval(fetchBalance, 10000); // Refresh every 10 seconds
+    return () => clearInterval(interval);
+  }, [user?.wallet_address]);
+
+  const handleCopy = async () => {
     if (user?.wallet_address) {
-      navigator.clipboard.writeText(user.wallet_address);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      try {
+        await navigator.clipboard.writeText(user.wallet_address);
+        showToast({
+          type: 'success',
+          message: 'Wallet address copied to clipboard!',
+        });
+      } catch (err) {
+        showToast({
+          type: 'error',
+          message: 'Failed to copy address',
+        });
+      }
     }
   };
 
@@ -82,26 +117,70 @@ const AddFundsPage: React.FC = () => {
     desc: string;
     onClick: () => void;
     disabled?: boolean;
+    recommended?: boolean;
+    features?: string[];
+    processingTime?: string;
   }
 
-  const OptionCard: React.FC<OptionCardProps> = ({ icon: Icon, title, desc, onClick, disabled = false }) => (
-    <button
+  const OptionCard: React.FC<OptionCardProps> = ({ 
+    icon: Icon, 
+    title, 
+    desc, 
+    onClick, 
+    disabled = false,
+    recommended = false,
+    features = [],
+    processingTime,
+  }) => (
+    <motion.button
       onClick={onClick}
       disabled={disabled}
-      className={`flex flex-col items-center justify-center p-8 rounded-3xl bg-[#1E293B]/40 border border-white/10 transition-all group text-center h-64 w-full ${
+      whileHover={disabled ? {} : { scale: 1.02 }}
+      whileTap={disabled ? {} : { scale: 0.98 }}
+      className={`relative flex flex-col p-8 rounded-3xl bg-gradient-to-br from-[#1E293B]/60 to-[#0F172A]/60 border-2 transition-all group text-left h-full w-full ${
         disabled 
-          ? 'opacity-50 cursor-not-allowed' 
-          : 'hover:border-[#BE123C] hover:bg-[#1E293B]/60'
+          ? 'opacity-50 cursor-not-allowed border-white/10' 
+          : 'hover:border-[#BE123C] hover:bg-gradient-to-br hover:from-[#1E293B]/80 hover:to-[#0F172A]/80'
       }`}
     >
-      <div className={`w-16 h-16 rounded-2xl bg-[#0F172A] flex items-center justify-center mb-6 transition-transform border border-white/5 ${
+      {recommended && (
+        <div className="absolute top-4 right-4 px-3 py-1 bg-[#06B6D4] text-white text-xs font-bold rounded-full">
+          Recommended
+        </div>
+      )}
+      
+      <div className={`w-16 h-16 rounded-2xl bg-gradient-to-br from-[#BE123C]/20 to-[#06B6D4]/20 flex items-center justify-center mb-6 transition-transform border border-white/10 ${
         disabled ? '' : 'group-hover:scale-110'
       }`}>
         <Icon size={32} className="text-[#BE123C]" />
       </div>
-      <h3 className="text-xl font-bold text-white mb-2">{title}</h3>
-      <p className="text-[#94A3B8] text-sm px-4">{desc}</p>
-    </button>
+      
+      <h3 className="text-2xl font-bold text-white mb-2">{title}</h3>
+      <p className="text-[#94A3B8] text-sm mb-4">{desc}</p>
+      
+      {processingTime && (
+        <div className="flex items-center gap-2 text-xs text-[#64748B] mb-4">
+          <Clock size={14} />
+          <span>{processingTime}</span>
+        </div>
+      )}
+      
+      {features.length > 0 && (
+        <div className="space-y-2 mt-auto">
+          {features.map((feature, index) => (
+            <div key={index} className="flex items-center gap-2 text-xs text-[#94A3B8]">
+              <CheckCircle size={14} className="text-[#10B981] flex-shrink-0" />
+              <span>{feature}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      
+      <div className="mt-4 flex items-center gap-2 text-[#06B6D4] text-sm font-medium">
+        <span>Get started</span>
+        <ArrowRight size={16} className="transition-transform group-hover:translate-x-1" />
+      </div>
+    </motion.button>
   );
 
   const handleOnRamp = async () => {
@@ -192,20 +271,81 @@ const AddFundsPage: React.FC = () => {
   const renderContent = () => {
     if (!selectedOption) {
       return (
-        <div className="grid md:grid-cols-2 gap-6">
-          <OptionCard
-            icon={Building}
-            title="Transfer from Bank"
-            desc={isLoadingOnramp ? 'Opening funding flow...' : 'Purchase crypto with card. Get $5 credit!'}
-            onClick={handleOnRamp}
-            disabled={!canFundWallet}
-          />
-          <OptionCard
-            icon={ArrowDownLeft}
-            title="Transfer from Wallet"
-            desc="Send funds from an external wallet."
-            onClick={() => setSelectedOption('wallet')}
-          />
+        <div className="space-y-8">
+          {/* Current Balance Display */}
+          <GlassCard variant="balance">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-xs font-bold uppercase tracking-wider text-[#94A3B8] block mb-2">Current Balance</span>
+                {isLoadingBalance ? (
+                  <div className="h-8 w-32 bg-[#1E293B]/40 rounded animate-pulse" />
+                ) : (
+                  <h2 className="text-3xl font-bold text-white">
+                    {currentBalance !== null ? currentBalance.toFixed(4) : '0.0000'} SOL
+                  </h2>
+                )}
+              </div>
+              <GlowButton
+                variant="secondary"
+                onClick={async () => {
+                  if (user?.wallet_address) {
+                    setIsLoadingBalance(true);
+                    try {
+                      const balances = await heliusService.getTokenBalances(user.wallet_address);
+                      const solBalance = balances.find(b => b.symbol === 'SOL');
+                      setCurrentBalance(solBalance?.balance || 0);
+                      showToast({
+                        type: 'success',
+                        message: 'Balance updated',
+                      });
+                    } catch (err) {
+                      showToast({
+                        type: 'error',
+                        message: 'Failed to refresh balance',
+                      });
+                    } finally {
+                      setIsLoadingBalance(false);
+                    }
+                  }
+                }}
+                disabled={isLoadingBalance}
+              >
+                Refresh
+              </GlowButton>
+            </div>
+          </GlassCard>
+
+          {/* Option Cards */}
+          <div>
+            <h2 className="text-xl font-bold text-white mb-4">Choose a funding method</h2>
+            <div className="grid md:grid-cols-2 gap-6">
+              <OptionCard
+                icon={Building}
+                title="Transfer from Bank"
+                desc="Purchase crypto instantly with your debit card. Fast and secure."
+                onClick={handleOnRamp}
+                disabled={!canFundWallet || isLoadingOnramp}
+                recommended={true}
+                processingTime="Instant"
+                features={[
+                  'Secure payment processing',
+                  'Instant deposit',
+                ]}
+              />
+              <OptionCard
+                icon={ArrowDownLeft}
+                title="Transfer from Wallet"
+                desc="Send SOL or SPL tokens from any external Solana wallet."
+                onClick={() => setSelectedOption('wallet')}
+                processingTime="30 seconds - 2 minutes"
+                features={[
+                  'Send from any Solana wallet',
+                  'Support for SOL and SPL tokens',
+                  'Low network fees',
+                ]}
+              />
+            </div>
+          </div>
         </div>
       );
     }
@@ -368,52 +508,90 @@ const AddFundsPage: React.FC = () => {
     
     if (selectedOption === 'wallet' && user) {
         return (
-          <GlassCard className="max-w-xl mx-auto text-center">
-            <h2 className="text-2xl font-bold text-white mb-2">Add Funds</h2>
-            <h3 className="text-xl font-bold text-white mb-6">Your Gifting Wallet Address</h3>
-            <p className="text-sm text-[#94A3B8] mb-8 leading-relaxed max-w-sm mx-auto">
-              This is your personal gifting wallet. Send SOL or SPL tokens on the Solana network to this address to fund your gifts.
-            </p>
-            <p className="text-[#BE123C] mt-2 block font-bold text-sm mb-6">
-              Sending tokens from other networks may result in permanent loss.
-            </p>
-            
-            <div className="bg-[#0F172A] p-4 rounded-xl flex items-center justify-between border border-white/10 mb-8">
-              <span className="text-[#FCD34D] text-sm truncate mr-4 font-mono">{user.wallet_address}</span>
-              <GlowButton 
-                variant="secondary" 
-                className="!py-2 !px-4 !text-xs flex-shrink-0" 
-                onClick={handleCopy} 
-                icon={Copy}
-              >
-                {copied ? 'Copied!' : 'Copy'}
-              </GlowButton>
-            </div>
-
-            {qrCodeDataUrl && (
-              <div className="bg-white p-4 rounded-2xl inline-block mx-auto mb-8">
-                <img src={qrCodeDataUrl} alt="Wallet Address QR Code" className="w-48 h-48" />
+          <div className="max-w-2xl mx-auto space-y-6">
+            <GlassCard>
+              <div className="text-center mb-6">
+                <h2 className="text-2xl font-bold text-white mb-2">Transfer from Wallet</h2>
+                <p className="text-sm text-[#94A3B8]">
+                  Send SOL or SPL tokens from any external Solana wallet to this address
+                </p>
               </div>
-            )}
 
-            <GlowButton variant="secondary" onClick={() => setSelectedOption(null)}>Back</GlowButton>
-          </GlassCard>
+              {/* Security Warning */}
+              <div className="bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-xl p-4 mb-6 flex items-start gap-3">
+                <Shield size={20} className="text-[#EF4444] flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-[#EF4444] font-bold text-sm mb-1">Important: Network Warning</p>
+                  <p className="text-[#FCD34D] text-xs">
+                    Only send tokens on the <strong>Solana network</strong>. Sending from other networks (Ethereum, BSC, etc.) will result in permanent loss of funds.
+                  </p>
+                </div>
+              </div>
+
+              {/* Wallet Address */}
+              <div className="space-y-3 mb-6">
+                <label className="text-xs font-bold uppercase tracking-wider text-[#94A3B8] block">
+                  Your Wallet Address
+                </label>
+                <div className="bg-[#0F172A] p-4 rounded-xl flex items-center justify-between border border-white/10">
+                  <span className="text-[#FCD34D] text-sm truncate mr-4 font-mono">{user.wallet_address}</span>
+                  <GlowButton 
+                    variant="secondary" 
+                    className="!py-2 !px-4 !text-xs flex-shrink-0" 
+                    onClick={handleCopy} 
+                    icon={Copy}
+                  >
+                    Copy
+                  </GlowButton>
+                </div>
+              </div>
+
+              {/* QR Code */}
+              {qrCodeDataUrl && (
+                <div className="bg-white p-6 rounded-2xl inline-block mx-auto mb-6">
+                  <div className="text-center mb-3">
+                    <p className="text-xs text-[#64748B] font-medium">Scan to send</p>
+                  </div>
+                  <img src={qrCodeDataUrl} alt="Wallet Address QR Code" className="w-64 h-64" />
+                </div>
+              )}
+
+              {/* Info Box */}
+              <div className="bg-[#0F172A]/30 border border-white/10 rounded-xl p-4 space-y-2">
+                <div className="flex items-center gap-2 text-sm text-[#94A3B8]">
+                  <Clock size={16} />
+                  <span>Estimated arrival: 30 seconds - 2 minutes</span>
+                </div>
+                <div className="flex items-center gap-2 text-sm text-[#94A3B8]">
+                  <Shield size={16} />
+                  <span>Minimum deposit: 0.01 SOL</span>
+                </div>
+              </div>
+            </GlassCard>
+          </div>
         )
     }
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-10 animate-fade-in-up">
-      <button 
-        onClick={() => selectedOption ? setSelectedOption(null) : navigate(-1)} 
-        className="flex items-center gap-2 text-[#94A3B8] hover:text-white mb-8 transition-colors"
-      >
-        <ChevronLeft size={20} />
-        <span>Back</span>
-      </button>
-      
+    <div className="max-w-7xl mx-auto px-4 py-10 animate-fade-in-up">
       {!selectedOption && (
-        <h1 className="text-3xl font-bold text-white mb-10 text-center">Add Funds</h1>
+        <PageHeader
+          title="Add Funds to Your Wallet"
+          subtitle="Choose how you'd like to add crypto to your account"
+          breadcrumbs={[{ label: 'Home', path: '/' }, { label: 'Add Funds' }]}
+        />
+      )}
+      
+      {selectedOption && (
+        <button 
+          onClick={() => setSelectedOption(null)} 
+          className="flex items-center gap-2 text-[#94A3B8] hover:text-white mb-6 transition-colors"
+          aria-label="Go back"
+        >
+          <ChevronLeft size={20} />
+          <span>Back</span>
+        </button>
       )}
       
       {renderContent()}

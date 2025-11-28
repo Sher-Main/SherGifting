@@ -4,12 +4,18 @@ import { useAuth } from '../context/AuthContext';
 import { usePrivy } from '@privy-io/react-auth';
 import { useSignAndSendTransaction, useWallets } from '@privy-io/react-auth/solana';
 import { heliusService, feeService, priceService, withdrawalService } from '../services/api';
-import { TokenBalance } from '../types';
+import { TokenBalance, Token } from '../types';
+import { motion } from 'framer-motion';
 import Spinner from '../components/Spinner';
-import { Building, ArrowUpRight, ChevronLeft } from 'lucide-react';
+import { Building, ArrowUpRight, ChevronLeft, Check, Shield, AlertTriangle } from 'lucide-react';
 import GlassCard from '../components/UI/GlassCard';
 import GlowButton from '../components/UI/GlowButton';
 import InputField from '../components/UI/InputField';
+import TokenPicker from '../components/UI/TokenPicker';
+import QuickAmountChips from '../components/UI/QuickAmountChips';
+import WithdrawReviewStep from '../components/UI/WithdrawReviewStep';
+import PageHeader from '../components/UI/PageHeader';
+import { useToast } from '../components/UI/ToastContainer';
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import { connection } from '../services/solana';
 import bs58 from 'bs58';
@@ -19,8 +25,11 @@ const WithdrawPage: React.FC = () => {
   const { ready, authenticated, user: privyUser } = usePrivy();
   const { signAndSendTransaction } = useSignAndSendTransaction();
   const { wallets, ready: walletsReady } = useWallets();
+  const { showToast } = useToast();
   const navigate = useNavigate();
   const [selectedOption, setSelectedOption] = useState<'bank' | 'wallet' | null>(null);
+  const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1);
+  const [completedSteps, setCompletedSteps] = useState<number[]>([]);
   
   // Wallet withdrawal state
   const [tokens, setTokens] = useState<Array<{ mint: string; symbol: string; name: string; decimals: number; isNative: boolean }>>([]);
@@ -42,21 +51,29 @@ const WithdrawPage: React.FC = () => {
   const [feePercentage, setFeePercentage] = useState<number>(0.001); // 0.1%
   const [walletReady, setWalletReady] = useState(false);
   
-  // Confirmation modal state
-  const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [confirmDetails, setConfirmDetails] = useState<{
-    withdrawalAddress: string;
-    amount: number;
-    fee: number;
-    total: number;
-    token: string;
-    tokenName: string;
-    usdValue: number | null;
-    usdFee: number | null;
-    usdTotal: number | null;
-    remainingBalance: number;
-    remainingBalanceUsd: number | null;
-  } | null>(null);
+  // Address book (localStorage)
+  const [savedAddresses, setSavedAddresses] = useState<string[]>([]);
+  const [selectedQuickAmount, setSelectedQuickAmount] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Load saved addresses from localStorage
+    const saved = localStorage.getItem('withdraw_saved_addresses');
+    if (saved) {
+      try {
+        setSavedAddresses(JSON.parse(saved));
+      } catch (e) {
+        console.error('Failed to load saved addresses:', e);
+      }
+    }
+  }, []);
+
+  const saveAddress = (address: string) => {
+    if (!savedAddresses.includes(address)) {
+      const updated = [...savedAddresses, address];
+      setSavedAddresses(updated);
+      localStorage.setItem('withdraw_saved_addresses', JSON.stringify(updated));
+    }
+  };
 
   // Monitor wallets array for changes
   useEffect(() => {
@@ -189,21 +206,61 @@ const WithdrawPage: React.FC = () => {
     setAmountMode(newMode);
   };
 
-  const handleWithdraw = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
+  // Step navigation
+  const handleNextStep = () => {
+    if (currentStep < 4) {
+      if (!completedSteps.includes(currentStep)) {
+        setCompletedSteps([...completedSteps, currentStep]);
+      }
+      setCurrentStep((currentStep + 1) as 1 | 2 | 3 | 4);
+    }
+  };
+
+  const handleStepClick = (step: number) => {
+    if (completedSteps.includes(step)) {
+      setCurrentStep(step as 1 | 2 | 3 | 4);
+    }
+  };
+
+  // Step validation
+  const canProceedFromStep = (step: number): boolean => {
+    switch (step) {
+      case 1:
+        return selectedToken !== null;
+      case 2:
+        const numericAmount = amountMode === 'usd' && tokenPrice
+          ? parseFloat(usdAmount) / tokenPrice
+          : parseFloat(tokenAmount);
+        return !isNaN(numericAmount) && numericAmount > 0 && numericAmount <= userBalance;
+      case 3:
+        return withdrawalAddress.trim() !== '' && !addressError && validateSolanaAddress(withdrawalAddress.trim());
+      default:
+        return false;
+    }
+  };
+
+  const handleWithdraw = async () => {
     if (!user || !ready || !authenticated || !user.wallet_address || !walletReady) {
-      setError("Please ensure you're logged in and wallet is ready.");
+      showToast({
+        type: 'error',
+        message: "Please ensure you're logged in and wallet is ready.",
+      });
       return;
     }
 
     if (!selectedToken || !withdrawalAddress.trim()) {
-      setError("Please fill in all required fields.");
+      showToast({
+        type: 'error',
+        message: "Please fill in all required fields.",
+      });
       return;
     }
 
     if (addressError || !validateSolanaAddress(withdrawalAddress.trim())) {
-      setError("Please enter a valid Solana address.");
+      showToast({
+        type: 'error',
+        message: "Please enter a valid Solana address.",
+      });
       return;
     }
 
@@ -212,7 +269,10 @@ const WithdrawPage: React.FC = () => {
       : parseFloat(tokenAmount);
       
     if (isNaN(numericAmount) || numericAmount <= 0) {
-      setError("Please enter a valid amount.");
+      showToast({
+        type: 'error',
+        message: "Please enter a valid amount.",
+      });
       return;
     }
     
@@ -222,7 +282,10 @@ const WithdrawPage: React.FC = () => {
     
     // Check user balance (including fee)
     if (totalAmount > userBalance) {
-      setError(`Insufficient balance. You need ${totalAmount.toFixed(4)} ${selectedToken.symbol} (${numericAmount.toFixed(4)} ${selectedToken.symbol} withdrawal + ${feeAmount.toFixed(4)} ${selectedToken.symbol} fee). You have ${userBalance.toFixed(4)} ${selectedToken.symbol} available.`);
+      showToast({
+        type: 'error',
+        message: `Insufficient balance. You need ${totalAmount.toFixed(4)} ${selectedToken.symbol}.`,
+      });
       return;
     }
     
@@ -231,48 +294,33 @@ const WithdrawPage: React.FC = () => {
       const solBalance = walletBalances.find(b => b.symbol === 'SOL')?.balance || 0;
       const MIN_SOL_FOR_FEES = 0.01;
       if (solBalance < MIN_SOL_FOR_FEES) {
-        setError(`Insufficient SOL for transaction fees. You need at least ${MIN_SOL_FOR_FEES} SOL to pay for transaction fees. You have ${solBalance.toFixed(4)} SOL available.`);
+        showToast({
+          type: 'error',
+          message: `Insufficient SOL for transaction fees. You need at least ${MIN_SOL_FOR_FEES} SOL.`,
+        });
         return;
       }
     }
 
-    // Calculate USD values if price is available
-    const usdValue = tokenPrice ? numericAmount * tokenPrice : null;
-    const usdFee = tokenPrice ? feeAmount * tokenPrice : null;
-    const usdTotal = tokenPrice ? totalAmount * tokenPrice : null;
-    
-    // Calculate remaining balance after transaction
-    const remainingBalance = userBalance - totalAmount;
-    const remainingBalanceUsd = tokenPrice ? remainingBalance * tokenPrice : null;
-    
-    // Show confirmation modal
-    setConfirmDetails({
-      withdrawalAddress: withdrawalAddress.trim(),
-      amount: numericAmount,
-      fee: feeAmount,
-      total: totalAmount,
-      token: selectedToken.symbol,
-      tokenName: selectedToken.name,
-      usdValue,
-      usdFee,
-      usdTotal,
-      remainingBalance,
-      remainingBalanceUsd,
-    });
-    setShowConfirmModal(true);
+    // Save address to address book
+    saveAddress(withdrawalAddress.trim());
+
+    await handleConfirmWithdraw(numericAmount, feeAmount, totalAmount);
   };
 
-  const handleConfirmWithdraw = async () => {
-    if (!confirmDetails || !selectedToken) return;
+  const handleConfirmWithdraw = async (numericAmount?: number, feeAmount?: number, totalAmount?: number) => {
+    if (!selectedToken) return;
+    
+    const finalAmount = numericAmount || (amountMode === 'usd' && tokenPrice
+      ? parseFloat(usdAmount) / tokenPrice
+      : parseFloat(tokenAmount));
+    const finalFee = feeAmount || (finalAmount * feePercentage);
+    const finalTotal = totalAmount || (finalAmount + finalFee);
+    const recipientAddress = withdrawalAddress.trim();
     
     setIsWithdrawing(true);
     setError(null);
     setSuccessMessage(null);
-    setShowConfirmModal(false);
-
-    const numericAmount = confirmDetails.amount;
-    const feeAmount = confirmDetails.fee;
-    const recipientAddress = confirmDetails.withdrawalAddress;
 
     try {
       if (!walletsReady) {
@@ -295,8 +343,8 @@ const WithdrawPage: React.FC = () => {
       
       if (isNative) {
         // Native SOL transfer
-        const withdrawalAmountLamports = Math.round(numericAmount * LAMPORTS_PER_SOL);
-        const feeAmountLamports = Math.round(feeAmount * LAMPORTS_PER_SOL);
+        const withdrawalAmountLamports = Math.round(finalAmount * LAMPORTS_PER_SOL);
+        const feeAmountLamports = Math.round(finalFee * LAMPORTS_PER_SOL);
         
         // Add withdrawal amount transfer
         transaction.add(
@@ -331,8 +379,8 @@ const WithdrawPage: React.FC = () => {
         const mintPubkey = new PublicKey(selectedToken.mint);
         const decimals = selectedToken.decimals || 9;
         
-        const withdrawalAmountRaw = Math.round(numericAmount * Math.pow(10, decimals));
-        const feeAmountRaw = Math.round(feeAmount * Math.pow(10, decimals));
+        const withdrawalAmountRaw = Math.round(finalAmount * Math.pow(10, decimals));
+        const feeAmountRaw = Math.round(finalFee * Math.pow(10, decimals));
         
         // Get associated token addresses
         const senderATA = await getAssociatedTokenAddress(
@@ -475,35 +523,111 @@ const WithdrawPage: React.FC = () => {
       // Record withdrawal on backend
       await withdrawalService.recordWithdrawal({
         token_mint: selectedToken.mint,
-        amount: numericAmount,
-        fee: feeAmount,
+        amount: finalAmount,
+        fee: finalFee,
         recipient_address: recipientAddress,
         transaction_signature: signatureString,
         token_symbol: selectedToken.symbol,
         token_decimals: selectedToken.decimals,
       });
 
-      setSuccessMessage(`Successfully withdrew ${numericAmount.toFixed(4)} ${selectedToken.symbol} to ${recipientAddress.substring(0, 8)}...`);
+      showToast({
+        type: 'success',
+        message: `Successfully withdrew ${finalAmount.toFixed(4)} ${selectedToken.symbol}!`,
+      });
       
       // Update user balance
       await refreshUser();
       
-      // Clear form
+      // Clear form and reset
       setWithdrawalAddress('');
       setUsdAmount('');
       setTokenAmount('');
       setAmountMode('usd');
+      setCurrentStep(1);
+      setCompletedSteps([]);
+      setSelectedQuickAmount(null);
       
       setTimeout(() => {
         navigate('/');
-      }, 3000);
+      }, 2000);
       
     } catch (err: any) {
       console.error('❌ Error withdrawing:', err);
-      setError(err.response?.data?.error || err.message || 'Failed to withdraw. Please try again.');
+      showToast({
+        type: 'error',
+        message: err.response?.data?.error || err.message || 'Failed to withdraw. Please try again.',
+      });
     } finally {
       setIsWithdrawing(false);
     }
+  };
+
+  // Withdrawal stepper component
+  const WithdrawStepper: React.FC<{ currentStep: 1 | 2 | 3 | 4; completedSteps: number[]; onStepClick: (step: number) => void }> = ({ currentStep, completedSteps, onStepClick }) => {
+    const withdrawSteps = [
+      { number: 1, label: 'Token', description: 'Select token' },
+      { number: 2, label: 'Amount', description: 'Enter amount' },
+      { number: 3, label: 'Address', description: 'Recipient' },
+      { number: 4, label: 'Review', description: 'Confirm' },
+    ];
+
+    const getStepState = (stepNumber: number) => {
+      if (completedSteps.includes(stepNumber)) return 'completed';
+      if (currentStep === stepNumber) return 'active';
+      return 'pending';
+    };
+
+    const canClickStep = (stepNumber: number) => {
+      return completedSteps.includes(stepNumber) && onStepClick;
+    };
+
+    return (
+      <div className="w-full mb-8" role="progressbar" aria-label="Withdrawal progress" aria-valuenow={currentStep} aria-valuemin={1} aria-valuemax={4}>
+        <div className="flex items-center justify-between relative">
+          <div className="absolute top-5 left-0 right-0 h-0.5 bg-white/10 -z-10">
+            <motion.div
+              className="h-full bg-[#06B6D4]"
+              initial={{ width: '0%' }}
+              animate={{ width: `${((currentStep - 1) / (withdrawSteps.length - 1)) * 100}%` }}
+              transition={{ duration: 0.3, ease: 'easeInOut' }}
+            />
+          </div>
+          {withdrawSteps.map((step) => {
+            const state = getStepState(step.number);
+            const isClickable = canClickStep(step.number);
+            return (
+              <div key={step.number} className="flex flex-col items-center flex-1 relative">
+                <button
+                  type="button"
+                  onClick={() => isClickable && onStepClick(step.number)}
+                  disabled={!isClickable}
+                  className={`
+                    w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm transition-all
+                    ${state === 'completed' ? 'bg-[#10B981] text-white shadow-lg shadow-[#10B981]/20' :
+                      state === 'active' ? 'bg-[#06B6D4] text-white shadow-lg shadow-[#06B6D4]/30 ring-4 ring-[#06B6D4]/20' :
+                      'bg-[#1E293B] text-[#64748B] border-2 border-white/10'}
+                    ${isClickable ? 'cursor-pointer hover:scale-110' : 'cursor-default'}
+                  `}
+                >
+                  {state === 'completed' ? <Check size={20} /> : step.number}
+                </button>
+                <div className="mt-2 text-center">
+                  <div className={`text-xs font-bold uppercase tracking-wider ${
+                    state === 'active' ? 'text-[#06B6D4]' : state === 'completed' ? 'text-[#10B981]' : 'text-[#64748B]'
+                  }`}>
+                    {step.label}
+                  </div>
+                  <div className={`text-[10px] mt-0.5 ${state === 'active' ? 'text-white' : 'text-[#94A3B8]'}`}>
+                    {step.description}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
   };
 
   // OptionCard component
@@ -580,328 +704,357 @@ const WithdrawPage: React.FC = () => {
         );
       }
 
+      // Convert tokens to Token format for TokenPicker
+      const tokenPickerTokens: Token[] = tokens.map(t => ({
+        mint: t.mint,
+        symbol: t.symbol,
+        name: t.name,
+        decimals: t.decimals,
+        isNative: t.isNative,
+      }));
+
+      const selectedTokenForPicker: Token | null = selectedToken ? {
+        mint: selectedToken.mint,
+        symbol: selectedToken.symbol,
+        name: selectedToken.name,
+        decimals: selectedToken.decimals,
+        isNative: selectedToken.isNative,
+      } : null;
+
+      // Calculate values for review step
+      const numericAmount = amountMode === 'usd' && tokenPrice
+        ? parseFloat(usdAmount) / tokenPrice
+        : parseFloat(tokenAmount);
+      const feeAmount = !isNaN(numericAmount) && numericAmount > 0 ? numericAmount * feePercentage : 0;
+      const totalAmount = numericAmount + feeAmount;
+      const usdValue = tokenPrice && !isNaN(numericAmount) ? numericAmount * tokenPrice : null;
+      const usdFee = tokenPrice && feeAmount > 0 ? feeAmount * tokenPrice : null;
+      const usdTotal = tokenPrice && totalAmount > 0 ? totalAmount * tokenPrice : null;
+      const remainingBalance = userBalance - totalAmount;
+      const remainingBalanceUsd = tokenPrice ? remainingBalance * tokenPrice : null;
+
       return (
+        <div className="max-w-4xl mx-auto space-y-6">
+          <WithdrawStepper
+            currentStep={currentStep}
+            completedSteps={completedSteps}
+            onStepClick={handleStepClick}
+          />
+
         <GlassCard>
-          <form onSubmit={handleWithdraw} className="space-y-6 max-w-2xl mx-auto">
-            {/* Warning Banner */}
-            <div className="bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-lg p-4">
-              <p className="text-[#FCD34D] text-sm font-medium">
-                ⚠️ <strong>Important:</strong> Only enter valid Solana or SPL token addresses for withdrawal. Using addresses from other networks may result in permanent loss of funds.
-              </p>
-            </div>
-
-            {/* User Balance Info */}
-            {selectedToken && (
-              <div className="bg-gradient-to-r from-[#1E293B] to-[#0F172A] border border-white/10 rounded-lg p-4">
-                <p className="text-[#94A3B8] text-sm">Your Balance</p>
-                {tokenPrice && tokenPrice > 0 ? (
-                  <>
-                    <p className="text-2xl font-bold text-white">
-                      ${(userBalance * tokenPrice).toFixed(3)} USD
-                    </p>
-                    <p className="text-sm text-[#94A3B8] mt-1">
-                      {userBalance.toFixed(4)} {selectedToken.symbol}
-                    </p>
-                  </>
-                ) : (
-                  <p className="text-2xl font-bold text-white">
-                    {userBalance.toFixed(4)} {selectedToken.symbol}
-                  </p>
-                )}
-                <p className="text-xs text-[#64748B] mt-1">Available for withdrawal</p>
-                {userBalance < 0.01 && (
-                  <div className="mt-3 p-3 bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-lg">
-                    <p className="text-[#FCD34D] text-sm">
-                      ⚠️ Low balance. Add {selectedToken.symbol} to your wallet in the "Add Funds" page.
-                    </p>
+            <div className="space-y-6">
+              {/* Step 1: Select Token */}
+              {currentStep === 1 && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="space-y-6"
+                >
+                  <div>
+                    <h2 className="text-2xl font-bold text-white mb-2">Select Token</h2>
+                    <p className="text-[#94A3B8] text-sm">Choose which token you want to withdraw</p>
                   </div>
-                )}
-              </div>
-            )}
 
-            {/* Token Selector */}
-            <div>
-              <label htmlFor="token" className="block text-sm font-medium text-white mb-2">
-                Token
-              </label>
-              <select
-                id="token"
-                value={selectedToken?.mint || ''}
-                onChange={(e) => {
-                  const token = tokens.find(t => t.mint === e.target.value);
-                  setSelectedToken(token || null);
-                  setUsdAmount('');
-                  setTokenAmount('');
-                }}
-                className="w-full bg-[#0F172A]/50 border border-white/10 rounded-xl px-4 py-3.5 text-white focus:border-[#BE123C] focus:ring-4 focus:ring-[#BE123C]/10 transition"
-              >
-                {tokens.map(token => (
-                  <option key={token.mint} value={token.mint}>
-                    {token.symbol} - {token.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+                  {selectedToken && (
+                    <div className="bg-gradient-to-r from-[#1E293B] to-[#0F172A] border border-white/10 rounded-lg p-4">
+                      <p className="text-[#94A3B8] text-sm mb-1">Your Balance</p>
+                      {tokenPrice && tokenPrice > 0 ? (
+                        <>
+                          <p className="text-2xl font-bold text-white">${(userBalance * tokenPrice).toFixed(3)} USD</p>
+                          <p className="text-sm text-[#94A3B8] mt-1">{userBalance.toFixed(4)} {selectedToken.symbol}</p>
+                        </>
+                      ) : (
+                        <p className="text-2xl font-bold text-white">{userBalance.toFixed(4)} {selectedToken.symbol}</p>
+                      )}
+                    </div>
+                  )}
 
-            {/* Withdrawal Address */}
-            <div>
-              <InputField
-                label="Withdrawal Address"
-                placeholder="Enter Solana or SPL token address"
-                value={withdrawalAddress}
-                onChange={(e) => handleAddressChange(e.target.value)}
-                required
-              />
-              {addressError && (
-                <p className="text-[#EF4444] text-sm mt-1">{addressError}</p>
+                  <TokenPicker
+                    tokens={tokenPickerTokens}
+                    selectedToken={selectedTokenForPicker}
+                    onSelect={(token) => {
+                      const found = tokens.find(t => t.mint === token.mint);
+                      if (found) {
+                        setSelectedToken(found);
+                        setUsdAmount('');
+                        setTokenAmount('');
+                      }
+                    }}
+                    balances={walletBalances}
+                  />
+
+                  <div className="flex gap-3">
+                    <GlowButton variant="secondary" onClick={() => setSelectedOption(null)} className="flex-1">
+                      Back
+                    </GlowButton>
+                    <GlowButton
+                      variant="cyan"
+                      onClick={() => {
+                        if (selectedToken) {
+                          handleNextStep();
+                        }
+                      }}
+                      disabled={!selectedToken}
+                      className="flex-1"
+                    >
+                      Continue
+                    </GlowButton>
+                  </div>
+                </motion.div>
               )}
-            </div>
 
-            {/* Amount Input with Mode Toggle */}
-            <div>
-              <label htmlFor="amount" className="block text-sm font-medium text-white mb-2">
-                Amount
-              </label>
-              
-              <div className="grid grid-cols-2 gap-0 bg-[#0F172A] p-1 rounded-xl border border-white/10 mb-3">
-                <button
-                  type="button"
-                  onClick={() => handleModeSwitch('token')}
-                  className={`py-2 px-4 rounded-lg font-medium transition-colors ${
-                    amountMode === 'token'
-                      ? 'bg-[#1E293B] text-white border border-white/10'
-                      : 'text-[#64748B] hover:text-[#94A3B8]'
-                  }`}
+              {/* Step 2: Enter Amount */}
+              {currentStep === 2 && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="space-y-6"
                 >
-                  Token Amount
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleModeSwitch('usd')}
-                  disabled={!tokenPrice || priceLoading}
-                  className={`py-2 px-4 rounded-lg font-medium transition-colors ${
-                    amountMode === 'usd'
-                      ? 'bg-[#06B6D4] text-white border border-white/10'
-                      : 'text-[#64748B] hover:text-[#94A3B8]'
-                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                  <div>
+                    <h2 className="text-2xl font-bold text-white mb-2">Enter Amount</h2>
+                    <p className="text-[#94A3B8] text-sm">How much do you want to withdraw?</p>
+                  </div>
+
+                  {tokenPrice && (
+                    <QuickAmountChips
+                      onAmountSelect={(value) => {
+                        setSelectedQuickAmount(value);
+                        if (value && value !== 'custom') {
+                          const usd = parseFloat(value);
+                          setUsdAmount(usd.toString());
+                          setTokenAmount((usd / tokenPrice).toString());
+                          setAmountMode('usd');
+                        } else {
+                          setUsdAmount('');
+                          setTokenAmount('');
+                        }
+                      }}
+                      selectedAmount={selectedQuickAmount}
+                      tokenPrice={tokenPrice}
+                    />
+                  )}
+
+                  <div>
+                    <div className="grid grid-cols-2 gap-0 bg-[#0F172A] p-1 rounded-xl border border-white/10 mb-3">
+                      <button
+                        type="button"
+                        onClick={() => handleModeSwitch('token')}
+                        className={`py-2 px-4 rounded-lg font-medium transition-colors ${
+                          amountMode === 'token'
+                            ? 'bg-[#1E293B] text-white border border-white/10'
+                            : 'text-[#64748B] hover:text-[#94A3B8]'
+                        }`}
+                      >
+                        Token Amount
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleModeSwitch('usd')}
+                        disabled={!tokenPrice || priceLoading}
+                        className={`py-2 px-4 rounded-lg font-medium transition-colors ${
+                          amountMode === 'usd'
+                            ? 'bg-[#06B6D4] text-white border border-white/10'
+                            : 'text-[#64748B] hover:text-[#94A3B8]'
+                        } disabled:opacity-50 disabled:cursor-not-allowed`}
+                      >
+                        USD Amount
+                      </button>
+                    </div>
+
+                    {amountMode === 'token' ? (
+                      <InputField
+                        type="number"
+                        value={tokenAmount}
+                        onChange={(e) => {
+                          setTokenAmount(e.target.value);
+                          if (tokenPrice && e.target.value) {
+                            setUsdAmount((parseFloat(e.target.value) * tokenPrice).toFixed(2));
+                          }
+                        }}
+                        placeholder="0.00"
+                        rightElement={<span className="text-[#94A3B8]">{selectedToken?.symbol}</span>}
+                      />
+                    ) : (
+                      <InputField
+                        type="number"
+                        value={usdAmount}
+                        onChange={(e) => {
+                          setUsdAmount(e.target.value);
+                          if (tokenPrice && e.target.value) {
+                            const calculatedTokenAmount = (parseFloat(e.target.value) / tokenPrice).toString();
+                            setTokenAmount(calculatedTokenAmount);
+                          }
+                        }}
+                        placeholder="0.00"
+                        rightElement={<span className="text-[#94A3B8]">$</span>}
+                      />
+                    )}
+
+                    {tokenPrice && (
+                      <p className="text-sm text-[#94A3B8] mt-2">
+                        {amountMode === 'token' && tokenAmount && !isNaN(parseFloat(tokenAmount)) ? (
+                          <>≈ ${(parseFloat(tokenAmount) * tokenPrice).toFixed(2)} USD</>
+                        ) : amountMode === 'usd' && usdAmount && !isNaN(parseFloat(usdAmount)) ? (
+                          <>≈ {(parseFloat(usdAmount) / tokenPrice).toFixed(6)} {selectedToken?.symbol}</>
+                        ) : null}
+                      </p>
+                    )}
+
+                    {!isNaN(numericAmount) && numericAmount > 0 && (
+                      <div className="mt-4 p-3 bg-[#0F172A]/30 border border-white/5 rounded-lg">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-[#94A3B8]">Fee (0.1%):</span>
+                          <span className="text-[#94A3B8]">{feeAmount.toFixed(6)} {selectedToken?.symbol}</span>
+                        </div>
+                        <div className="flex justify-between text-sm pt-2 border-t border-white/5 mt-2">
+                          <span className="text-white font-medium">Total:</span>
+                          <span className="text-white font-medium">{totalAmount.toFixed(6)} {selectedToken?.symbol}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex gap-3">
+                    <GlowButton variant="secondary" onClick={() => setCurrentStep(1)} className="flex-1">
+                      Back
+                    </GlowButton>
+                    <GlowButton
+                      variant="cyan"
+                      onClick={handleNextStep}
+                      disabled={!canProceedFromStep(2)}
+                      className="flex-1"
+                    >
+                      Continue
+                    </GlowButton>
+                  </div>
+                </motion.div>
+              )}
+
+              {/* Step 3: Enter Address */}
+              {currentStep === 3 && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="space-y-6"
                 >
-                  USD Amount
-                </button>
-              </div>
-              
-              {amountMode === 'token' ? (
-                <InputField
-                  type="number"
-                  id="amount"
-                  value={tokenAmount}
-                  onChange={(e) => {
-                    setTokenAmount(e.target.value);
-                    if (tokenPrice && e.target.value) {
-                      setUsdAmount((parseFloat(e.target.value) * tokenPrice).toFixed(2));
-                    }
-                  }}
-                  required
-                  min="0"
-                  step="0.000001"
-                  placeholder="0.00"
-                  rightElement={<span className="text-[#94A3B8]">{selectedToken?.symbol}</span>}
-                />
-              ) : (
-                <InputField
-                  type="number"
-                  id="amount"
-                  value={usdAmount}
-                  onChange={(e) => {
-                    setUsdAmount(e.target.value);
-                    if (tokenPrice && e.target.value) {
-                      const calculatedTokenAmount = (parseFloat(e.target.value) / tokenPrice).toString();
-                      setTokenAmount(calculatedTokenAmount);
-                    }
-                  }}
-                  required
-                  min="0"
-                  step="0.01"
-                  placeholder="0.00"
-                  rightElement={<span className="text-[#94A3B8]">$</span>}
-                />
+                  <div>
+                    <h2 className="text-2xl font-bold text-white mb-2">Recipient Address</h2>
+                    <p className="text-[#94A3B8] text-sm">Where should we send the funds?</p>
+                  </div>
+
+                  <div className="bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-lg p-4 flex items-start gap-3">
+                    <AlertTriangle size={20} className="text-[#EF4444] flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-[#EF4444] font-bold text-sm mb-1">Network Warning</p>
+                      <p className="text-[#FCD34D] text-xs">
+                        Only send to <strong>Solana network</strong> addresses. Sending to other networks will result in permanent loss of funds.
+                      </p>
+                    </div>
+                  </div>
+
+                  {savedAddresses.length > 0 && (
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wider text-[#94A3B8] mb-2">Saved Addresses</p>
+                      <div className="space-y-2">
+                        {savedAddresses.map((addr, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => {
+                              setWithdrawalAddress(addr);
+                              setAddressError(null);
+                            }}
+                            className="w-full p-3 rounded-lg bg-[#0F172A]/50 border border-white/10 hover:border-[#06B6D4] text-left transition-colors"
+                          >
+                            <p className="text-white font-mono text-sm truncate">{addr}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <InputField
+                    label="Withdrawal Address"
+                    placeholder="Enter Solana or SPL token address"
+                    value={withdrawalAddress}
+                    onChange={(e) => handleAddressChange(e.target.value)}
+                    error={addressError || undefined}
+                    helperText="Paste a valid Solana wallet address"
+                    required
+                  />
+
+                  <div className="flex gap-3">
+                    <GlowButton variant="secondary" onClick={() => setCurrentStep(2)} className="flex-1">
+                      Back
+                    </GlowButton>
+                    <GlowButton
+                      variant="cyan"
+                      onClick={handleNextStep}
+                      disabled={!canProceedFromStep(3)}
+                      className="flex-1"
+                    >
+                      Continue
+                    </GlowButton>
+                  </div>
+                </motion.div>
               )}
-              
-              {tokenPrice && (
-                <div className="mt-2 text-sm text-[#94A3B8]">
-                  {amountMode === 'token' && tokenAmount && !isNaN(parseFloat(tokenAmount)) ? (
-                    <span>≈ ${(parseFloat(tokenAmount) * tokenPrice).toFixed(2)} USD</span>
-                  ) : amountMode === 'usd' && usdAmount && !isNaN(parseFloat(usdAmount)) ? (
-                    <span>≈ {(parseFloat(usdAmount) / tokenPrice).toFixed(6)} {selectedToken?.symbol}</span>
-                  ) : null}
-                </div>
+
+              {/* Step 4: Review */}
+              {currentStep === 4 && selectedToken && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                >
+                  <WithdrawReviewStep
+                    withdrawalAddress={withdrawalAddress.trim()}
+                    amount={numericAmount}
+                    tokenSymbol={selectedToken.symbol}
+                    tokenName={selectedToken.name}
+                    usdValue={usdValue}
+                    fee={feeAmount}
+                    total={totalAmount}
+                    usdFee={usdFee}
+                    usdTotal={usdTotal}
+                    remainingBalance={remainingBalance}
+                    remainingBalanceUsd={remainingBalanceUsd}
+                    onEditStep={setCurrentStep}
+                    onSubmit={handleWithdraw}
+                    isSubmitting={isWithdrawing}
+                    disabled={!canProceedFromStep(4) || isWithdrawing}
+                  />
+                </motion.div>
               )}
             </div>
-
-            {/* Fee Breakdown */}
-            {(tokenAmount || usdAmount) && !isNaN(parseFloat(tokenAmount || usdAmount)) && parseFloat(tokenAmount || usdAmount) > 0 && (
-              <div className="p-3 bg-[#0F172A]/30 border border-white/5 rounded-lg">
-                <div className="flex justify-between text-sm mb-1">
-                  <span className="text-[#94A3B8]">Withdrawal Amount:</span>
-                  <span className="text-white">
-                    {amountMode === 'usd' && tokenPrice
-                      ? `$${parseFloat(usdAmount).toFixed(3)}`
-                      : `${parseFloat(tokenAmount).toFixed(6)} ${selectedToken?.symbol}`}
-                  </span>
-                </div>
-                <div className="flex justify-between text-sm mb-1">
-                  <span className="text-[#94A3B8]">Fee (0.1%):</span>
-                  <span className="text-[#94A3B8]">
-                    {amountMode === 'usd' && tokenPrice
-                      ? `$${(parseFloat(usdAmount) * feePercentage).toFixed(3)}`
-                      : `${(parseFloat(tokenAmount) * feePercentage).toFixed(6)} ${selectedToken?.symbol}`}
-                  </span>
-                </div>
-                <div className="flex justify-between text-sm pt-2 border-t border-white/5">
-                  <span className="text-white font-medium">Total:</span>
-                  <span className="text-white font-medium">
-                    {amountMode === 'usd' && tokenPrice
-                      ? `$${(parseFloat(usdAmount) * (1 + feePercentage)).toFixed(3)}`
-                      : `${(parseFloat(tokenAmount) * (1 + feePercentage)).toFixed(6)} ${selectedToken?.symbol}`}
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {error && (
-              <div className="bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-lg p-3">
-                <p className="text-[#EF4444] text-sm">{error}</p>
-              </div>
-            )}
-            
-            {successMessage && (
-              <div className="bg-[#064E3B]/20 border border-[#10B981]/20 rounded-lg p-3">
-                <p className="text-[#10B981] text-sm">{successMessage}</p>
-              </div>
-            )}
-
-            <div className="flex gap-3">
-              <GlowButton
-                type="button"
-                variant="secondary"
-                fullWidth
-                onClick={() => {
-                  setSelectedOption(null);
-                  setWithdrawalAddress('');
-                  setUsdAmount('');
-                  setTokenAmount('');
-                  setError(null);
-                  setSuccessMessage(null);
-                }}
-              >
-                Back
-              </GlowButton>
-              <GlowButton
-                type="submit"
-                variant="cyan"
-                fullWidth
-                disabled={isWithdrawing || !user || userBalance < 0.001 || !!addressError}
-              >
-                {isWithdrawing ? (
-                  <>
-                    <Spinner size="6" color="border-white" />
-                    <span className="ml-2">Withdrawing...</span>
-                  </>
-                ) : (
-                  'Preview Withdrawal'
-                )}
-              </GlowButton>
-            </div>
-          </form>
-        </GlassCard>
+          </GlassCard>
+        </div>
       );
     }
   };
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-10 animate-fade-in-up">
-      <button 
-        onClick={() => selectedOption ? setSelectedOption(null) : navigate(-1)} 
-        className="flex items-center gap-2 text-[#94A3B8] hover:text-white mb-8 transition-colors"
-      >
-        <ChevronLeft size={20} />
-        <span>Back</span>
-      </button>
-      
       {!selectedOption && (
-        <h1 className="text-3xl font-bold text-white mb-10 text-center">Withdraw Funds</h1>
+        <PageHeader
+          title="Withdraw Funds"
+          subtitle="Send crypto from your wallet to an external address"
+          breadcrumbs={[{ label: 'Home', path: '/' }, { label: 'Withdraw' }]}
+        />
       )}
       
-      {/* Confirmation Modal */}
-      {showConfirmModal && confirmDetails && (
-        <div className="fixed inset-0 bg-[#0B1120]/85 backdrop-blur-md flex items-center justify-center z-50 p-4">
-          <GlassCard className="max-w-md w-full animate-scale-in">
-            <h2 className="text-2xl font-bold text-white mb-4 text-center">Confirm Withdrawal</h2>
-            
-            <div className="space-y-4 mb-6">
-              <div className="bg-[#0F172A]/30 rounded-lg p-4 space-y-3 border border-white/5">
-                <div className="pb-3 border-b border-white/5">
-                  <p className="text-[#94A3B8] text-xs mb-1">Withdrawal Address</p>
-                  <p className="text-white font-mono text-sm break-all">{confirmDetails.withdrawalAddress}</p>
-                </div>
-                
-                <div className="pb-3 border-b border-white/5">
-                  <p className="text-[#94A3B8] text-xs mb-1">Amount</p>
-                  {confirmDetails.usdValue !== null ? (
-                    <p className="text-white font-bold text-xl">${confirmDetails.usdValue.toFixed(3)} USD</p>
-                  ) : (
-                    <p className="text-white font-bold text-xl">{confirmDetails.amount.toFixed(6)} {confirmDetails.token}</p>
-                  )}
-                  {confirmDetails.usdValue !== null && (
-                    <p className="text-[#94A3B8] text-xs mt-1">{confirmDetails.amount.toFixed(6)} {confirmDetails.token}</p>
-                  )}
-                </div>
-                
-                <div className="pb-3 border-b border-white/5">
-                  <p className="text-[#94A3B8] text-xs mb-1">Fee (0.1%)</p>
-                  {confirmDetails.usdFee !== null ? (
-                    <p className="text-[#94A3B8] font-medium">${confirmDetails.usdFee.toFixed(3)} USD</p>
-                  ) : (
-                    <p className="text-[#94A3B8] font-medium">{confirmDetails.fee.toFixed(6)} {confirmDetails.token}</p>
-                  )}
-                </div>
-                
-                <div>
-                  <p className="text-[#94A3B8] text-xs mb-1">What's left in your wallet</p>
-                  {confirmDetails.remainingBalanceUsd !== null ? (
-                    <>
-                      <p className="text-white font-medium">${confirmDetails.remainingBalanceUsd.toFixed(3)} USD</p>
-                      <p className="text-[#94A3B8] text-xs mt-1">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
-                    </>
-                  ) : (
-                    <p className="text-white font-medium">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
-                  )}
-                </div>
-              </div>
-            </div>
-            
-            <div className="flex gap-3">
-              <GlowButton
-                variant="secondary"
-                fullWidth
-                onClick={() => {
-                  setShowConfirmModal(false);
-                  setConfirmDetails(null);
-                }}
-              >
-                Cancel
-              </GlowButton>
-              <GlowButton
-                variant="cyan"
-                fullWidth
-                onClick={handleConfirmWithdraw}
-                disabled={isWithdrawing}
-              >
-                {isWithdrawing ? 'Withdrawing...' : 'Confirm & Withdraw'}
-              </GlowButton>
-            </div>
-          </GlassCard>
-        </div>
-      )}
+      {selectedOption && (
+        <button 
+          onClick={() => setSelectedOption(null)} 
+          className="flex items-center gap-2 text-[#94A3B8] hover:text-white mb-8 transition-colors"
+          aria-label="Go back"
+        >
+          <ChevronLeft size={20} />
+          <span>Back</span>
+        </button>
+        )}
       
       {renderContent()}
     </div>

@@ -8,13 +8,19 @@ interface CardUpsellSectionProps {
   selectedCard: string | null;
 }
 
+interface CardUpsellSectionProps {
+  recipientName: string;
+  onCardSelect: (cardType: string | null) => void;
+  selectedCard: string | null;
+  onOpenModal?: () => void;
+}
+
 export const CardUpsellSection: React.FC<CardUpsellSectionProps> = ({
   recipientName,
   onCardSelect,
-  selectedCard
+  selectedCard,
+  onOpenModal,
 }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-
   return (
     <div className="bg-[#0F172A]/30 border border-white/5 rounded-xl p-6">
       {/* Header with Checkbox */}
@@ -22,11 +28,14 @@ export const CardUpsellSection: React.FC<CardUpsellSectionProps> = ({
         <div
           onClick={() => {
             if (!selectedCard) {
-              setIsExpanded(true);
-              onCardSelect(CARD_TEMPLATES[0].id);
+              // Open modal if provided, otherwise use inline selection
+              if (onOpenModal) {
+                onOpenModal();
+              } else {
+                onCardSelect(CARD_TEMPLATES[0].id);
+              }
             } else {
               onCardSelect(null);
-              setIsExpanded(false);
             }
           }}
           className={`w-5 h-5 rounded border cursor-pointer flex items-center justify-center transition-colors ${
@@ -50,44 +59,38 @@ export const CardUpsellSection: React.FC<CardUpsellSectionProps> = ({
         Make your gift extra special with a personalized greeting card
       </p>
 
-      {/* Card Template Selector */}
-      {(isExpanded || selectedCard) && (
-        <div className="animate-fade-in-up">
-          <p className="text-xs font-bold text-[#94A3B8] uppercase mb-3">
-            Choose a card design:
-          </p>
-          
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {CARD_TEMPLATES.map((template) => (
-              <div
-                key={template.id}
-                onClick={() => onCardSelect(template.id)}
-                className={`cursor-pointer border-2 rounded-lg relative overflow-hidden transition-all flex flex-col group ${
-                  selectedCard === template.id
-                    ? 'border-[#06B6D4]'
-                    : 'border-transparent opacity-60 hover:opacity-100'
-                }`}
-              >
-                <div className="relative w-full pb-[66.67%]">
+      {/* Selected Card Preview */}
+      {selectedCard && (
+        <div className="space-y-3">
+          {(() => {
+            const card = CARD_TEMPLATES.find(c => c.id === selectedCard);
+            if (!card) return null;
+            return (
+              <>
+                <div className="flex items-center gap-3">
                   <img
-                    src={template.previewUrl}
-                    alt={template.displayName}
-                    className="absolute inset-0 w-full h-full object-cover"
+                    src={card.previewUrl}
+                    alt={card.displayName}
+                    className="w-16 h-16 rounded-lg object-cover border border-white/10"
                   />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-white">{card.displayName}</p>
+                    <p className="text-xs text-[#94A3B8]">{card.occasion}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onOpenModal ? onOpenModal() : onCardSelect(null)}
+                    className="text-xs text-[#06B6D4] hover:text-[#0891B2]"
+                  >
+                    Change
+                  </button>
                 </div>
-                <div className="bg-[#1E293B] py-2 px-1 text-center text-[10px] text-white font-medium border-t border-white/5">
-                  {template.displayName}
+                <div className="p-3 bg-[#06B6D4]/10 rounded border border-[#06B6D4]/20 text-[#06B6D4] text-xs text-center">
+                  A beautiful greeting card will be included with your gift email
                 </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Preview message */}
-          {selectedCard && (
-            <div className="mt-4 p-3 bg-[#06B6D4]/10 rounded border border-[#06B6D4]/20 text-[#06B6D4] text-xs text-center">
-              A beautiful greeting card will be included with your gift email
-            </div>
-          )}
+              </>
+            );
+          })()}
         </div>
       )}
     </div>

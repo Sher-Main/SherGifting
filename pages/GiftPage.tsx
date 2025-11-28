@@ -1,18 +1,29 @@
-import React, { useState, useEffect, Suspense } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, Suspense, useMemo, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePrivy } from '@privy-io/react-auth';
 import { useSignAndSendTransaction, useWallets } from '@privy-io/react-auth/solana';
 import { tokenService, giftService, tiplinkService, heliusService, feeService, priceService, usernameService } from '../services/api';
 import { Token, TokenBalance, ResolveRecipientResponse } from '../types';
 import Spinner from '../components/Spinner';
-import { Gift, ChevronLeft, AlertTriangle, Mail, QrCode, Copy, ArrowUpRight, Check } from 'lucide-react';
+import { Gift, ChevronLeft, AlertTriangle, Mail, QrCode, Copy, ArrowUpRight, Check, ChevronDown, ChevronUp } from 'lucide-react';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import GlassCard from '../components/UI/GlassCard';
 import GlowButton from '../components/UI/GlowButton';
 import InputField from '../components/UI/InputField';
+import Stepper from '../components/UI/Stepper';
+import GiftPreview from '../components/UI/GiftPreview';
+import TokenPicker from '../components/UI/TokenPicker';
+import QuickAmountChips from '../components/UI/QuickAmountChips';
+import BalanceResolutionPanel from '../components/UI/BalanceResolutionPanel';
+import ReviewStep from '../components/UI/ReviewStep';
+import GreetingCardModal from '../components/UI/GreetingCardModal';
+import PageHeader from '../components/UI/PageHeader';
+import { useToast } from '../components/UI/ToastContainer';
 import { ArrowLeftIcon } from '../components/icons';
 import { OnrampCreditPopup } from '../components/OnrampCreditPopup';
 import { CARD_UPSELL_PRICE } from '../lib/cardTemplates';
+import { triggerConfetti } from '../lib/confetti';
 import QRCode from 'qrcode';
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import { connection } from '../services/solana';
@@ -108,6 +119,16 @@ const GiftPage: React.FC = () => {
         signature: string;
         qrCode: string;
     } | null>(null);
+
+    // Step navigation state
+    const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1);
+    const [completedSteps, setCompletedSteps] = useState<number[]>([]);
+    const [showGreetingCardModal, setShowGreetingCardModal] = useState(false);
+    const [quickAmountSelected, setQuickAmountSelected] = useState<string | null>(null);
+    const [showPreviewMobile, setShowPreviewMobile] = useState(false);
+    const { showToast } = useToast();
+    const location = useLocation();
+    const stepRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
 
     // Monitor wallets array for changes
     useEffect(() => {
@@ -1377,15 +1398,27 @@ const GiftPage: React.FC = () => {
                 ? confirmDetails.usdValue
                 : (tokenPrice ? numericAmount * tokenPrice : null);
             
-            // Close confirmation modal and show success modal
+            // Close confirmation modal
             setShowConfirmModal(false);
             setConfirmDetails(null);
+            
+            // Trigger confetti
+            triggerConfetti();
+            
+            // Show success toast
+            showToast({
+                type: 'success',
+                message: 'Gift link created successfully!',
+                actionLabel: 'Copy',
+                onAction: () => copyToClipboard(fullClaimUrl),
+                duration: 10000,
+            });
             
             // Set gift details and show success modal
             setGiftDetails({
                 claim_url: fullClaimUrl,
                 amount: numericAmount.toString(),
-                token: selectedToken.symbol,
+                token: currentToken.symbol,
                 usdValue: giftUsdValue,
                 recipient: recipientLabel,
                 signature: signatureString,
@@ -1396,7 +1429,7 @@ const GiftPage: React.FC = () => {
             // Update user balance
             await refreshUser();
             
-            // Clear form
+            // Clear form and reset steps
             setRecipientInput('');
             setResolvedRecipient(null);
             setRecipientError(null);
@@ -1405,14 +1438,23 @@ const GiftPage: React.FC = () => {
             setTokenAmount('');
             setUsdAmount('');
             setMessage('');
-            setAmountMode('token'); // Reset to token mode
-            setSelectedCard(null); // Reset card selection
-            setRecipientName(''); // Reset recipient name
+            setAmountMode('usd');
+            setSelectedCard(null);
+            setRecipientName('');
+            setCurrentStep(1);
+            setCompletedSteps([]);
+            setQuickAmountSelected(null);
             
         } catch (err: any) {
             console.error('❌ Error sending gift:', err);
-            setError(err.response?.data?.error || err.message || 'Failed to send gift. Please try again.');
-            // Close confirmation modal on error so user can see the error message
+            const errorMessage = err.response?.data?.error || err.message || 'Failed to send gift. Please try again.';
+            showToast({
+                type: 'error',
+                message: errorMessage,
+                duration: 8000,
+            });
+            setError(errorMessage);
+            // Close confirmation modal on error
             setShowConfirmModal(false);
             setConfirmDetails(null);
         } finally {
@@ -1423,12 +1465,184 @@ const GiftPage: React.FC = () => {
     const copyToClipboard = async (text: string) => {
         try {
             await navigator.clipboard.writeText(text);
-            setSuccessMessage('Link copied to clipboard!');
-            setTimeout(() => setSuccessMessage(null), 2000);
+            showToast({
+                type: 'success',
+                message: 'Link copied to clipboard!',
+            });
         } catch (err) {
-            setError('Failed to copy link');
+            showToast({
+                type: 'error',
+                message: 'Failed to copy link',
+            });
         }
     };
+
+    // Handle pre-filled state from QuickSendCard
+    useEffect(() => {
+        const state = location.state as any;
+        if (state?.recipient) {
+            setRecipientInput(state.recipient);
+        }
+        if (state?.amount) {
+            setUsdAmount(state.amount);
+            setQuickAmountSelected(state.amount);
+            setAmountMode('usd');
+        }
+        if (state?.tokenMint && tokens.length > 0) {
+            const token = tokens.find(t => t.mint === state.tokenMint);
+            if (token) {
+                setSelectedToken(token);
+            }
+        }
+    }, [location.state, tokens]);
+
+    // Step navigation functions
+    const validateStep = (step: number): boolean => {
+        switch (step) {
+            case 1:
+                return Boolean(trimmedRecipient && (!isUsernameRecipient || resolvedRecipientEmail));
+            case 2:
+                const numAmount = amountMode === 'usd' && tokenPrice
+                    ? parseFloat(usdAmount) / tokenPrice
+                    : parseFloat(amount || tokenAmount);
+                return Boolean(selectedToken && numAmount > 0 && !balanceError);
+            case 3:
+                return true; // Optional step
+            case 4:
+                return validateStep(1) && validateStep(2);
+            default:
+                return false;
+        }
+    };
+
+    const goToStep = (step: number) => {
+        if (step < currentStep || completedSteps.includes(step)) {
+            setCurrentStep(step as 1 | 2 | 3 | 4);
+            // Scroll to top
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        } else if (validateStep(currentStep)) {
+            setCompletedSteps(prev => [...prev.filter(s => s !== currentStep), currentStep]);
+            setCurrentStep(step as 1 | 2 | 3 | 4);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+    };
+
+    const handleNextStep = () => {
+        if (validateStep(currentStep)) {
+            if (currentStep < 4) {
+                setCompletedSteps(prev => [...prev.filter(s => s !== currentStep), currentStep]);
+                setCurrentStep((currentStep + 1) as 1 | 2 | 3 | 4);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            } else {
+                // Step 4: Submit
+                handleReviewSubmit();
+            }
+        }
+    };
+
+    const handleReviewSubmit = () => {
+        // Prepare confirmation details and show review
+        const numericAmount = amountMode === 'usd' && tokenPrice
+            ? parseFloat(usdAmount) / tokenPrice
+            : parseFloat(amount || tokenAmount);
+        
+        if (isNaN(numericAmount) || numericAmount <= 0) {
+            showToast({
+                type: 'error',
+                message: 'Please enter a valid amount',
+            });
+            return;
+        }
+
+        const FLAT_SERVICE_FEE_USD = 1.00;
+        const serviceFeeAmount = tokenPrice && tokenPrice > 0 
+            ? FLAT_SERVICE_FEE_USD / tokenPrice 
+            : 0;
+        
+        const hasCard = !!selectedCard;
+        const CARD_FEE_USD = 1.00;
+        const cardFeeInTokens = hasCard && tokenPrice && tokenPrice > 0
+            ? CARD_FEE_USD / tokenPrice
+            : 0;
+        
+        const totalFeeAmount = serviceFeeAmount + cardFeeInTokens;
+        const totalAmount = numericAmount + totalFeeAmount;
+        const remainingBalance = userBalance - totalAmount;
+
+        setConfirmDetails({
+            recipientLabel: recipientDisplayLabel || resolvedRecipientEmail,
+            recipientEmail: resolvedRecipientEmail,
+            amount: numericAmount,
+            fee: serviceFeeAmount,
+            total: totalAmount,
+            token: selectedToken?.symbol || 'SOL',
+            tokenName: selectedToken?.name || 'Solana',
+            usdValue: tokenPrice ? numericAmount * tokenPrice : null,
+            usdFee: tokenPrice ? serviceFeeAmount * tokenPrice : null,
+            usdTotal: tokenPrice ? totalAmount * tokenPrice : null,
+            remainingBalance,
+            remainingBalanceUsd: tokenPrice ? remainingBalance * tokenPrice : null,
+            message,
+            cardFee: cardFeeInTokens,
+            cardFeeUsd: tokenPrice ? cardFeeInTokens * tokenPrice : null,
+            hasCard,
+        });
+        setShowConfirmModal(true);
+    };
+
+    // Handle quick amount selection
+    const handleQuickAmountSelect = (amount: string | null) => {
+        setQuickAmountSelected(amount);
+        if (amount && amount !== 'custom') {
+            setUsdAmount(amount);
+            if (tokenPrice && tokenPrice > 0) {
+                const tokens = (parseFloat(amount) / tokenPrice).toFixed(6);
+                setTokenAmount(tokens);
+                setAmount(tokens);
+            }
+        } else if (amount === 'custom') {
+            setUsdAmount('');
+            setTokenAmount('');
+            setAmount('');
+        }
+    };
+
+    // Handle Max button
+    const handleMaxAmount = () => {
+        if (!selectedToken || !tokenPrice || tokenPrice <= 0) return;
+        
+        // Calculate max amount (balance - fees)
+        const FLAT_SERVICE_FEE_USD = 1.00;
+        const serviceFeeAmount = FLAT_SERVICE_FEE_USD / tokenPrice;
+        const hasCard = !!selectedCard;
+        const CARD_FEE_USD = 1.00;
+        const cardFeeInTokens = hasCard ? CARD_FEE_USD / tokenPrice : 0;
+        const totalFeeAmount = serviceFeeAmount + cardFeeInTokens;
+        
+        const maxAmount = Math.max(0, userBalance - totalFeeAmount);
+        const maxUsd = maxAmount * tokenPrice;
+        
+        setTokenAmount(maxAmount.toFixed(6));
+        setUsdAmount(maxUsd.toFixed(2));
+        setAmount(maxAmount.toFixed(6));
+        setAmountMode('token');
+    };
+
+    // Calculate preview values
+    const previewAmount = useMemo(() => {
+        if (amountMode === 'usd' && tokenPrice && usdAmount) {
+            return parseFloat(usdAmount) / tokenPrice;
+        }
+        return parseFloat(amount || tokenAmount) || 0;
+    }, [amountMode, tokenPrice, usdAmount, amount, tokenAmount]);
+
+    const previewUsdValue = useMemo(() => {
+        if (tokenPrice && previewAmount > 0) {
+            return previewAmount * tokenPrice;
+        }
+        return null;
+    }, [tokenPrice, previewAmount]);
+
     const formatCurrency = (value: number) => {
         return new Intl.NumberFormat('en-US', { 
             style: 'currency', 
@@ -1439,7 +1653,7 @@ const GiftPage: React.FC = () => {
     };
 
     return (
-        <div className="max-w-2xl mx-auto px-4 py-10 animate-fade-in-up pb-24">
+        <div className="max-w-7xl mx-auto px-4 py-10 animate-fade-in-up pb-24">
             {/* Confirmation Modal */}
             {showConfirmModal && confirmDetails && (
                 <div className="fixed inset-0 bg-[#0B1120]/85 backdrop-blur-md flex items-center justify-center z-50 p-4">
@@ -1542,7 +1756,7 @@ const GiftPage: React.FC = () => {
                                 onClick={handleConfirmSend}
                                 disabled={isSending}
                             >
-                                {isSending ? 'Sending...' : 'Confirm & Send Gift'}
+                                {isSending ? 'Creating Gift Link...' : 'Create Gift Link'}
                             </GlowButton>
                         </div>
                     </GlassCard>
@@ -1592,7 +1806,7 @@ const GiftPage: React.FC = () => {
                                     onClick={() => copyToClipboard(giftDetails.claim_url)}
                                     icon={Copy}
                                 >
-                                    Copy
+                                Copy Link
                                 </GlowButton>
                             </div>
                         </div>
@@ -1649,362 +1863,472 @@ const GiftPage: React.FC = () => {
                 />
             )}
 
-            <button 
-                onClick={() => navigate(-1)} 
-                className="flex items-center gap-2 text-[#94A3B8] hover:text-white mb-8 transition-colors"
-            >
-                <ChevronLeft size={20} />
-                <span>Back</span>
-            </button>
-            
-            <div className="text-center mb-8">
-                <h1 className="text-3xl font-bold text-white flex items-center justify-center gap-3">
-                    Send a Gift <Gift className="text-[#BE123C]" />
-                </h1>
-            </div>
-            
-            <GlassCard glow className="p-0 space-y-8">
+            {/* Greeting Card Modal */}
+            <GreetingCardModal
+                isOpen={showGreetingCardModal}
+                onClose={() => setShowGreetingCardModal(false)}
+                selectedCard={selectedCard}
+                onSelect={(cardId) => {
+                    setSelectedCard(cardId || null);
+                    setShowGreetingCardModal(false);
+                }}
+                recipientName={recipientName}
+            />
 
+            {/* Back Button */}
+            <PageHeader
+                title="Send a Gift"
+                subtitle="Create a gift link your recipient can claim in minutes"
+                breadcrumbs={[{ label: 'Home', path: '/' }, { label: 'Send Gift' }]}
+            />
+            
+            {/* Main Content: 2-column layout */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                {/* Left Column: Stepper + Form Steps */}
+                <div className="lg:col-span-7 space-y-6">
                 {showFormSkeleton ? (
+                        <GlassCard>
                     <div className="p-8">
                     <GiftFormSkeleton />
                     </div>
+                        </GlassCard>
                 ) : (
                     <>
-                        {/* Balance Header Section */}
-                        <div className="p-8 bg-gradient-to-r from-[#1E293B] to-[#0F172A] border-b border-white/5">
-                            <span className="text-xs text-[#94A3B8] uppercase tracking-wider mb-1">Your Balance</span>
-                            {tokenPrice && tokenPrice > 0 ? (
-                                <>
-                                    <h2 className="text-3xl font-bold text-white mt-2">{formatCurrency(userBalance * tokenPrice)}</h2>
-                                    <p className="text-xs text-[#94A3B8] mt-1">
-                                        {userBalance.toFixed(4)} {selectedToken?.symbol || 'SOL'}
-                                    </p>
-                                </>
-                            ) : (
-                                <h2 className="text-3xl font-bold text-white mt-2">
-                                    {userBalance.toFixed(4)} {selectedToken?.symbol || 'SOL'}
-                                </h2>
-                            )}
-                            <p className="text-xs text-[#94A3B8] mt-1">Available for gifting</p>
-                            {userBalance < 0.01 && (
-                                <div className="mt-4 flex items-center gap-3 bg-[#7F1D1D]/20 border border-[#EF4444]/20 p-3 rounded-lg">
-                                    <AlertTriangle size={16} className="text-[#EF4444] shrink-0" />
-                                    <p className="text-xs text-[#FCD34D]">
-                                        Low balance. Add SOL to your wallet in the 'Add Funds' page.
-                                    </p>
-                                </div>
-                            )}
-                        </div>
-
-                        <form onSubmit={handleSendGift} className="p-8 space-y-8">
-                    {/* Token Selector */}
-                    <div>
-                        <label htmlFor="token" className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] ml-1 mb-2 block">
-                            Token
-                        </label>
-                        <div className="relative">
-                        <select
-                            id="token"
-                            value={selectedToken?.mint || ''}
-                            onChange={(e) => {
-                                const token = tokens.find(t => t.mint === e.target.value);
-                                setSelectedToken(token || null);
-                                // Reset amount fields when token changes
-                                setAmount('');
-                                setTokenAmount('');
-                                setUsdAmount('');
-                            }}
-                                className="w-full bg-[#0F172A]/50 border border-white/10 rounded-xl px-4 py-3.5 text-white outline-none appearance-none focus:border-[#BE123C] focus:ring-4 focus:ring-[#BE123C]/10 transition"
-                        >
-                            {tokens.map(token => (
-                                <option key={token.mint} value={token.mint}>
-                                    {token.symbol} - {token.name}
-                                </option>
-                            ))}
-                        </select>
-                            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-[#94A3B8]">▼</div>
-                        </div>
-                    </div>
-
-                    {/* Recipient (Email or Username) */}
-                    <div>
-                        <InputField
-                            label="Recipient Email / @Username"
-                            placeholder="recipient@example.com or @username"
-                            value={recipientInput}
-                            onChange={(e) => setRecipientInput(e.target.value)}
-                            required
-                            icon={Mail}
-                        />
-                        <div className="mt-2 text-sm">
-                            {recipientError && (
-                                <p className="text-[#EF4444]">{recipientError}</p>
-                            )}
-                            {isUsernameRecipient ? (
-                                <>
-                                    {resolvingRecipient && (
-                                        <p className="text-[#94A3B8]">Resolving username...</p>
-                                    )}
-                                    {!resolvingRecipient && resolvedRecipient && (
-                                        <p className="text-[#10B981]">✓ Username linked to {resolvedRecipient.email}</p>
-                                    )}
-                                </>
-                            ) : (
-                                trimmedRecipient && (
-                                    <p className="text-[#94A3B8]">Gift will be sent to {trimmedRecipient}</p>
-                                )
-                            )}
-                        </div>
-                    </div>
-
-                    {/* Card Upsell Section */}
-                    <Suspense fallback={<CardUpsellFallback />}>
-                        <CardUpsellSection
-                            recipientName={recipientName}
-                            selectedCard={selectedCard}
-                            onCardSelect={setSelectedCard}
-                        />
-                    </Suspense>
-
-                    {/* Amount Input with Mode Toggle */}
-                    <div>
-                        <label htmlFor="amount" className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] ml-1 mb-2 block">
-                            Amount
-                        </label>
-                        
-                        {/* Mode Toggle */}
-                        <div className="grid grid-cols-2 gap-0 bg-[#0F172A] p-1 rounded-xl mb-4 border border-white/10">
-                            <button
-                                type="button"
-                                onClick={() => handleModeSwitch('token')}
-                                className={`py-3 text-sm font-bold rounded-lg transition-all ${
-                                    amountMode === 'token'
-                                        ? 'bg-[#1E293B] text-white shadow-lg border border-white/10'
-                                        : 'text-[#64748B] hover:text-[#94A3B8]'
-                                }`}
-                            >
-                                Token Amount
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => handleModeSwitch('usd')}
-                                disabled={!tokenPrice || priceLoading}
-                                className={`py-3 text-sm font-bold rounded-lg transition-all ${
-                                    amountMode === 'usd'
-                                        ? 'bg-[#06B6D4] text-white shadow-lg border border-white/10'
-                                        : 'text-[#64748B] hover:text-[#94A3B8]'
-                                } disabled:opacity-50 disabled:cursor-not-allowed`}
-                            >
-                                USD Amount
-                            </button>
-                        </div>
-                        
-                        {/* Amount Input */}
-                        {amountMode === 'token' ? (
-                            <InputField
-                                type="number"
-                                id="amount"
-                                value={tokenAmount}
-                                onChange={async (e) => {
-                                    const value = e.target.value;
-                                    setTokenAmount(value);
-                                    setAmount(value); // Keep existing amount state for compatibility
-                                    setBalanceError(null); // Clear previous error
-                                    
-                                    // Validate balance in real-time
-                                    const numValue = parseFloat(value);
-                                    if (!isNaN(numValue) && numValue > 0) {
-                                        await validateBalance(numValue);
-                                    }
-                                }}
-                                required
-                                min="0"
-                                step="0.000001"
-                                placeholder="0.00"
-                                rightElement={<span className="text-[#94A3B8]">{selectedToken?.symbol}</span>}
+                            {/* Stepper */}
+                            <Stepper
+                                currentStep={currentStep}
+                                completedSteps={completedSteps}
+                                onStepClick={goToStep}
                             />
-                        ) : (
-                            <InputField
-                                    type="number"
-                                    id="amount"
-                                    value={usdAmount}
-                                    onChange={async (e) => {
-                                        const value = e.target.value;
-                                        setUsdAmount(value);
-                                        // Calculate token amount but don't update amount state until submission
-                                        if (tokenPrice) {
-                                            const calculatedTokenAmount = (parseFloat(value) / tokenPrice).toString();
-                                            setTokenAmount(calculatedTokenAmount);
-                                            setAmount(calculatedTokenAmount);
-                                            
-                                            // Validate balance in real-time
-                                            const numValue = parseFloat(calculatedTokenAmount);
-                                            if (!isNaN(numValue) && numValue > 0) {
-                                                await validateBalance(numValue);
-                                            }
-                                        }
-                                        setBalanceError(null); // Clear previous error
-                                    }}
-                                    required
-                                    min="0"
-                                    step="0.01"
-                                    placeholder="0.00"
-                                rightElement={<span className="text-[#94A3B8]">$</span>}
-                                />
-                        )}
-                        
-                        {/* Conversion Preview */}
-                        {tokenPrice && (
-                            <div className="mt-2 text-sm text-[#94A3B8]">
-                                {amountMode === 'token' && tokenAmount && !isNaN(parseFloat(tokenAmount)) ? (
-                                    <span>≈ ${(parseFloat(tokenAmount) * tokenPrice).toFixed(2)} USD</span>
-                                ) : amountMode === 'usd' && usdAmount && !isNaN(parseFloat(usdAmount)) ? (
-                                    <span>≈ {(parseFloat(usdAmount) / tokenPrice).toFixed(6)} {selectedToken?.symbol}</span>
-                                ) : null}
-                            </div>
-                        )}
-                        
-                        {/* Price Status */}
-                        {priceLastUpdated && (
-                            <div className="mt-1 text-xs text-[#94A3B8]">
-                                Price updated {Math.floor((Date.now() - priceLastUpdated) / 1000)}s ago
-                            </div>
-                        )}
-                        
-                        {/* Price Error */}
-                        {priceError && (
-                            <div className="mt-2 text-xs text-[#FCD34D]">
-                                {priceError}
-                            </div>
-                        )}
-                        
-                        {/* Balance Error */}
-                        {balanceError && (
-                            <div className="mt-2 text-xs text-[#EF4444]">
-                                {balanceError}
-                            </div>
-                        )}
-                        
-                        {/* Loading Indicator */}
-                        {priceLoading && (
-                            <div className="mt-2 text-xs text-[#94A3B8]">
-                                Loading price...
-                            </div>
-                        )}
-                        
-                        {/* Available Balance Info */}
-                        {selectedToken?.isNative && (
-                            <p className="text-xs text-[#94A3B8] mt-2">
-                                Available: {userBalance.toFixed(4)} {selectedToken.symbol}
-                            </p>
-                        )}
-                        
-                        {/* Fee Breakdown */}
-                        {((amountMode === 'token' && tokenAmount) || (amountMode === 'usd' && usdAmount)) && 
-                         !isNaN(parseFloat(amountMode === 'token' ? tokenAmount : (usdAmount && tokenPrice ? (parseFloat(usdAmount) / tokenPrice).toString() : '0'))) && 
-                         parseFloat(amountMode === 'token' ? tokenAmount : (usdAmount && tokenPrice ? (parseFloat(usdAmount) / tokenPrice).toString() : '0')) > 0 && 
-                         (() => {
-                            const tokenAmountValue = amountMode === 'token' 
-                                ? parseFloat(tokenAmount) 
-                                : (usdAmount && tokenPrice ? parseFloat(usdAmount) / tokenPrice : 0);
-                            
-                            // Flat $1 service fee + $1 card fee
-                            const FLAT_SERVICE_FEE_USD = 1.00;
-                            const CARD_FEE_USD = selectedCard ? 1.00 : 0;
-                            const serviceFeeInTokens = tokenPrice && tokenPrice > 0 ? FLAT_SERVICE_FEE_USD / tokenPrice : 0;
-                            const cardFeeInTokens = selectedCard && tokenPrice && tokenPrice > 0 ? CARD_FEE_USD / tokenPrice : 0;
-                            const totalFeesInTokens = serviceFeeInTokens + cardFeeInTokens;
-                            const tokenTotal = tokenAmountValue + totalFeesInTokens;
-                            
-                            // Calculate USD values
-                            const usdAmountValue = amountMode === 'usd' && tokenPrice
-                                ? parseFloat(usdAmount)
-                                : (amountMode === 'token' && tokenPrice ? parseFloat(tokenAmount) * tokenPrice : 0);
-                            const usdTotalFees = FLAT_SERVICE_FEE_USD + CARD_FEE_USD;
-                            const usdTotal = usdAmountValue + usdTotalFees;
-                            
-                            return (
-                                <div className="mt-3 p-3 bg-[#0F172A]/30 border border-white/5 rounded-lg">
-                                    <div className="flex justify-between text-sm mb-1">
-                                        <span className="text-[#94A3B8]">Gift Amount:</span>
-                                        <span className="text-white">
-                                            {amountMode === 'usd' && tokenPrice
-                                                ? `$${usdAmountValue.toFixed(3)}`
-                                                : `${tokenAmountValue.toFixed(6)} ${selectedToken?.symbol}`}
-                                        </span>
-                                    </div>
-                                    <div className="flex justify-between text-sm mb-1">
-                                        <span className="text-[#94A3B8]">Service Fee:</span>
-                                        <span className="text-[#94A3B8]">$1.00 USD</span>
-                                    </div>
-                                    {selectedCard && (
-                                        <div className="flex justify-between text-sm mb-1">
-                                            <span className="text-[#94A3B8]">Greeting Card (add-on):</span>
-                                            <span className="text-[#06B6D4]">$1.00 USD</span>
-                                        </div>
-                                    )}
-                                    <div className="flex justify-between text-sm pt-2 border-t border-white/5">
-                                        <span className="text-white font-medium">Total:</span>
-                                        <span className="text-white font-medium">
-                                            {amountMode === 'usd' && tokenPrice
-                                                ? `$${usdTotal.toFixed(3)}`
-                                                : `${tokenTotal.toFixed(6)} ${selectedToken?.symbol}`}
-                                        </span>
-                                    </div>
-                                    <p className="text-xs text-[#64748B] mt-2">Network fees (SOL) are paid separately</p>
+
+                            {/* Step Content */}
+                            <AnimatePresence mode="wait">
+                                    <motion.div
+                                        key={currentStep}
+                                        initial={{ opacity: 0, y: 20 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: -20 }}
+                                        transition={{ duration: 0.3, ease: 'easeOut' }}
+                                        ref={(el) => {
+                                            if (el) stepRefs.current[currentStep] = el;
+                                        }}
+                                        aria-live="polite"
+                                        aria-atomic="true"
+                                    >
+                                    <GlassCard>
+                                        {/* Step 1: Who is it for? */}
+                                        {currentStep === 1 && (
+                                            <motion.div
+                                                initial={{ opacity: 0 }}
+                                                animate={{ opacity: 1 }}
+                                                transition={{ delay: 0.1 }}
+                                                className="space-y-6"
+                                                aria-labelledby="step-1-title"
+                                            >
+                                                <div>
+                                                    <h2 id="step-1-title" className="text-2xl font-bold text-white mb-2">Who are you gifting?</h2>
+                                                    <p className="text-sm text-[#94A3B8]">We'll send a secure claim link. No wallet address needed.</p>
+                                                </div>
+
+                                                <InputField
+                                                    label="Recipient"
+                                                    placeholder="recipient@example.com or @username"
+                                                    value={recipientInput}
+                                                    onChange={(e) => setRecipientInput(e.target.value)}
+                                                    required
+                                                    icon={Mail}
+                                                    helperText="Example: recipient@example.com or @username"
+                                                    error={recipientError || undefined}
+                                                />
+
+                                                <div className="text-sm">
+                                                    {isUsernameRecipient ? (
+                                                        <>
+                                                            {resolvingRecipient && (
+                                                                <p className="text-[#94A3B8]">Resolving username...</p>
+                                                            )}
+                                                            {!resolvingRecipient && resolvedRecipient && (
+                                                                <p className="text-[#10B981]">✓ Username linked to {resolvedRecipient.email}</p>
+                                                            )}
+                                </>
+                            ) : (
+                                                        trimmedRecipient && (
+                                                            <p className="text-[#94A3B8]">Gift will be sent to {trimmedRecipient}</p>
+                                                        )
+                                                    )}
                                 </div>
-                            );
-                        })()}
+
+                                                <GlowButton
+                                                    variant="cyan"
+                                                    fullWidth
+                                                    onClick={handleNextStep}
+                                                    disabled={!validateStep(1)}
+                                                >
+                                                    Continue
+                                                </GlowButton>
+                                            </motion.div>
+                                        )}
+
+                                        {/* Step 2: What are you sending? */}
+                                        {currentStep === 2 && (
+                                            <motion.div
+                                                initial={{ opacity: 0 }}
+                                                animate={{ opacity: 1 }}
+                                                transition={{ delay: 0.1 }}
+                                                className="space-y-6"
+                                                aria-labelledby="step-2-title"
+                                            >
+                                                <div>
+                                                    <h2 id="step-2-title" className="text-2xl font-bold text-white mb-2">What are you sending?</h2>
+                                                    <p className="text-sm text-[#94A3B8]">Choose a crypto and amount</p>
+                        </div>
+
+                                                {/* Token Picker */}
+                                                <div>
+                                                    <label className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] ml-1 mb-3 block">
+                                                        Choose a crypto
+                                                    </label>
+                                                    {tokens.length > 0 ? (
+                                                        <TokenPicker
+                                                            tokens={tokens}
+                                                            selectedToken={selectedToken}
+                                                            onSelect={(token) => {
+                                                                setSelectedToken(token);
+                                                                setAmount('');
+                                                                setTokenAmount('');
+                                                                setUsdAmount('');
+                                                                setQuickAmountSelected(null);
+                                                            }}
+                                                            balances={walletBalances}
+                                                        />
+                                                    ) : (
+                                                        <p className="text-[#94A3B8] text-sm">No tokens available</p>
+                                                    )}
+                                                </div>
+
+                                                {/* Quick Amount Chips */}
+                                                {selectedToken && tokenPrice && tokenPrice > 0 && (
+                                                    <div>
+                                                        <label className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] ml-1 mb-3 block">
+                                                            How much?
+                                                        </label>
+                                                        <QuickAmountChips
+                                                            onAmountSelect={handleQuickAmountSelect}
+                                                            selectedAmount={quickAmountSelected}
+                                                            tokenPrice={tokenPrice}
+                                                        />
+                                                    </div>
+                                                )}
+
+                                                {/* Amount Input */}
+                                                {selectedToken && (
+                                                    <div>
+                                                        <div className="flex items-center justify-between mb-2">
+                                                            <label className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] ml-1">
+                                                                {amountMode === 'usd' ? 'USD Amount' : 'Token Amount'}
+                                                            </label>
+                                                            <button
+                                                                type="button"
+                                                                onClick={handleMaxAmount}
+                                                                className="text-xs text-[#06B6D4] hover:text-[#0891B2] font-medium"
+                                                            >
+                                                                Max
+                                                            </button>
+                                                        </div>
+
+                                                        {/* Mode Toggle */}
+                                                        <div className="grid grid-cols-2 gap-0 bg-[#0F172A] p-1 rounded-xl mb-4 border border-white/10">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleModeSwitch('token')}
+                                                                className={`py-3 text-sm font-bold rounded-lg transition-all ${
+                                                                    amountMode === 'token'
+                                                                        ? 'bg-[#1E293B] text-white shadow-lg border border-white/10'
+                                                                        : 'text-[#64748B] hover:text-[#94A3B8]'
+                                                                }`}
+                                                            >
+                                                                Token Amount
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleModeSwitch('usd')}
+                                                                disabled={!tokenPrice || priceLoading}
+                                                                className={`py-3 text-sm font-bold rounded-lg transition-all ${
+                                                                    amountMode === 'usd'
+                                                                        ? 'bg-[#06B6D4] text-white shadow-lg border border-white/10'
+                                                                        : 'text-[#64748B] hover:text-[#94A3B8]'
+                                                                } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                                            >
+                                                                USD Amount
+                                                            </button>
+                                                        </div>
+
+                                                        {/* Amount Input */}
+                                                        {amountMode === 'token' ? (
+                                                            <InputField
+                                                                type="number"
+                                                                value={tokenAmount}
+                                                                onChange={async (e) => {
+                                                                    const value = e.target.value;
+                                                                    setTokenAmount(value);
+                                                                    setAmount(value);
+                                                                    setBalanceError(null);
+                                                                    const numValue = parseFloat(value);
+                                                                    if (!isNaN(numValue) && numValue > 0) {
+                                                                        await validateBalance(numValue);
+                                                                    }
+                                                                }}
+                                                                required
+                                                                min="0"
+                                                                step="0.000001"
+                                                                placeholder="0.00"
+                                                                rightElement={<span className="text-[#94A3B8]">{selectedToken?.symbol}</span>}
+                                                                error={balanceError || undefined}
+                                                            />
+                                                        ) : (
+                                                            <InputField
+                                                                type="number"
+                                                                value={usdAmount}
+                                                                onChange={async (e) => {
+                                                                    const value = e.target.value;
+                                                                    setUsdAmount(value);
+                                                                    if (tokenPrice) {
+                                                                        const calculatedTokenAmount = (parseFloat(value) / tokenPrice).toString();
+                                                                        setTokenAmount(calculatedTokenAmount);
+                                                                        setAmount(calculatedTokenAmount);
+                                                                        const numValue = parseFloat(calculatedTokenAmount);
+                                                                        if (!isNaN(numValue) && numValue > 0) {
+                                                                            await validateBalance(numValue);
+                                                                        }
+                                                                    }
+                                                                    setBalanceError(null);
+                                                                }}
+                                                                required
+                                                                min="0"
+                                                                step="0.01"
+                                                                placeholder="0.00"
+                                                                rightElement={<span className="text-[#94A3B8]">$</span>}
+                                                                error={balanceError || undefined}
+                                                            />
+                                                        )}
+
+                                                        {/* Conversion Preview */}
+                                                        {tokenPrice && (
+                                                            <div className="mt-2 text-sm text-[#94A3B8]">
+                                                                {amountMode === 'token' && tokenAmount && !isNaN(parseFloat(tokenAmount)) ? (
+                                                                    <span>≈ ${(parseFloat(tokenAmount) * tokenPrice).toFixed(2)} USD</span>
+                                                                ) : amountMode === 'usd' && usdAmount && !isNaN(parseFloat(usdAmount)) ? (
+                                                                    <span>≈ {(parseFloat(usdAmount) / tokenPrice).toFixed(6)} {selectedToken?.symbol}</span>
+                                                                ) : null}
+                                                            </div>
+                                                        )}
+
+                                                        {/* Balance Resolution Panel */}
+                                                        {balanceError && (
+                                                            <div className="mt-4">
+                                                                <BalanceResolutionPanel
+                                                                    balanceError={balanceError}
+                                                                    currentBalance={userBalance}
+                                                                />
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+
+                                                <div className="flex gap-3">
+                                                    <GlowButton
+                                                        variant="secondary"
+                                                        fullWidth
+                                                        onClick={() => goToStep(1)}
+                                                    >
+                                                        Back
+                                                    </GlowButton>
+                                                    <GlowButton
+                                                        variant="cyan"
+                                                        fullWidth
+                                                        onClick={handleNextStep}
+                                                        disabled={!validateStep(2)}
+                                                    >
+                                                        Continue
+                                                    </GlowButton>
+                                                </div>
+                                            </motion.div>
+                                        )}
+
+                                        {/* Step 3: Make it personal */}
+                                        {currentStep === 3 && (
+                                            <motion.div
+                                                initial={{ opacity: 0 }}
+                                                animate={{ opacity: 1 }}
+                                                transition={{ delay: 0.1 }}
+                                                className="space-y-6"
+                                                aria-labelledby="step-3-title"
+                                            >
+                                                <div>
+                                                    <h2 id="step-3-title" className="text-2xl font-bold text-white mb-2">Make it personal</h2>
+                                                    <p className="text-sm text-[#94A3B8]">Add a greeting card and message (optional)</p>
+                                                </div>
+
+                                                {/* Greeting Card Section */}
+                                                <div>
+                                                    <label className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] ml-1 mb-3 block">
+                                                        Greeting Card
+                                                    </label>
+                                                    <Suspense fallback={<div className="h-24 rounded-xl bg-[#1E293B]/40 animate-pulse" />}>
+                                                        <CardUpsellSection
+                                                            recipientName={recipientName}
+                                                            selectedCard={selectedCard}
+                                                            onCardSelect={setSelectedCard}
+                                                            onOpenModal={() => setShowGreetingCardModal(true)}
+                                                        />
+                                                    </Suspense>
+                                                </div>
+
+                                                {/* Message Box */}
+                                                <div>
+                                                    <label htmlFor="message" className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] ml-1 mb-2 block">
+                                                        Add a note (optional)
+                                                    </label>
+                                                    <div className="space-y-2">
+                                                        {/* Example Prompts */}
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {['Happy holidays 🎁', 'Thanks for always being there.', 'Thinking of you!'].map((prompt) => (
+                                                                <button
+                                                                    key={prompt}
+                                                                    type="button"
+                                                                    onClick={() => setMessage(prompt)}
+                                                                    className="px-3 py-1.5 rounded-lg text-xs bg-[#0F172A]/50 text-[#94A3B8] hover:bg-[#1E293B] hover:text-white border border-white/10 transition-all"
+                                                                >
+                                                                    {prompt}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                        <textarea
+                                                            id="message"
+                                                            value={message}
+                                                            onChange={(e) => setMessage(e.target.value)}
+                                                            placeholder="Write a personal message..."
+                                                            rows={4}
+                                                            maxLength={500}
+                                                            className="w-full bg-[#0F172A]/50 border border-white/10 rounded-xl px-4 py-3.5 text-white placeholder:text-[#475569] outline-none focus:border-[#BE123C] focus:ring-4 focus:ring-[#BE123C]/10 transition resize-none"
+                                                        />
+                                                        <div className="flex justify-between text-xs">
+                                                            <span className="text-[#64748B]">Character count</span>
+                                                            <span className={`${message.length > 450 ? 'text-[#EF4444]' : 'text-[#94A3B8]'}`}>
+                                                                {message.length}/500
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex gap-3">
+                                                    <GlowButton
+                                                        variant="secondary"
+                                                        fullWidth
+                                                        onClick={() => goToStep(2)}
+                                                    >
+                                                        Back
+                                                    </GlowButton>
+                                                    <GlowButton
+                                                        variant="cyan"
+                                                        fullWidth
+                                                        onClick={handleNextStep}
+                                                    >
+                                                        Continue
+                                                    </GlowButton>
+                                                </div>
+                                            </motion.div>
+                                        )}
+
+                                        {/* Step 4: Review & Send */}
+                                        {currentStep === 4 && (
+                                            !confirmDetails ? (
+                                                <div className="space-y-6">
+                                                    <div>
+                                                        <h2 className="text-2xl font-bold text-white mb-2">Review Your Gift</h2>
+                                                        <p className="text-sm text-[#94A3B8]">Preparing your gift summary...</p>
+                                                    </div>
+                                                    <GlowButton
+                                                        variant="cyan"
+                                                        fullWidth
+                                                        onClick={handleReviewSubmit}
+                                                        disabled={!validateStep(1) || !validateStep(2)}
+                                                    >
+                                                        Review Gift
+                                                    </GlowButton>
+                                                </div>
+                                            ) : (
+                                            <ReviewStep
+                                                recipientLabel={confirmDetails.recipientLabel}
+                                                recipientEmail={confirmDetails.recipientEmail}
+                                                amount={confirmDetails.amount}
+                                                tokenSymbol={confirmDetails.token}
+                                                tokenName={confirmDetails.tokenName}
+                                                usdValue={confirmDetails.usdValue}
+                                                message={confirmDetails.message}
+                                                selectedCard={selectedCard || null}
+                                                serviceFee={confirmDetails.fee}
+                                                cardFee={confirmDetails.cardFee}
+                                                total={confirmDetails.total}
+                                                usdServiceFee={confirmDetails.usdFee}
+                                                usdCardFee={confirmDetails.cardFeeUsd}
+                                                usdTotal={confirmDetails.usdTotal}
+                                                remainingBalance={confirmDetails.remainingBalance}
+                                                remainingBalanceUsd={confirmDetails.remainingBalanceUsd}
+                                                onEditStep={goToStep}
+                                                onSubmit={handleReviewSubmit}
+                                                isSubmitting={isSending}
+                                                disabled={!!balanceError}
+                                            />
+                                            )
+                                        )}
+                                    </GlassCard>
+                                    </motion.div>
+                                </AnimatePresence>
+                        </>
+                    )}
+                </div>
+
+                {/* Right Column: Gift Preview */}
+                <div className="lg:col-span-5">
+                    {/* Mobile: Collapsible Preview */}
+                    <div className="lg:hidden mb-6">
+                        <button
+                            type="button"
+                            onClick={() => setShowPreviewMobile(!showPreviewMobile)}
+                            className="w-full p-4 rounded-xl border border-white/10 bg-[#1E293B]/60 flex items-center justify-between"
+                        >
+                            <span className="text-white font-medium">Preview Gift</span>
+                            {showPreviewMobile ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                        </button>
                     </div>
 
-                    {/* Message */}
-                    <div>
-                        <label htmlFor="message" className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] ml-1 mb-2 block">
-                            Message (Optional)
-                        </label>
-                        <textarea
-                            id="message"
-                            value={message}
-                            onChange={(e) => setMessage(e.target.value)}
-                            rows={3}
-                            placeholder="Add a personal message..."
-                            className="w-full bg-[#0F172A]/50 border border-white/10 rounded-xl px-4 py-3.5 outline-none text-white placeholder:text-[#475569] focus:border-[#BE123C] focus:ring-4 focus:ring-[#BE123C]/10 transition-all resize-none min-h-[100px]"
+                    <div className="hidden lg:block">
+                        <GiftPreview
+                            recipient={recipientDisplayLabel || recipientInput}
+                            amount={previewAmount.toString()}
+                            tokenSymbol={selectedToken?.symbol || 'SOL'}
+                            usdValue={previewUsdValue}
+                            selectedCard={selectedCard}
+                            message={message}
+                            tokenPrice={tokenPrice}
                         />
                     </div>
-
-                    {error && (
-                        <div className="bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-lg p-3">
-                            <p className="text-[#EF4444] text-sm">{error}</p>
+                    {showPreviewMobile && (
+                        <div className="lg:hidden">
+                            <GiftPreview
+                                recipient={recipientDisplayLabel || recipientInput}
+                                amount={previewAmount.toString()}
+                                tokenSymbol={selectedToken?.symbol || 'SOL'}
+                                usdValue={previewUsdValue}
+                                selectedCard={selectedCard}
+                                message={message}
+                                tokenPrice={tokenPrice}
+                            />
                         </div>
                     )}
-                    
-                    {successMessage && (
-                        <div className="bg-[#064E3B]/20 border border-[#10B981]/20 rounded-lg p-3">
-                            <p className="text-[#10B981] text-sm">{successMessage}</p>
-                        </div>
-                    )}
-
-                    <GlowButton
-                        type="submit"
-                        fullWidth
-                        variant="cyan"
-                        icon={Gift}
-                        disabled={isSending || !user || userBalance < 0.001}
-                    >
-                        {isSending ? (
-                            <>
-                                <Spinner size="6" color="border-white" />
-                                <span className="ml-3">Sending Gift...</span>
-                            </>
-                        ) : (
-                            'Send Gift'
-                        )}
-                    </GlowButton>
-                        </form>
-                    </>
-                )}
-            </GlassCard>
+                </div>
+            </div>
         </div>
     );
 };
