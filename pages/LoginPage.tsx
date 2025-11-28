@@ -87,7 +87,7 @@ const LoginPage: React.FC = () => {
     <div className="min-h-screen flex flex-col relative bg-[#0B1120]">
       <HolidayBackground />
       
-      <nav className="fixed top-0 w-full py-4 sm:py-6 px-4 sm:px-8 flex justify-between items-center z-50 bg-[#0B1120]/80 backdrop-blur-md border-b border-white/5">
+      <nav className="fixed top-0 w-full py-4 sm:py-6 px-4 sm:px-8 flex justify-between items-center z-50 bg-[#0B1120]/80 backdrop-blur-md border-b border-white/5 relative">
         <div className="flex items-center gap-2 text-[#BE123C]">
           <Gift strokeWidth={2.5} className="drop-shadow-[0_0_8px_rgba(190,18,60,0.5)]" />
           <div className="flex items-center gap-2">
@@ -100,8 +100,8 @@ const LoginPage: React.FC = () => {
           </div>
         </div>
         
-        {/* Middle navigation - hidden on mobile */}
-        <div className="hidden lg:flex items-center gap-6">
+        {/* Middle navigation - centered, hidden on mobile */}
+        <div className="hidden lg:flex items-center gap-6 absolute left-1/2 transform -translate-x-1/2">
           <button
             onClick={() => scrollToSection('how-it-works')}
             className="text-sm font-medium text-[#94A3B8] hover:text-white transition-colors"
@@ -123,16 +123,9 @@ const LoginPage: React.FC = () => {
             FAQs
           </button>
         </div>
-
-        {/* Right side buttons */}
-        <div className="flex items-center gap-3">
-          <GlowButton onClick={handleLogin} variant="ghost" className="!py-2 !px-4 !text-sm">
-            Log In
-          </GlowButton>
-          <GlowButton onClick={handleLogin} variant="primary" className="!py-2 !px-4 !text-sm hidden sm:flex">
-            Send a Gift
-          </GlowButton>
-        </div>
+        
+        {/* Spacer to balance the layout */}
+        <div className="hidden lg:block w-[200px]"></div>
       </nav>
 
       <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 pt-24 sm:pt-28 pb-8 sm:pb-12 lg:pb-16 relative z-10">

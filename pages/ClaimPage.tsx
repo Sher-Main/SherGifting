@@ -333,7 +333,8 @@ const ClaimPage: React.FC = () => {
                         </div>
                     </div>
                 </GlassCard>
-            </div>
+            </motion.div>
+        </div>
         );
     }
 
@@ -540,7 +541,7 @@ const ClaimPage: React.FC = () => {
                         <p className="text-[#64748B] text-xs text-center mt-4">
                             A wallet will be automatically created for you
                         </p>
-                    </div>
+                    </motion.div>
                         ) : (
                             <motion.div
                                 initial={{ y: 20, opacity: 0 }}
