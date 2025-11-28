@@ -1,16 +1,25 @@
 import React, { useState } from 'react';
 import { CARD_TEMPLATES, CARD_UPSELL_PRICE } from '../lib/cardTemplates';
 
+interface OnrampCredit {
+  isActive: boolean;
+  cardAddsFreeRemaining: number;
+  cardAddsAllowed: number;
+  creditsRemaining: number;
+}
+
 interface CardUpsellSectionProps {
   recipientName: string;
   onCardSelect: (cardType: string | null) => void;
   selectedCard: string | null;
+  onrampCredit?: OnrampCredit | null;
 }
 
 export const CardUpsellSection: React.FC<CardUpsellSectionProps> = ({
   recipientName,
   onCardSelect,
-  selectedCard
+  selectedCard,
+  onrampCredit
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -41,9 +50,16 @@ export const CardUpsellSection: React.FC<CardUpsellSectionProps> = ({
           className="cursor-pointer text-lg font-semibold text-white flex items-center gap-2"
         >
           Add a Greeting Card
-          <span className="bg-sky-500 text-white px-3 py-1 rounded-full text-sm font-bold">
-            +$1.00
-          </span>
+          {onrampCredit && onrampCredit.isActive && onrampCredit.cardAddsFreeRemaining > 0 ? (
+            <span className="flex items-center gap-2 bg-green-500/20 border border-green-500/50 text-green-400 px-3 py-1 rounded-full text-sm font-bold">
+              <span className="line-through text-slate-400">$1.00</span>
+              <span>FREE ✨</span>
+            </span>
+          ) : (
+            <span className="bg-sky-500 text-white px-3 py-1 rounded-full text-sm font-bold">
+              +$1.00
+            </span>
+          )}
         </label>
       </div>
       

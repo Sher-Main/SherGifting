@@ -351,105 +351,6 @@ async function processManualAdd(data: {
   }
 }
 
-    if (!pool) {
-      return res.status(503).json({ error: 'Database not available' });
-    }
-
-    console.log(`📝 Manually adding onramp transaction:`);
-    console.log(`   User ID: ${userId}`);
-    console.log(`   Wallet: ${walletAddress}`);
-    console.log(`   Amount: ${amountSOL} SOL`);
-
-    // Estimate fiat amount (rough calculation)
-    const estimatedFiatAmount = amountSOL * 150; // Rough SOL price estimate
-
-    const transactionId = `onramp_tx_manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const completedDate = completedAt ? new Date(completedAt) : new Date();
-    
-    const onrampTx = await upsertOnrampTransaction({
-      id: transactionId,
-      user_id: userId,
-      wallet_address: walletAddress,
-      moonpay_id: null,
-      moonpay_status: 'completed',
-      amount_fiat: estimatedFiatAmount,
-      amount_crypto: amountSOL,
-      credit_issued: false,
-      completed_at: completedDate,
-      expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
-      idempotency_key: `manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      transaction_hash: transactionHash || null,
-    });
-
-    console.log(`✅ OnrampTransaction created: ${onrampTx.id}`);
-
-    // Check if user already has active credit
-    const existingCredit = await pool.query(
-      `SELECT * FROM onramp_credits 
-       WHERE user_id = $1 
-         AND is_active = TRUE 
-         AND expires_at > NOW()`,
-      [userId]
-    );
-
-    if (existingCredit.rows.length > 0) {
-      console.log(`⚠️ User already has active credit: ${existingCredit.rows[0].id}`);
-      console.log(`   Updating existing credit...`);
-      
-      // Update existing credit instead of creating new one
-      await pool.query(
-        `UPDATE onramp_credits 
-         SET credits_remaining = credits_remaining + 5.0,
-             card_adds_allowed = card_adds_allowed + 5,
-             updated_at = NOW()
-         WHERE id = $1`,
-        [existingCredit.rows[0].id]
-      );
-      
-      console.log(`✅ Updated existing credit with additional $5`);
-    } else {
-      // Issue new $5 credit
-      const creditId = `credit_manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-      const credit = await createOnrampCredit({
-        id: creditId,
-        user_id: userId,
-        total_credits_issued: 5.0,
-        credits_remaining: 5.0,
-        card_adds_free_used: 0,
-        card_adds_allowed: 5,
-        expires_at: expiresAt,
-        onramp_transaction_id: onrampTx.id,
-      });
-
-      console.log(`💚 OnrampCredit created: ${credit.id}`);
-    }
-
-    // Mark transaction as credit issued
-    await pool.query(
-      `UPDATE onramp_transactions SET credit_issued = TRUE WHERE id = $1`,
-      [onrampTx.id]
-    );
-
-    console.log(`✅ $5 credit issued to user ${userId}`);
-
-    return res.status(200).json({
-      success: true,
-      transactionId: onrampTx.id,
-      creditIssued: true,
-      message: 'Transaction and credit added successfully',
-    });
-
-  } catch (error) {
-    console.error('❌ Error manually adding onramp:', error);
-    return res.status(500).json({ 
-      error: 'Internal server error',
-      details: String(error),
-    });
-  }
-});
-
 /**
  * GET /api/users/:userId/onramp-credit
  * 
@@ -458,7 +359,7 @@ async function processManualAdd(data: {
  */
 router.get('/users/:userId/onramp-credit', async (req: Request, res: Response) => {
   try {
-    const { userId } = req.params;
+    let userId = req.params.userId;
 
     if (!userId || typeof userId !== 'string') {
       return res.status(400).json({ error: 'User ID required' });
@@ -470,8 +371,23 @@ router.get('/users/:userId/onramp-credit', async (req: Request, res: Response) =
       return res.status(503).json({ error: 'Database not available' });
     }
 
+    // Ensure userId is in privy_did format (did:privy:...)
+    if (!userId.startsWith('did:privy:')) {
+      userId = `did:privy:${userId}`;
+      console.log(`   Normalized to privy_did: ${userId}`);
+    }
+
     // Query: Get active, non-expired credit
-    const credit = await getOnrampCreditByUserId(userId);
+    let credit = await getOnrampCreditByUserId(userId);
+    
+    // If not found, try without did:privy: prefix
+    if (!credit && userId.startsWith('did:privy:')) {
+      const altUserId = userId.replace('did:privy:', '');
+      credit = await getOnrampCreditByUserId(altUserId);
+      if (credit) {
+        console.log(`   Found credit with alternative format`);
+      }
+    }
 
     // If no active credit, return inactive response
     if (!credit) {
@@ -539,27 +455,118 @@ interface FormattedTransaction {
  */
 router.get('/users/me/transaction-history', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const userId = req.userId || req.user?.id;
+    const privyUserId = req.userId || req.user?.id;
 
-    if (!userId) {
+    if (!privyUserId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    console.log(`📜 Fetching transaction history for ${userId}`);
+    console.log(`📜 Fetching transaction history for Privy user ${privyUserId}`);
+    console.log(`   req.userId: ${req.userId}`);
+    console.log(`   req.user?.id: ${req.user?.id}`);
+    console.log(`   req.user?.email: ${req.user?.email?.address || 'N/A'}`);
+    console.log(`   req.user object keys: ${req.user ? Object.keys(req.user).join(', ') : 'null'}`);
 
     if (!pool) {
       return res.status(503).json({ error: 'Database not available' });
     }
 
-    // Query 1: Get all onramp transactions
-    const onrampTxs = await getOnrampTransactionsByUserId(userId);
+    // Privy user ID is the internal ID, but transactions are stored with privy_did (did:privy:...)
+    // Try multiple methods to get the correct privy_did
+    let userId: string;
+    
+    // Method 1: Check if req.user has privy_did or id field that starts with did:privy:
+    if (req.user?.id && req.user.id.startsWith('did:privy:')) {
+      userId = req.user.id;
+      console.log(`   Method 1: Using req.user.id: ${userId}`);
+    } else if (req.user?.privy_did) {
+      userId = req.user.privy_did;
+      console.log(`   Method 2: Using req.user.privy_did: ${userId}`);
+    } else {
+      // Method 3: Look up user in database by Privy user ID to get their privy_did
+      try {
+        const { getUserByPrivyDid } = await import('../database');
+        // First try to find user by constructing privy_did
+        const constructedDid = `did:privy:${privyUserId}`;
+        let dbUser = await getUserByPrivyDid(constructedDid);
+        
+        if (!dbUser) {
+          // If not found, try querying users table to find matching user
+          const userResult = await pool.query(
+            `SELECT privy_did FROM users WHERE privy_did LIKE $1 OR privy_did = $2 LIMIT 1`,
+            [`%${privyUserId}%`, privyUserId]
+          );
+          
+          if (userResult.rows.length > 0) {
+            userId = userResult.rows[0].privy_did;
+            console.log(`   Method 3a: Found user in DB: ${userId}`);
+          } else {
+            // Last resort: construct it
+            userId = constructedDid;
+            console.log(`   Method 3b: Constructed privy_did: ${userId}`);
+          }
+        } else {
+          userId = dbUser.privy_did;
+          console.log(`   Method 3c: Found user by constructed DID: ${userId}`);
+        }
+      } catch (error) {
+        // Fallback: construct it
+        userId = `did:privy:${privyUserId}`;
+        console.log(`   Method 3d: Fallback - constructed privy_did: ${userId}`);
+      }
+    }
+    
+    console.log(`   Final privy_did: ${userId}`);
 
-    console.log(`   Onramp transactions: ${onrampTxs.length}`);
+    // Query 1: Get all onramp transactions
+    let onrampTxs = await getOnrampTransactionsByUserId(userId);
+    console.log(`   Onramp transactions found with ${userId}: ${onrampTxs.length}`);
+
+    // If no transactions found, try alternative user ID formats
+    if (onrampTxs.length === 0) {
+      console.log(`   No transactions found, trying alternative formats...`);
+      
+      // Try without did:privy: prefix
+      if (userId.startsWith('did:privy:')) {
+        const altUserId = userId.replace('did:privy:', '');
+        onrampTxs = await getOnrampTransactionsByUserId(altUserId);
+        console.log(`   Tried ${altUserId}: ${onrampTxs.length} transactions`);
+      }
+      
+      // Try with did:privy: prefix if we don't have it
+      if (onrampTxs.length === 0 && !userId.startsWith('did:privy:')) {
+        const altUserId = `did:privy:${userId}`;
+        onrampTxs = await getOnrampTransactionsByUserId(altUserId);
+        console.log(`   Tried ${altUserId}: ${onrampTxs.length} transactions`);
+      }
+      
+      // Last resort: query all transactions and filter by matching user_id patterns
+      if (onrampTxs.length === 0) {
+        const allTxsResult = await pool.query(`
+          SELECT * FROM onramp_transactions 
+          WHERE user_id LIKE $1 OR user_id = $2 OR user_id LIKE $3
+          ORDER BY created_at DESC
+        `, [`%${privyUserId}%`, privyUserId, `did:privy:%${privyUserId}%`]);
+        onrampTxs = allTxsResult.rows;
+        console.log(`   Tried pattern matching: ${onrampTxs.length} transactions`);
+      }
+    }
 
     // Query 2: Get all card transactions
-    const cardTxs = await getCardTransactionsByUserId(userId);
+    let cardTxs = await getCardTransactionsByUserId(userId);
+    console.log(`   Card transactions found with ${userId}: ${cardTxs.length}`);
 
-    console.log(`   Card transactions: ${cardTxs.length}`);
+    // If no card transactions found, try alternative formats
+    if (cardTxs.length === 0) {
+      if (userId.startsWith('did:privy:')) {
+        const altUserId = userId.replace('did:privy:', '');
+        cardTxs = await getCardTransactionsByUserId(altUserId);
+      }
+      if (cardTxs.length === 0 && !userId.startsWith('did:privy:')) {
+        const altUserId = `did:privy:${userId}`;
+        cardTxs = await getCardTransactionsByUserId(altUserId);
+      }
+    }
 
     // Format and combine
     const formattedTxs: FormattedTransaction[] = [
