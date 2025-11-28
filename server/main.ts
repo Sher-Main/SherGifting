@@ -879,18 +879,25 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
 
     console.log('✅ Funding transaction verified!');
 
-    // Check if this card is FREE (using onramp credit)
+    // Check if a card is selected first
+    const hasCard = !!card_type && !!card_recipient_name;
+    
+    // Check if this card is FREE (using onramp credit) - ONLY if card is selected
     let cardResult = null;
-    try {
-      cardResult = await handleCardAdd(sender_did);
-      console.log(`📤 Card credit check:`, {
-        isFree: cardResult.isFree,
-        freeRemaining: cardResult.cardAddsFreeRemaining,
-        creditsRemaining: cardResult.creditsRemaining,
-      });
-    } catch (creditError) {
-      console.error('⚠️ Error checking credit (continuing with normal flow):', creditError);
-      // Don't fail gift creation if credit check fails
+    if (hasCard) {
+      try {
+        cardResult = await handleCardAdd(sender_did);
+        console.log(`📤 Card credit check:`, {
+          isFree: cardResult.isFree,
+          freeRemaining: cardResult.cardAddsFreeRemaining,
+          creditsRemaining: cardResult.creditsRemaining,
+        });
+      } catch (creditError) {
+        console.error('⚠️ Error checking credit (continuing with normal flow):', creditError);
+        // Don't fail gift creation if credit check fails
+      }
+    } else {
+      console.log('📤 No card selected, skipping credit check');
     }
 
     // Fetch token price and calculate USD value for storage (before creating gift record)
@@ -931,7 +938,6 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
 
     // Generate personalized card URL if card is selected
     let cardCloudinaryUrl: string | null = null;
-    const hasCard = !!card_type && !!card_recipient_name;
     
     if (hasCard) {
       try {
@@ -978,7 +984,9 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
         card_type: card_type || null,
         card_cloudinary_url: cardCloudinaryUrl,
         card_recipient_name: card_recipient_name || null,
-        card_price_usd: card_price_usd || (hasCard ? 0.00 : null), // Free for testing
+        card_price_usd: hasCard 
+          ? (cardResult?.isFree ? 0.00 : (card_price_usd || 1.00))
+          : null,
       });
       sharedCache.delete(`gift_history:${sender_did}`);
       console.log('✅ Gift saved to database with security fields and card info:', newGift.id);

@@ -1397,6 +1397,10 @@ const GiftPage: React.FC = () => {
             // Step 3: Create gift record on backend
             console.log('🎁 Step 3: Creating gift record...');
             
+            // Calculate card price: 0 if free (has active credit), otherwise 1.00
+            const isCardFree = selectedCard && onrampCredit && onrampCredit.isActive && onrampCredit.cardAddsFreeRemaining > 0;
+            const cardPriceUsd = selectedCard ? (isCardFree ? 0 : 1.00) : undefined;
+            
             const createResponse = await giftService.createGift({
                 recipient_email: recipientEmail,
                 token_mint: currentToken.mint,
@@ -1410,7 +1414,7 @@ const GiftPage: React.FC = () => {
                 token_decimals: currentToken.decimals,
                 card_type: selectedCard || null,
                 card_recipient_name: recipientName || null,
-                card_price_usd: selectedCard ? CARD_UPSELL_PRICE : undefined,
+                card_price_usd: cardPriceUsd,
             });
 
             const { claim_url, gift_id } = createResponse;
