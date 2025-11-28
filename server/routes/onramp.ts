@@ -54,7 +54,7 @@ router.post('/onramp/detect-transaction', authenticateToken, async (req: AuthReq
       `SELECT * FROM onramp_transactions 
        WHERE user_id = $1 
          AND wallet_address = $2
-         AND created_at > NOW() - INTERVAL '5 minutes'
+         AND created_at > NOW() - INTERVAL '24 hours'
        ORDER BY created_at DESC
        LIMIT 1`,
       [userId, walletAddress]
@@ -142,6 +142,308 @@ router.post('/onramp/detect-transaction', authenticateToken, async (req: AuthReq
   } catch (error) {
     console.error('❌ Error detecting transaction:', error);
     return res.status(500).json({
+      error: 'Internal server error',
+      details: String(error),
+    });
+  }
+});
+
+/**
+ * POST /api/onramp/manual-add
+ * 
+ * Manually add an onramp transaction and issue credit
+ * Used for retroactively adding transactions that weren't detected automatically
+ * 
+ * SIMPLE MODE (Recommended):
+ * Body: {
+ *   email: string,
+ *   completedAt: string (ISO date string),
+ *   amountUSD: number
+ * }
+ * 
+ * ADVANCED MODE:
+ * Body: {
+ *   userId: string (Privy DID),
+ *   walletAddress: string,
+ *   amountSOL: number,
+ *   completedAt?: string (ISO date string, defaults to now),
+ *   transactionHash?: string (optional)
+ * }
+ */
+router.post('/onramp/manual-add', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { email, userId, walletAddress, amountSOL, amountUSD, completedAt, transactionHash } = req.body;
+
+    // Simple mode: email, date, USD amount
+    if (email && amountUSD) {
+      if (!completedAt) {
+        return res.status(400).json({ error: 'Missing required field: completedAt' });
+      }
+
+      if (isNaN(amountUSD) || amountUSD <= 0) {
+        return res.status(400).json({ error: 'amountUSD must be a positive number' });
+      }
+
+      // Look up user by email
+      const { getUserByEmail } = await import('../database');
+      const user = await getUserByEmail(email);
+
+      if (!user) {
+        return res.status(404).json({ error: `User not found with email: ${email}` });
+      }
+
+      // Convert USD to SOL (estimated price)
+      const SOL_PRICE_ESTIMATE = 150;
+      const calculatedAmountSOL = amountUSD / SOL_PRICE_ESTIMATE;
+      const completedDate = new Date(completedAt);
+
+      if (isNaN(completedDate.getTime())) {
+        return res.status(400).json({ error: 'Invalid date format. Use ISO format (e.g., "2024-11-27T10:30:00Z")' });
+      }
+
+      return await processManualAdd({
+        userId: user.privy_did,
+        walletAddress: user.wallet_address,
+        amountSOL: calculatedAmountSOL,
+        amountUSD,
+        completedDate,
+        transactionHash: null,
+        res,
+      });
+    }
+
+    // Advanced mode: userId, walletAddress, amountSOL
+    if (!userId || !walletAddress || !amountSOL) {
+      return res.status(400).json({ 
+        error: 'Missing required fields. Use simple mode: {email, completedAt, amountUSD} or advanced mode: {userId, walletAddress, amountSOL}' 
+      });
+    }
+
+    if (isNaN(amountSOL) || amountSOL <= 0) {
+      return res.status(400).json({ error: 'amountSOL must be a positive number' });
+    }
+
+    const completedDate = completedAt ? new Date(completedAt) : new Date();
+    if (isNaN(completedDate.getTime())) {
+      return res.status(400).json({ error: 'Invalid date format. Use ISO format (e.g., "2024-11-27T10:30:00Z")' });
+    }
+
+    const estimatedAmountUSD = amountSOL * 150; // Estimate
+
+    return await processManualAdd({
+      userId,
+      walletAddress,
+      amountSOL,
+      amountUSD: estimatedAmountUSD,
+      completedDate,
+      transactionHash: transactionHash || null,
+      res,
+    });
+  } catch (error) {
+    console.error('❌ Error manually adding onramp:', error);
+    return res.status(500).json({ 
+      error: 'Internal server error',
+      details: String(error),
+    });
+  }
+});
+
+async function processManualAdd(data: {
+  userId: string;
+  walletAddress: string;
+  amountSOL: number;
+  amountUSD: number;
+  completedDate: Date;
+  transactionHash: string | null;
+  res: Response;
+}) {
+  const { userId, walletAddress, amountSOL, amountUSD, completedDate, transactionHash, res } = data;
+
+  try {
+    if (!pool) {
+      return res.status(503).json({ error: 'Database not available' });
+    }
+
+    console.log(`📝 Manually adding onramp transaction:`);
+    console.log(`   User ID: ${userId}`);
+    console.log(`   Wallet: ${walletAddress}`);
+    console.log(`   Amount: $${amountUSD.toFixed(2)} USD (${amountSOL.toFixed(4)} SOL)`);
+    console.log(`   Date: ${completedDate.toISOString()}`);
+
+    const transactionId = `onramp_tx_manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    const onrampTx = await upsertOnrampTransaction({
+      id: transactionId,
+      user_id: userId,
+      wallet_address: walletAddress,
+      moonpay_id: null,
+      moonpay_status: 'completed',
+      amount_fiat: amountUSD,
+      amount_crypto: amountSOL,
+      credit_issued: false,
+      completed_at: completedDate,
+      expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      idempotency_key: `manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      transaction_hash: transactionHash || null,
+    });
+
+    console.log(`✅ OnrampTransaction created: ${onrampTx.id}`);
+
+    // Check if user already has active credit
+    const existingCredit = await pool.query(
+      `SELECT * FROM onramp_credits 
+       WHERE user_id = $1 
+         AND is_active = TRUE 
+         AND expires_at > NOW()`,
+      [userId]
+    );
+
+    if (existingCredit.rows.length > 0) {
+      console.log(`⚠️ User already has active credit: ${existingCredit.rows[0].id}`);
+      console.log(`   Updating existing credit...`);
+      
+      await pool.query(
+        `UPDATE onramp_credits 
+         SET credits_remaining = credits_remaining + 5.0,
+             card_adds_allowed = card_adds_allowed + 5,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [existingCredit.rows[0].id]
+      );
+      
+      console.log(`✅ Updated existing credit with additional $5`);
+    } else {
+      // Issue new $5 credit
+      const creditId = `credit_manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+      const credit = await createOnrampCredit({
+        id: creditId,
+        user_id: userId,
+        total_credits_issued: 5.0,
+        credits_remaining: 5.0,
+        card_adds_free_used: 0,
+        card_adds_allowed: 5,
+        expires_at: expiresAt,
+        onramp_transaction_id: onrampTx.id,
+      });
+
+      console.log(`💚 OnrampCredit created: ${credit.id}`);
+    }
+
+    // Mark transaction as credit issued
+    await pool.query(
+      `UPDATE onramp_transactions SET credit_issued = TRUE WHERE id = $1`,
+      [onrampTx.id]
+    );
+
+    console.log(`✅ $5 credit issued to user ${userId}`);
+
+    return res.status(200).json({
+      success: true,
+      transactionId: onrampTx.id,
+      creditIssued: true,
+      message: 'Transaction and credit added successfully',
+    });
+  } catch (error) {
+    console.error('❌ Error in processManualAdd:', error);
+    throw error;
+  }
+}
+
+    if (!pool) {
+      return res.status(503).json({ error: 'Database not available' });
+    }
+
+    console.log(`📝 Manually adding onramp transaction:`);
+    console.log(`   User ID: ${userId}`);
+    console.log(`   Wallet: ${walletAddress}`);
+    console.log(`   Amount: ${amountSOL} SOL`);
+
+    // Estimate fiat amount (rough calculation)
+    const estimatedFiatAmount = amountSOL * 150; // Rough SOL price estimate
+
+    const transactionId = `onramp_tx_manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const completedDate = completedAt ? new Date(completedAt) : new Date();
+    
+    const onrampTx = await upsertOnrampTransaction({
+      id: transactionId,
+      user_id: userId,
+      wallet_address: walletAddress,
+      moonpay_id: null,
+      moonpay_status: 'completed',
+      amount_fiat: estimatedFiatAmount,
+      amount_crypto: amountSOL,
+      credit_issued: false,
+      completed_at: completedDate,
+      expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+      idempotency_key: `manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      transaction_hash: transactionHash || null,
+    });
+
+    console.log(`✅ OnrampTransaction created: ${onrampTx.id}`);
+
+    // Check if user already has active credit
+    const existingCredit = await pool.query(
+      `SELECT * FROM onramp_credits 
+       WHERE user_id = $1 
+         AND is_active = TRUE 
+         AND expires_at > NOW()`,
+      [userId]
+    );
+
+    if (existingCredit.rows.length > 0) {
+      console.log(`⚠️ User already has active credit: ${existingCredit.rows[0].id}`);
+      console.log(`   Updating existing credit...`);
+      
+      // Update existing credit instead of creating new one
+      await pool.query(
+        `UPDATE onramp_credits 
+         SET credits_remaining = credits_remaining + 5.0,
+             card_adds_allowed = card_adds_allowed + 5,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [existingCredit.rows[0].id]
+      );
+      
+      console.log(`✅ Updated existing credit with additional $5`);
+    } else {
+      // Issue new $5 credit
+      const creditId = `credit_manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+      const credit = await createOnrampCredit({
+        id: creditId,
+        user_id: userId,
+        total_credits_issued: 5.0,
+        credits_remaining: 5.0,
+        card_adds_free_used: 0,
+        card_adds_allowed: 5,
+        expires_at: expiresAt,
+        onramp_transaction_id: onrampTx.id,
+      });
+
+      console.log(`💚 OnrampCredit created: ${credit.id}`);
+    }
+
+    // Mark transaction as credit issued
+    await pool.query(
+      `UPDATE onramp_transactions SET credit_issued = TRUE WHERE id = $1`,
+      [onrampTx.id]
+    );
+
+    console.log(`✅ $5 credit issued to user ${userId}`);
+
+    return res.status(200).json({
+      success: true,
+      transactionId: onrampTx.id,
+      creditIssued: true,
+      message: 'Transaction and credit added successfully',
+    });
+
+  } catch (error) {
+    console.error('❌ Error manually adding onramp:', error);
+    return res.status(500).json({ 
       error: 'Internal server error',
       details: String(error),
     });

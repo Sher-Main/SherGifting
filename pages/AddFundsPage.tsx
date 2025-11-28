@@ -112,43 +112,109 @@ const AddFundsPage: React.FC = () => {
         address: walletAddress,
       });
 
-      console.log('✅ Funding flow completed');
+      console.log('✅ Funding modal opened - starting polling for transaction...');
 
-      // Wait a moment for transaction to settle, then check for balance increase
-      setTimeout(async () => {
+      // Poll for balance changes after modal closes
+      // Poll every 5 seconds for up to 3 minutes (36 attempts)
+      let attempts = 0;
+      const maxAttempts = 36; // 36 attempts * 5 seconds = 180 seconds (3 minutes)
+      const pollInterval = 5000; // 5 seconds
+
+      const pollForTransaction = async () => {
+        attempts++;
+        console.log(`   🔄 Polling attempt ${attempts}/${maxAttempts}...`);
+
         try {
           const currentBalance = await getCurrentBalance();
-          console.log(`   Current balance: ${currentBalance} SOL`);
+          const balanceIncrease = currentBalance - previousBalance;
 
-          // Call backend to detect transaction and issue credit
-          const token = await getAccessToken() || '';
-          setAuthToken(token);
-          if (walletAddress) {
-            const response = await fetch('/api/onramp/detect-transaction', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
-              },
-              body: JSON.stringify({
-                walletAddress,
-                previousBalance,
-                currentBalance,
-              }),
-            });
+          console.log(`   📊 Current balance: ${currentBalance} SOL (change: ${balanceIncrease > 0 ? '+' : ''}${balanceIncrease.toFixed(4)} SOL)`);
 
-            if (response.ok) {
+          // If balance increased significantly, transaction completed!
+          if (balanceIncrease > 0.001) { // 0.001 SOL threshold to account for fees
+            console.log(`   ✅ Balance increased by ${balanceIncrease.toFixed(4)} SOL - transaction detected!`);
+
+            // Call backend to detect transaction and issue credit
+            const token = await getAccessToken() || '';
+            setAuthToken(token);
+            
+            if (walletAddress) {
+              console.log('   📞 Calling detect-transaction endpoint...');
+              const response = await fetch('/api/onramp/detect-transaction', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${token}`,
+                },
+                body: JSON.stringify({
+                  walletAddress,
+                  previousBalance,
+                  currentBalance,
+                }),
+              });
+
+              if (!response.ok) {
+                const errorText = await response.text();
+                console.error('❌ Detection API error:', response.status, errorText);
+                throw new Error(`API error: ${response.status}`);
+              }
+
               const result = await response.json();
+              console.log('   📊 Detection result:', result);
+              
               if (result.transactionDetected && result.creditIssued) {
                 console.log('✨ Credit issued!', result);
-                // Optionally show a success message to user
+                alert(`🎉 Success! You received a $5 credit! You can now send ${result.cardAddsFreeRemaining} free cards.`);
+                setIsLoadingOnramp(false);
+                // Refresh page to show updated balance and credit
+                setTimeout(() => window.location.reload(), 1000);
+                return; // Stop polling
+              } else if (result.transactionDetected && result.alreadyRecorded) {
+                console.log('ℹ️ Transaction already recorded');
+                if (result.creditIssued) {
+                  alert(`✅ Transaction recorded! You have ${result.cardAddsFreeRemaining || 5} free cards remaining.`);
+                }
+                setIsLoadingOnramp(false);
+                setTimeout(() => window.location.reload(), 1000);
+                return; // Stop polling
+              } else if (result.transactionDetected && !result.creditIssued) {
+                console.warn('⚠️ Transaction detected but credit not issued:', result.error);
+                alert('Transaction detected but there was an issue issuing your credit. Please contact support.');
+                setIsLoadingOnramp(false);
+                return; // Stop polling
+              } else {
+                console.warn('⚠️ No transaction detected:', result.message);
+                // Continue polling in case transaction is still processing
               }
             }
+
+            setIsLoadingOnramp(false);
+            return; // Stop polling
           }
+
+          // If no balance increase yet and we haven't exceeded max attempts, keep polling
+          if (attempts < maxAttempts) {
+            setTimeout(pollForTransaction, pollInterval);
+          } else {
+            console.log('   ⏱️ Polling timeout - no balance increase detected after 3 minutes');
+            setIsLoadingOnramp(false);
+            console.log('   ℹ️ Transaction may still be processing. It will be detected automatically when it completes.');
+          }
+
         } catch (error) {
-          console.error('Error detecting transaction:', error);
+          console.error('❌ Error polling for transaction:', error);
+          // Retry if we haven't exceeded max attempts
+          if (attempts < maxAttempts) {
+            setTimeout(pollForTransaction, pollInterval);
+          } else {
+            setIsLoadingOnramp(false);
+            console.error('❌ Failed to detect transaction after multiple attempts');
+          }
         }
-      }, 3000); // Wait 3 seconds for transaction to settle
+      };
+
+      // Start polling after a short delay (give transaction time to settle)
+      setTimeout(pollForTransaction, 5000); // Wait 5 seconds before first poll
 
     } catch (error) {
       console.error('❌ Error opening funding flow:', error);

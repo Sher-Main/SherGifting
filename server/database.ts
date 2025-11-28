@@ -603,20 +603,24 @@ export async function upsertOnrampTransaction(data: {
   credit_issued?: boolean;
   completed_at?: Date | null;
   expires_at?: Date | null;
+  idempotency_key?: string | null;
+  transaction_hash?: string | null;
 }): Promise<OnrampTransaction> {
   const [result] = await query<OnrampTransaction>(
     `
     INSERT INTO onramp_transactions (
       id, user_id, wallet_address, moonpay_id, moonpay_status, moonpay_fee_charged,
       amount_fiat, amount_crypto, currency, crypto_asset, credit_issued,
-      completed_at, expires_at
+      completed_at, expires_at, idempotency_key, transaction_hash
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
     ON CONFLICT (id)
     DO UPDATE SET
-      moonpay_status = EXCLUDED.moonpay_status,
-      completed_at = EXCLUDED.completed_at,
-      credit_issued = EXCLUDED.credit_issued
+      moonpay_status = COALESCE(EXCLUDED.moonpay_status, onramp_transactions.moonpay_status),
+      completed_at = COALESCE(EXCLUDED.completed_at, onramp_transactions.completed_at),
+      credit_issued = COALESCE(EXCLUDED.credit_issued, onramp_transactions.credit_issued),
+      idempotency_key = COALESCE(EXCLUDED.idempotency_key, onramp_transactions.idempotency_key),
+      transaction_hash = COALESCE(EXCLUDED.transaction_hash, onramp_transactions.transaction_hash)
     RETURNING *
     `,
     [
@@ -633,6 +637,8 @@ export async function upsertOnrampTransaction(data: {
       data.credit_issued || false,
       data.completed_at || null,
       data.expires_at || null,
+      data.idempotency_key || null,
+      data.transaction_hash || null,
     ]
   );
   return result;
@@ -789,6 +795,56 @@ export async function getOnrampTransactionsByUserId(userId: string): Promise<Onr
     `,
     [userId]
   );
+}
+
+// Create pending onramp when user opens funding modal
+export async function createPendingOnramp(data: {
+  id: string;
+  user_id: string;
+  wallet_address: string;
+  expires_at: Date;
+}): Promise<void> {
+  if (!pool) throw new Error('Database not available');
+  
+  await pool.query(
+    `INSERT INTO pending_onramps (id, user_id, wallet_address, expires_at)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (id) DO NOTHING`,
+    [data.id, data.user_id, data.wallet_address, data.expires_at]
+  );
+}
+
+// Find and consume pending onramp (used by webhook)
+export async function findAndConsumePendingOnramp(
+  walletAddress: string,
+  withinMinutes: number = 10
+): Promise<{ id: string; user_id: string } | null> {
+  if (!pool) throw new Error('Database not available');
+  
+  const result = await pool.query(
+    `SELECT id, user_id FROM pending_onramps
+     WHERE wallet_address = $1
+       AND started_at > NOW() - INTERVAL '${withinMinutes} minutes'
+       AND expires_at > NOW()
+     ORDER BY started_at DESC
+     LIMIT 1
+     FOR UPDATE SKIP LOCKED`,
+    [walletAddress]
+  );
+  
+  if (result.rows.length === 0) {
+    return null;
+  }
+  
+  const pending = result.rows[0];
+  
+  // Delete the pending onramp (consume it)
+  await pool.query(
+    `DELETE FROM pending_onramps WHERE id = $1`,
+    [pending.id]
+  );
+  
+  return { id: pending.id, user_id: pending.user_id };
 }
 
 export { pool };
