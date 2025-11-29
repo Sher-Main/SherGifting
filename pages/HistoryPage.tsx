@@ -275,7 +275,7 @@ const HistoryPage: React.FC = () => {
                         <th scope="col" className="px-6 py-3">Type</th>
                         <th scope="col" className="px-6 py-3">Amount</th>
                         <th scope="col" className="px-6 py-3">Date</th>
-                        <th scope="col" className="px-6 py-3">Status</th>
+                        <th scope="col" className="px-6 py-3 whitespace-nowrap">Status</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-700">
@@ -316,13 +316,13 @@ const HistoryPage: React.FC = () => {
                           <td className="px-6 py-4 text-slate-300">
                             {formatDate(tx.completedAt || tx.createdAt || new Date().toISOString())}
                           </td>
-                          <td className="px-6 py-4">
+                          <td className="px-6 py-4 whitespace-nowrap">
                             {tx.type === 'onramp' ? (
-                              <span className="px-2 py-1 text-xs font-medium text-green-300 bg-green-900/50 rounded-full">
+                              <span className="inline-flex items-center px-2 py-1 text-xs font-medium text-green-300 bg-green-900/50 rounded-full whitespace-nowrap">
                                 ✓ Completed
                               </span>
                             ) : (
-                              <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                              <span className={`inline-flex items-center px-2 py-1 text-xs font-medium rounded-full whitespace-nowrap ${
                                 tx.isFree
                                   ? 'text-green-300 bg-green-900/50'
                                   : 'text-slate-300 bg-slate-700/50'
