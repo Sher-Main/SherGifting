@@ -76,8 +76,8 @@ const ClaimPage: React.FC = () => {
     useEffect(() => {
         const autoClaimGift = async () => {
             // Don't auto-claim if we've already attempted and failed
-            if (hasAttemptedClaim || emailMismatch) {
-                console.log('⏸️ Skipping auto-claim - already attempted or email mismatch');
+            if (hasAttemptedClaim || emailMismatch || isClaiming || claimSuccess) {
+                console.log('⏸️ Skipping auto-claim - already attempted or in progress');
                 return;
             }
 
@@ -109,12 +109,14 @@ const ClaimPage: React.FC = () => {
                     console.error('❌ Email mismatch - cannot auto-claim');
                     setEmailMismatch(true);
                     setError('This gift is not for your account. It can only be claimed by the recipient email address.');
+                    setHasAttemptedClaim(true); // Mark as attempted to prevent retries
                     return;
                 }
                 
                 console.log('🎁 Auto-claiming gift for newly signed-in user...');
                 console.log('User wallet:', user.wallet_address);
                 console.log('Claim token:', claimToken.substring(0, 8) + '...');
+                setHasAttemptedClaim(true); // Set BEFORE calling handleClaim to prevent multiple calls
                 handleClaim();
             } else {
                 console.log('⏸️ Auto-claim conditions not met');
@@ -455,27 +457,27 @@ const ClaimPage: React.FC = () => {
 
     return (
         <div className="min-h-screen flex items-center justify-center p-4 animate-fade-in-up">
-            <div className="w-full max-w-2xl">
+            <div className="w-full max-w-md">
                 <GlassCard glow className="w-full">
                     {/* Progress Stepper */}
                     {!authenticated && (
-                        <div className="mb-8">
+                        <div className="mb-4">
                             <Stepper currentStep={1} completedSteps={[]} />
                         </div>
                     )}
 
                     {/* Gift Preview */}
-                    <div className="text-center mb-8">
+                    <div className="text-center mb-4">
                         <motion.div
                             initial={{ scale: 0.9, opacity: 0 }}
                             animate={{ scale: 1, opacity: 1 }}
                             transition={{ duration: 0.5 }}
-                            className="w-24 h-24 bg-gradient-to-br from-[#BE123C]/20 via-[#FCD34D]/20 to-[#06B6D4]/20 rounded-3xl flex items-center justify-center mx-auto mb-6 border-2 border-white/10 shadow-lg"
+                            className="w-16 h-16 bg-gradient-to-br from-[#BE123C]/20 via-[#FCD34D]/20 to-[#06B6D4]/20 rounded-3xl flex items-center justify-center mx-auto mb-4 border-2 border-white/10 shadow-lg"
                         >
-                            <Gift size={56} className="text-[#BE123C]" />
+                            <Gift size={40} className="text-[#BE123C]" />
                         </motion.div>
-                        <h2 className="text-3xl font-bold text-white mb-2">You Have a Gift! 🎁</h2>
-                        <p className="text-[#94A3B8] text-base mb-6">
+                        <h2 className="text-2xl font-bold text-white mb-2">You Have a Gift! 🎁</h2>
+                        <p className="text-[#94A3B8] text-base mb-4">
                             From <span className="text-white font-semibold">{giftInfo.sender_email}</span>
                         </p>
                         
@@ -484,11 +486,11 @@ const ClaimPage: React.FC = () => {
                             initial={{ y: 20, opacity: 0 }}
                             animate={{ y: 0, opacity: 1 }}
                             transition={{ delay: 0.2 }}
-                            className="bg-gradient-to-br from-[#1E293B] via-[#0F172A] to-[#1E293B] border-2 border-white/10 rounded-2xl p-8 mb-6 shadow-xl"
+                            className="bg-gradient-to-br from-[#1E293B] via-[#0F172A] to-[#1E293B] border-2 border-white/10 rounded-2xl p-5 mb-4 shadow-xl"
                         >
                             <p className="text-xs text-[#94A3B8] uppercase tracking-wider mb-3 font-bold">Gift Amount</p>
-                            <p className="text-5xl font-bold text-white mb-2">
-                                {giftInfo.amount} <span className="text-3xl text-[#06B6D4]">{giftInfo.token_symbol}</span>
+                            <p className="text-3xl font-bold text-white mb-2">
+                                {giftInfo.amount} <span className="text-xl text-[#06B6D4]">{giftInfo.token_symbol}</span>
                             </p>
                             {giftInfo.created_at && (
                                 <p className="text-xs text-[#64748B] mt-2">
@@ -503,7 +505,7 @@ const ClaimPage: React.FC = () => {
                                 initial={{ y: 20, opacity: 0 }}
                                 animate={{ y: 0, opacity: 1 }}
                                 transition={{ delay: 0.3 }}
-                                className="bg-[#0F172A]/40 rounded-xl p-6 mb-6 border border-white/10 text-left"
+                                className="bg-[#0F172A]/40 rounded-xl p-4 mb-4 border border-white/10 text-left"
                             >
                                 <div className="flex items-center gap-2 mb-3">
                                     <Mail size={16} className="text-[#06B6D4]" />
@@ -521,7 +523,7 @@ const ClaimPage: React.FC = () => {
                             animate={{ y: 0, opacity: 1 }}
                             transition={{ delay: 0.4 }}
                         >
-                            <p className="text-[#94A3B8] text-base text-center mb-6">
+                            <p className="text-[#94A3B8] text-base text-center mb-4">
                                 Sign in with your Google account to claim this gift
                             </p>
                         <GlowButton
@@ -548,11 +550,11 @@ const ClaimPage: React.FC = () => {
                                 animate={{ y: 0, opacity: 1 }}
                                 transition={{ delay: 0.4 }}
                             >
-                                <div className="mb-6">
+                                <div className="mb-4">
                                     <Stepper currentStep={2} completedSteps={[1]} />
                                 </div>
                                 
-                                <div className="bg-[#064E3B]/20 border border-[#10B981]/20 rounded-xl p-4 mb-6">
+                                <div className="bg-[#064E3B]/20 border border-[#10B981]/20 rounded-xl p-4 mb-4">
                                     <p className="text-[#10B981] text-sm text-center flex items-center justify-center gap-2 font-medium">
                                         <Check size={18} className="text-[#10B981]" />
                                         Signed in as {user?.email}
@@ -563,7 +565,7 @@ const ClaimPage: React.FC = () => {
                                     <motion.div
                                         initial={{ opacity: 0, y: -10 }}
                                         animate={{ opacity: 1, y: 0 }}
-                                        className="bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-xl p-4 mb-6"
+                                        className="bg-[#7F1D1D]/20 border border-[#EF4444]/20 rounded-xl p-4 mb-4"
                                     >
                                         <p className="text-[#EF4444] text-sm">{error}</p>
                                     </motion.div>
@@ -575,7 +577,7 @@ const ClaimPage: React.FC = () => {
                                     variant="cyan"
                                     fullWidth
                                     icon={Gift}
-                                    className="!py-4 !text-lg"
+                                    className="!py-3 !text-base"
                                 >
                                     {isClaiming ? (
                                         <>
@@ -583,10 +585,7 @@ const ClaimPage: React.FC = () => {
                                             <span>Claiming Gift...</span>
                                         </>
                                     ) : (
-                                        <>
-                                            <Gift size={20} />
-                                            <span>Claim Gift</span>
-                                        </>
+                                        <span>Claim Gift</span>
                                     )}
                                 </GlowButton>
                             </motion.div>
