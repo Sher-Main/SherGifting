@@ -1316,7 +1316,38 @@ app.get('/api/gifts/:giftId', async (req, res) => {
 // Secure claim endpoint (requires authentication and email verification)
 app.post('/api/gifts/claim', claimLimiter, authenticateToken, async (req: AuthRequest, res) => {
   const { claim_token } = req.body;
-  const user_email = req.user?.email?.address || req.user?.google?.email;
+  
+  // ✅ FIX: Get ALL emails from Privy user object
+  const getAllUserEmails = (user: any): string[] => {
+    const emails: string[] = [];
+    
+    // Primary email
+    if (user?.email?.address) {
+      emails.push(user.email.address.toLowerCase().trim());
+    }
+    
+    // Google OAuth email
+    if (user?.google?.email) {
+      emails.push(user.google.email.toLowerCase().trim());
+    }
+    
+    // Emails from linked accounts
+    if (user?.linkedAccounts) {
+      user.linkedAccounts.forEach((account: any) => {
+        if (account.type === 'email' && account.address) {
+          emails.push(account.address.toLowerCase().trim());
+        }
+        if (account.email) {
+          emails.push(account.email.toLowerCase().trim());
+        }
+      });
+    }
+    
+    // Remove duplicates
+    return [...new Set(emails)];
+  };
+  
+  const userEmails = getAllUserEmails(req.user);
   const user_wallet = req.user?.wallet?.address;
   // Handle IP address (can be string or string[])
   const ipHeader = req.headers['x-forwarded-for'];
@@ -1336,7 +1367,7 @@ app.post('/api/gifts/claim', claimLimiter, authenticateToken, async (req: AuthRe
     return res.status(400).json({ error: 'Missing claim token' });
   }
 
-  if (!user_email) {
+  if (userEmails.length === 0) {
     return res.status(400).json({ error: 'User email not found. Please ensure you are signed in.' });
   }
 
@@ -1398,12 +1429,12 @@ app.post('/api/gifts/claim', claimLimiter, authenticateToken, async (req: AuthRe
     }
   }
 
-  // CRITICAL: Verify email matches recipient
+  // ✅ FIX: Check if recipient email matches ANY of the user's emails
   const recipientEmailNormalized = gift.recipient_email.toLowerCase().trim();
-  const userEmailNormalized = user_email.toLowerCase().trim();
+  const emailMatches = userEmails.some(email => email === recipientEmailNormalized);
   
-  if (recipientEmailNormalized !== userEmailNormalized) {
-    console.error(`❌ Email mismatch: Expected ${gift.recipient_email}, got ${user_email} from IP ${ip_address}`);
+  if (!emailMatches) {
+    console.error(`❌ Email mismatch: Expected ${gift.recipient_email}, got emails: ${userEmails.join(', ')} from IP ${ip_address}`);
     
     // Increment claim attempts
     if (pool) {
@@ -1444,16 +1475,17 @@ app.post('/api/gifts/claim', claimLimiter, authenticateToken, async (req: AuthRe
     });
   }
 
-  console.log(`✅ Email verified: ${user_email} matches recipient`);
+  console.log(`✅ Email verified: ${recipientEmailNormalized} matches one of user's emails: ${userEmails.join(', ')}`);
 
   // Get recipient wallet from user data (from Privy)
   if (!user_wallet) {
     // Try to get wallet from user's database record
     if (pool) {
       try {
+        // Try to find user by any of their emails
         const userResult = await pool.query(
-          `SELECT wallet_address FROM users WHERE email = $1`,
-          [user_email]
+          `SELECT wallet_address FROM users WHERE email = ANY($1::text[])`,
+          [userEmails]
         );
         if (userResult.rows.length > 0 && userResult.rows[0].wallet_address) {
           const recipient_wallet = userResult.rows[0].wallet_address;
@@ -1571,13 +1603,16 @@ async function processGiftClaim(
       console.warn(`⚠️ Using default token info: ${tokenInfo.symbol} (${tokenInfo.decimals} decimals)`);
     }
 
-    // ✅ FIX 3: For SPL tokens, verify TipLink has SOL for transaction fees
+    // ✅ FIX 3: For SPL tokens, verify TipLink has SOL for transaction fees AND ATA creation
     if (!tokenInfo.isNative) {
-      const MIN_SOL_FOR_FEES = 0.0001; // Minimum SOL needed for transaction fees (~0.000005 SOL per tx, but we want a buffer)
+      const RENT_EXEMPTION_FOR_ATA = 0.00203928; // Rent for token account
+      const BASE_FEE = 0.000005; // Transaction fee
+      const MIN_SOL_FOR_FEES = RENT_EXEMPTION_FOR_ATA + BASE_FEE + 0.0001; // Add buffer
+      
       if (tiplinkBalanceSOL < MIN_SOL_FOR_FEES) {
-        throw new Error(`TipLink has insufficient SOL balance to pay transaction fees. Required: ${MIN_SOL_FOR_FEES} SOL, Available: ${tiplinkBalanceSOL} SOL. This gift may not have been funded correctly.`);
+        throw new Error(`TipLink has insufficient SOL balance to pay transaction fees and create recipient token account. Required: ${MIN_SOL_FOR_FEES} SOL, Available: ${tiplinkBalanceSOL} SOL. This gift may not have been funded correctly.`);
       }
-      console.log(`✅ TipLink has sufficient SOL (${tiplinkBalanceSOL} SOL) for transaction fees`);
+      console.log(`✅ TipLink has sufficient SOL (${tiplinkBalanceSOL} SOL) for transaction fees and ATA creation`);
     }
 
     let signature: string;
@@ -1704,6 +1739,18 @@ async function processGiftClaim(
       );
 
       const transaction = new Transaction().add(...instructions);
+      
+      // ✅ CRITICAL FIX: Set fee payer and blockhash BEFORE sending
+      const { blockhash } = await connection.getLatestBlockhash('finalized');
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = tipLink.keypair.publicKey;
+      
+      console.log('📝 Transaction configured:', {
+        feePayer: tipLink.keypair.publicKey.toBase58(),
+        blockhash: blockhash.substring(0, 8) + '...',
+        instructionCount: instructions.length
+      });
+      
       signature = await sendAndConfirmTransaction(
         connection,
         transaction,

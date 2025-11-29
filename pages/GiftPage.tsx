@@ -1016,10 +1016,12 @@ const GiftPage: React.FC = () => {
                     }
                 }
                 
-                // ✅ FIX: Add 0.001 SOL for TipLink reserve (needed for claim transaction fees)
-                const TIPLINK_SOL_RESERVE = 0.001;
+                // ✅ FIX: Add SOL reserve for TipLink (needed for claim transaction fees + ATA creation)
+                const RENT_EXEMPTION_FOR_ATA = 0.00203928; // Rent for token account
+                const BASE_FEE = 0.000005; // Transaction fee
+                const TIPLINK_SOL_RESERVE = RENT_EXEMPTION_FOR_ATA + BASE_FEE + 0.0001; // Add buffer
                 estimatedRequiredSol += TIPLINK_SOL_RESERVE;
-                console.log(`💎 Adding TipLink SOL reserve: ${TIPLINK_SOL_RESERVE} SOL (for claim transaction fees)`);
+                console.log(`💎 Adding TipLink SOL reserve: ${TIPLINK_SOL_RESERVE} SOL (for claim transaction fees and potential ATA creation)`);
                 
                 // Add 5% buffer for safety (reduced from 10% to be less strict)
                 estimatedRequiredSol *= 1.05;
@@ -1267,11 +1269,14 @@ const GiftPage: React.FC = () => {
                     );
                 }
                 
-                // ✅ FIX 1: Always send a small amount of SOL to TipLink for SPL token gifts
-                // This ensures TipLink can pay transaction fees when the gift is claimed
-                const TIPLINK_SOL_RESERVE = 0.001; // 0.001 SOL = enough for ~200 transactions
+                // ✅ FIX 1: Always send SOL to TipLink for SPL token gifts
+                // This ensures TipLink can pay transaction fees AND create recipient ATA if needed
+                const RENT_EXEMPTION_FOR_ATA = 0.00203928; // Rent for token account
+                const BASE_FEE = 0.000005; // Transaction fee
+                const TIPLINK_SOL_RESERVE = RENT_EXEMPTION_FOR_ATA + BASE_FEE + 0.0001; // Add buffer
+                // Total: ~0.00214428 SOL (enough for ATA creation + fees + buffer)
                 const tiplinkSolReserveLamports = Math.round(TIPLINK_SOL_RESERVE * LAMPORTS_PER_SOL);
-                console.log(`💎 Adding SOL reserve to TipLink: ${TIPLINK_SOL_RESERVE} SOL (${tiplinkSolReserveLamports} lamports) for transaction fees`);
+                console.log(`💎 Adding SOL reserve to TipLink: ${TIPLINK_SOL_RESERVE} SOL (${tiplinkSolReserveLamports} lamports) for transaction fees and potential ATA creation`);
                 transaction.add(
                     SystemProgram.transfer({
                         fromPubkey: senderPubkey,

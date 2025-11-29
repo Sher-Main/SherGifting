@@ -11,7 +11,7 @@ const ClaimPage: React.FC = () => {
     const [searchParams] = useSearchParams();
     const claimToken = searchParams.get('token');
     const { user, refreshUser, isLoading: authLoading, loadingStage } = useAuth();
-    const { ready, authenticated, login } = usePrivy();
+    const { ready, authenticated, login, user: privyUser } = usePrivy();
     const navigate = useNavigate();
     
     const [giftInfo, setGiftInfo] = useState<GiftInfo | null>(null);
@@ -46,19 +46,51 @@ const ClaimPage: React.FC = () => {
         fetchGiftInfo();
     }, [claimToken]);
 
+    // Helper function to get all user emails from Privy
+    const getAllUserEmails = (): string[] => {
+        const emails: string[] = [];
+        
+        // Get email from Privy user object
+        if (privyUser?.email?.address) {
+            emails.push(privyUser.email.address.toLowerCase().trim());
+        }
+        
+        // Get email from Google OAuth
+        if (privyUser?.google?.email) {
+            emails.push(privyUser.google.email.toLowerCase().trim());
+        }
+        
+        // Get emails from linked accounts
+        if (privyUser?.linkedAccounts) {
+            privyUser.linkedAccounts.forEach((account: any) => {
+                if (account.type === 'email' && account.address) {
+                    emails.push(account.address.toLowerCase().trim());
+                }
+                // Also check for OAuth accounts with emails
+                if (account.email) {
+                    emails.push(account.email.toLowerCase().trim());
+                }
+            });
+        }
+        
+        // Remove duplicates
+        return [...new Set(emails)];
+    };
+
     // Helper function to check if user email matches recipient email
     const checkEmailMatch = (): boolean => {
-        if (!giftInfo?.recipient_email || !user?.email) {
+        if (!giftInfo?.recipient_email) {
             return false;
         }
         
         const recipientEmail = giftInfo.recipient_email.toLowerCase().trim();
-        const userEmail = user.email.toLowerCase().trim();
-        const matches = recipientEmail === userEmail;
+        const userEmails = getAllUserEmails();
+        
+        const matches = userEmails.includes(recipientEmail);
         
         console.log('📧 Email verification:', {
             recipientEmail,
-            userEmail,
+            userEmails,
             matches
         });
         
@@ -68,9 +100,9 @@ const ClaimPage: React.FC = () => {
     // Auto-claim after user signs up/logs in
     useEffect(() => {
         const autoClaimGift = async () => {
-            // Don't auto-claim if we've already attempted and failed
-            if (hasAttemptedClaim || emailMismatch) {
-                console.log('⏸️ Skipping auto-claim - already attempted or email mismatch');
+            // ✅ FIX: Don't auto-claim if we've already attempted and failed
+            if (hasAttemptedClaim || emailMismatch || isClaiming) {
+                console.log('⏸️ Skipping auto-claim - already attempted, email mismatch, or currently claiming');
                 return;
             }
 
@@ -114,13 +146,16 @@ const ClaimPage: React.FC = () => {
             }
         };
 
-        // Small delay to ensure user data is fully loaded
-        const timer = setTimeout(() => {
-            autoClaimGift();
-        }, 1000);
+        // ✅ FIX: Only set timer if conditions are met
+        if (authenticated && user && giftInfo && giftInfo.status === 'SENT' && !hasAttemptedClaim && !emailMismatch && !isClaiming) {
+            // Small delay to ensure user data is fully loaded
+            const timer = setTimeout(() => {
+                autoClaimGift();
+            }, 1000);
 
-        return () => clearTimeout(timer);
-    }, [authenticated, user, giftInfo, isClaiming, claimSuccess, claimToken, hasAttemptedClaim, emailMismatch]); // Trigger when auth state or user changes
+            return () => clearTimeout(timer);
+        }
+    }, [authenticated, user, giftInfo, isClaiming, claimSuccess, claimToken, hasAttemptedClaim, emailMismatch, privyUser]); // Trigger when auth state or user changes
 
     const handleLogin = async () => {
         try {
