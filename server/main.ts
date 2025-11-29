@@ -1519,7 +1519,8 @@ async function processGiftClaim(
     
     // Check TipLink balance (will check SOL or SPL token balance based on token type)
     const tiplinkBalanceLamports = await connection.getBalance(tipLink.keypair.publicKey);
-    console.log('💰 TipLink SOL balance:', tiplinkBalanceLamports / LAMPORTS_PER_SOL, 'SOL');
+    const tiplinkBalanceSOL = tiplinkBalanceLamports / LAMPORTS_PER_SOL;
+    console.log('💰 TipLink SOL balance:', tiplinkBalanceSOL, 'SOL');
 
     const recipientPubkey = new PublicKey(recipient_wallet);
     console.log('👤 Recipient wallet:', recipientPubkey.toBase58());
@@ -1568,6 +1569,15 @@ async function processGiftClaim(
         isNative: gift.token_mint === 'So11111111111111111111111111111111111111112'
       };
       console.warn(`⚠️ Using default token info: ${tokenInfo.symbol} (${tokenInfo.decimals} decimals)`);
+    }
+
+    // ✅ FIX 3: For SPL tokens, verify TipLink has SOL for transaction fees
+    if (!tokenInfo.isNative) {
+      const MIN_SOL_FOR_FEES = 0.0001; // Minimum SOL needed for transaction fees (~0.000005 SOL per tx, but we want a buffer)
+      if (tiplinkBalanceSOL < MIN_SOL_FOR_FEES) {
+        throw new Error(`TipLink has insufficient SOL balance to pay transaction fees. Required: ${MIN_SOL_FOR_FEES} SOL, Available: ${tiplinkBalanceSOL} SOL. This gift may not have been funded correctly.`);
+      }
+      console.log(`✅ TipLink has sufficient SOL (${tiplinkBalanceSOL} SOL) for transaction fees`);
     }
 
     let signature: string;
@@ -1626,14 +1636,25 @@ async function processGiftClaim(
       // ✅ CRITICAL: Check if TipLink has the SPL tokens before attempting transfer
       console.log(`🔍 Checking TipLink token account: ${tiplinkATA.toBase58()}`);
       let tiplinkTokenAccount;
+      let tokenBalanceRaw: bigint;
       try {
         tiplinkTokenAccount = await getAccount(connection, tiplinkATA);
-        const tokenBalance = Number(tiplinkTokenAccount.amount) / (10 ** gift.token_decimals);
-        console.log(`💰 TipLink ${gift.token_symbol} balance: ${tokenBalance} ${gift.token_symbol}`);
         
-        // Check if TipLink has enough tokens
-        if (tokenBalance < gift.amount) {
-          throw new Error(`Insufficient ${gift.token_symbol} balance in TipLink. Required: ${gift.amount}, Available: ${tokenBalance}`);
+        // ✅ FIX 2: Use BigInt for precise comparison to avoid floating point errors
+        tokenBalanceRaw = tiplinkTokenAccount.amount; // Already a BigInt
+        const requiredAmountRaw = BigInt(Math.floor(gift.amount * (10 ** gift.token_decimals)));
+        
+        // For display purposes only
+        const tokenBalance = Number(tokenBalanceRaw) / (10 ** gift.token_decimals);
+        console.log(`💰 TipLink ${gift.token_symbol} balance: ${tokenBalance} ${gift.token_symbol} (raw: ${tokenBalanceRaw.toString()})`);
+        console.log(`📊 Required amount: ${gift.amount} ${gift.token_symbol} (raw: ${requiredAmountRaw.toString()})`);
+        
+        // ✅ FIX 2: Compare raw amounts (BigInt) with small tolerance for rounding errors
+        // Allow 1 raw unit tolerance to handle floating point precision issues
+        const TOLERANCE = BigInt(1);
+        if (tokenBalanceRaw < (requiredAmountRaw - TOLERANCE)) {
+          const available = Number(tokenBalanceRaw) / (10 ** gift.token_decimals);
+          throw new Error(`Insufficient ${gift.token_symbol} balance in TipLink. Required: ${gift.amount}, Available: ${available}`);
         }
         
         console.log(`✅ TipLink has sufficient ${gift.token_symbol} balance`);
@@ -1662,13 +1683,13 @@ async function processGiftClaim(
         console.log(`✅ Recipient token account exists: ${recipientATA.toBase58()}`);
       }
 
-      // Calculate transfer amount in token's smallest unit
+      // ✅ FIX 2: Use the same calculation method as balance check (with BigInt)
       const transferAmount = BigInt(Math.floor(gift.amount * (10 ** gift.token_decimals)));
       console.log(`📊 Transfer details:`, {
         tokenSymbol: gift.token_symbol,
         tokenAmount: gift.amount,
         transferAmountRaw: transferAmount.toString(),
-        tiplinkBalance: Number(tiplinkTokenAccount.amount).toString(),
+        tiplinkBalanceRaw: tokenBalanceRaw.toString(),
         recipientATA: recipientATA.toBase58()
       });
 

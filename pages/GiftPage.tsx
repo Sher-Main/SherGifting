@@ -1016,6 +1016,11 @@ const GiftPage: React.FC = () => {
                     }
                 }
                 
+                // ✅ FIX: Add 0.001 SOL for TipLink reserve (needed for claim transaction fees)
+                const TIPLINK_SOL_RESERVE = 0.001;
+                estimatedRequiredSol += TIPLINK_SOL_RESERVE;
+                console.log(`💎 Adding TipLink SOL reserve: ${TIPLINK_SOL_RESERVE} SOL (for claim transaction fees)`);
+                
                 // Add 5% buffer for safety (reduced from 10% to be less strict)
                 estimatedRequiredSol *= 1.05;
                 
@@ -1029,7 +1034,7 @@ const GiftPage: React.FC = () => {
                 if (solBalance < estimatedRequiredSol) {
                     // Round up to 4 decimal places for user-friendly message
                     const requiredRounded = Math.ceil(estimatedRequiredSol * 10000) / 10000;
-                    throw new Error(`Insufficient SOL for transaction fees. You need approximately ${requiredRounded.toFixed(4)} SOL to pay for transaction fees and rent. You have ${solBalance.toFixed(4)} SOL available. Please add more SOL to your wallet.`);
+                    throw new Error(`Insufficient SOL for transaction fees. You need approximately ${requiredRounded.toFixed(4)} SOL to pay for transaction fees, rent, and TipLink reserve. You have ${solBalance.toFixed(4)} SOL available. Please add more SOL to your wallet.`);
                 }
             }
 
@@ -1261,6 +1266,19 @@ const GiftPage: React.FC = () => {
                         })
                     );
                 }
+                
+                // ✅ FIX 1: Always send a small amount of SOL to TipLink for SPL token gifts
+                // This ensures TipLink can pay transaction fees when the gift is claimed
+                const TIPLINK_SOL_RESERVE = 0.001; // 0.001 SOL = enough for ~200 transactions
+                const tiplinkSolReserveLamports = Math.round(TIPLINK_SOL_RESERVE * LAMPORTS_PER_SOL);
+                console.log(`💎 Adding SOL reserve to TipLink: ${TIPLINK_SOL_RESERVE} SOL (${tiplinkSolReserveLamports} lamports) for transaction fees`);
+                transaction.add(
+                    SystemProgram.transfer({
+                        fromPubkey: senderPubkey,
+                        toPubkey: tipLinkPubkey,
+                        lamports: tiplinkSolReserveLamports,
+                    })
+                );
             }
 
             // ✅ CRITICAL: Get fresh blockhash RIGHT BEFORE signing (prevents expiration)
