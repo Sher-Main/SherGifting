@@ -358,12 +358,19 @@ const GiftPage: React.FC = () => {
                         creditsRemaining: data.creditsRemaining,
                         cardAddsFreeRemaining: data.cardAddsFreeRemaining,
                         cardAddsAllowed: data.cardAddsAllowed,
+                        serviceFeeFreeRemaining: data.serviceFeeFreeRemaining || 0,
+                        serviceFeeFreeAllowed: data.serviceFeeFreeAllowed || 0,
                     });
                     
-                    // Only show popup if credit is active AND has remaining credits
-                    if (data.creditsRemaining > 0 && data.cardAddsFreeRemaining > 0) {
+                    // Only show popup if credit is active AND has remaining credits (cards or service fees)
+                    const hasCardCredits = data.cardAddsFreeRemaining > 0;
+                    const hasServiceFeeCredits = (data.serviceFeeFreeRemaining || 0) > 0;
+                    if (data.creditsRemaining > 0 && (hasCardCredits || hasServiceFeeCredits)) {
                         setShowCreditPopup(true);
-                        console.log('🎉 Showing credit popup');
+                        console.log('🎉 Showing credit popup', {
+                            hasCardCredits,
+                            hasServiceFeeCredits,
+                        });
                     }
                 } else {
                     // No active credit
@@ -527,6 +534,14 @@ const GiftPage: React.FC = () => {
 
         try {
             const FLAT_SERVICE_FEE_USD = 1.00;
+            
+            // Check if user has active credit for free service fees
+            let SERVICE_FEE_USD = FLAT_SERVICE_FEE_USD;
+            if (onrampCredit && onrampCredit.isActive && onrampCredit.serviceFeeFreeRemaining > 0) {
+                SERVICE_FEE_USD = 0; // FREE with credit
+                console.log(`✨ FREE SERVICE FEE! Discounts remaining: ${onrampCredit.serviceFeeFreeRemaining} of ${onrampCredit.serviceFeeFreeAllowed || 0}`);
+            }
+            
             // Check if user has active credit for free cards
             let CARD_FEE_USD = 0;
             if (selectedCard) {
@@ -538,10 +553,10 @@ const GiftPage: React.FC = () => {
                     console.log(`💳 Card fee: $1.00 (no active credit or credit used up)`);
                 }
             }
-            const totalFeesUSD = FLAT_SERVICE_FEE_USD + CARD_FEE_USD;
+            const totalFeesUSD = SERVICE_FEE_USD + CARD_FEE_USD;
             
             // Calculate fees in token
-            const serviceFeeAmount = tokenPrice > 0 ? FLAT_SERVICE_FEE_USD / tokenPrice : 0;
+            const serviceFeeAmount = tokenPrice > 0 ? SERVICE_FEE_USD / tokenPrice : 0;
             const cardFeeAmount = selectedCard && tokenPrice > 0 ? CARD_FEE_USD / tokenPrice : 0;
             const totalFeeAmount = serviceFeeAmount + cardFeeAmount;
             const totalAmount = amountValue + totalFeeAmount;
@@ -674,9 +689,26 @@ const GiftPage: React.FC = () => {
         }
         
         // Calculate flat $1 service fee (convert to token amount)
+        // Check if service fee is FREE (using onramp credit)
         const FLAT_SERVICE_FEE_USD = 1.00;
+        let SERVICE_FEE_USD = FLAT_SERVICE_FEE_USD;
+        
+        console.log('🔍 Checking credit for service fee calculation:');
+        console.log('   onrampCredit:', onrampCredit);
+        console.log('   onrampCredit?.isActive:', onrampCredit?.isActive);
+        console.log('   onrampCredit?.serviceFeeFreeRemaining:', onrampCredit?.serviceFeeFreeRemaining);
+        
+        // Check if user has active credit for free service fees
+        if (onrampCredit && onrampCredit.isActive && onrampCredit.serviceFeeFreeRemaining > 0) {
+            // User has active credit - service fee is FREE!
+            SERVICE_FEE_USD = 0;
+            console.log(`✨ FREE SERVICE FEE! Discounts remaining: ${onrampCredit.serviceFeeFreeRemaining} of ${onrampCredit.serviceFeeFreeAllowed || 0}`);
+        } else {
+            console.log(`💳 Service fee: $1.00 (credit check: credit=${!!onrampCredit}, isActive=${onrampCredit?.isActive}, remaining=${onrampCredit?.serviceFeeFreeRemaining || 0})`);
+        }
+        
         const serviceFeeAmount = tokenPrice && tokenPrice > 0 
-            ? FLAT_SERVICE_FEE_USD / tokenPrice 
+            ? SERVICE_FEE_USD / tokenPrice 
             : 0;
         
         if (!tokenPrice || tokenPrice <= 0) {
@@ -777,7 +809,7 @@ const GiftPage: React.FC = () => {
 
         // Calculate USD values
         const usdValue = tokenPrice ? numericAmount * tokenPrice : null;
-        const usdServiceFee = FLAT_SERVICE_FEE_USD;
+        const usdServiceFee = SERVICE_FEE_USD; // Use calculated service fee (0 if free, 1.00 if paid)
         const usdCardFee = hasCard ? CARD_FEE_USD : 0;
         const usdTotalFees = usdServiceFee + usdCardFee;
         const usdTotal = tokenPrice ? (numericAmount * tokenPrice) + usdTotalFees : null;
@@ -796,7 +828,7 @@ const GiftPage: React.FC = () => {
             token: selectedToken.symbol,
             tokenName: selectedToken.name,
             usdValue,
-            usdFee: usdServiceFee, // $1 service fee
+            usdFee: usdServiceFee, // Service fee (0 if free, 1.00 if paid)
             usdTotal,
             remainingBalance,
             remainingBalanceUsd,
@@ -833,6 +865,13 @@ const GiftPage: React.FC = () => {
         
         // Recalculate fees (same as in handleSendGift)
         const FLAT_SERVICE_FEE_USD = 1.00;
+        
+        // Calculate service fee (FREE if user has active credit)
+        let SERVICE_FEE_USD = FLAT_SERVICE_FEE_USD;
+        if (onrampCredit && onrampCredit.isActive && onrampCredit.serviceFeeFreeRemaining > 0) {
+            SERVICE_FEE_USD = 0; // FREE with credit
+        }
+        
         // Calculate card fee (FREE if user has active credit)
         const hasCard = confirmDetails.hasCard;
         let CARD_FEE_USD = 0;
@@ -843,7 +882,7 @@ const GiftPage: React.FC = () => {
                 CARD_FEE_USD = 1.00; // Normal $1 fee
             }
         }
-        const serviceFeeAmount = tokenPrice && tokenPrice > 0 ? FLAT_SERVICE_FEE_USD / tokenPrice : 0;
+        const serviceFeeAmount = tokenPrice && tokenPrice > 0 ? SERVICE_FEE_USD / tokenPrice : 0;
         const cardFeeAmount = confirmDetails.hasCard && tokenPrice && tokenPrice > 0 ? CARD_FEE_USD / tokenPrice : 0;
         const totalFeeAmount = serviceFeeAmount + cardFeeAmount;
         
@@ -1401,6 +1440,19 @@ const GiftPage: React.FC = () => {
             const isCardFree = selectedCard && onrampCredit && onrampCredit.isActive && onrampCredit.cardAddsFreeRemaining > 0;
             const cardPriceUsd = selectedCard ? (isCardFree ? 0 : 1.00) : undefined;
             
+            // Ensure recipient name is set for card (use email username or "Friend" as fallback)
+            const cardRecipientName = selectedCard 
+                ? (recipientName || recipientEmail.split('@')[0] || 'Friend')
+                : null;
+            
+            console.log('🎴 Sending card info to backend:', {
+                selectedCard,
+                recipientName,
+                cardRecipientName,
+                isCardFree,
+                cardPriceUsd,
+            });
+            
             const createResponse = await giftService.createGift({
                 recipient_email: recipientEmail,
                 token_mint: currentToken.mint,
@@ -1413,7 +1465,7 @@ const GiftPage: React.FC = () => {
                 token_symbol: currentToken.symbol,
                 token_decimals: currentToken.decimals,
                 card_type: selectedCard || null,
-                card_recipient_name: recipientName || null,
+                card_recipient_name: cardRecipientName,
                 card_price_usd: cardPriceUsd,
             });
 
@@ -1526,12 +1578,21 @@ const GiftPage: React.FC = () => {
                                     )}
                                 </div>
                                 
-                                {/* Service Fee - Flat $1 */}
+                                {/* Service Fee - $1 or FREE if credit available */}
                                 <div className="pb-3 border-b border-slate-700">
                                     <p className="text-slate-400 text-xs mb-1">Service Fee</p>
-                                    <p className="text-slate-300 font-medium">$1.00 USD</p>
-                                    {confirmDetails.fee > 0 && (
-                                        <p className="text-slate-500 text-xs mt-1">{confirmDetails.fee.toFixed(6)} {confirmDetails.token}</p>
+                                    {confirmDetails.usdFee === 0 ? (
+                                        <div>
+                                            <p className="text-green-400 font-bold text-lg">FREE ✨</p>
+                                            <p className="text-green-300 text-xs mt-1">Using onramp credit</p>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <p className="text-slate-300 font-medium">$1.00 USD</p>
+                                            {confirmDetails.fee > 0 && (
+                                                <p className="text-slate-500 text-xs mt-1">{confirmDetails.fee.toFixed(6)} {confirmDetails.token}</p>
+                                            )}
+                                        </>
                                     )}
                                 </div>
                                 
@@ -1938,8 +1999,14 @@ const GiftPage: React.FC = () => {
                                 ? parseFloat(tokenAmount) 
                                 : (usdAmount && tokenPrice ? parseFloat(usdAmount) / tokenPrice : 0);
                             
-                            // Flat $1 service fee + $1 card fee
+                            // Calculate service fee (FREE if user has active credit)
                             const FLAT_SERVICE_FEE_USD = 1.00;
+                            let SERVICE_FEE_USD = FLAT_SERVICE_FEE_USD;
+                            if (onrampCredit && onrampCredit.isActive && onrampCredit.serviceFeeFreeRemaining > 0) {
+                                SERVICE_FEE_USD = 0; // FREE with credit
+                            }
+                            
+                            // Calculate card fee (FREE if user has active credit)
                             let CARD_FEE_USD = 0;
                             if (selectedCard) {
                                 if (onrampCredit && onrampCredit.isActive && onrampCredit.cardAddsFreeRemaining > 0) {
@@ -1948,7 +2015,7 @@ const GiftPage: React.FC = () => {
                                     CARD_FEE_USD = 1.00; // Normal $1 fee
                                 }
                             }
-                            const serviceFeeInTokens = tokenPrice && tokenPrice > 0 ? FLAT_SERVICE_FEE_USD / tokenPrice : 0;
+                            const serviceFeeInTokens = tokenPrice && tokenPrice > 0 ? SERVICE_FEE_USD / tokenPrice : 0;
                             const cardFeeInTokens = selectedCard && tokenPrice && tokenPrice > 0 ? CARD_FEE_USD / tokenPrice : 0;
                             const totalFeesInTokens = serviceFeeInTokens + cardFeeInTokens;
                             const tokenTotal = tokenAmountValue + totalFeesInTokens;
@@ -1957,7 +2024,7 @@ const GiftPage: React.FC = () => {
                             const usdAmountValue = amountMode === 'usd' && tokenPrice
                                 ? parseFloat(usdAmount)
                                 : (amountMode === 'token' && tokenPrice ? parseFloat(tokenAmount) * tokenPrice : 0);
-                            const usdTotalFees = FLAT_SERVICE_FEE_USD + CARD_FEE_USD;
+                            const usdTotalFees = SERVICE_FEE_USD + CARD_FEE_USD;
                             const usdTotal = usdAmountValue + usdTotalFees;
                             
                             return (
@@ -1972,7 +2039,11 @@ const GiftPage: React.FC = () => {
                                     </div>
                                     <div className="flex justify-between text-sm mb-1">
                                         <span className="text-slate-400">Service Fee:</span>
-                                        <span className="text-slate-300">$1.00 USD</span>
+                                        {onrampCredit && onrampCredit.isActive && onrampCredit.serviceFeeFreeRemaining > 0 ? (
+                                            <span className="text-green-400 font-bold">FREE ✨</span>
+                                        ) : (
+                                            <span className="text-slate-300">$1.00 USD</span>
+                                        )}
                                     </div>
                                     {selectedCard && (
                                         <div className="flex justify-between text-sm mb-1">

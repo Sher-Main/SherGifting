@@ -22,3 +22,4 @@ export const getApiUrl = (path: string): string => {
   return `${BACKEND_URL}/${cleanPath}`;
 };
 
+

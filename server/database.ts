@@ -284,6 +284,8 @@ async function initializeSchema() {
       credits_remaining DECIMAL(10, 2) DEFAULT 5.0,
       card_adds_free_used INTEGER DEFAULT 0,
       card_adds_allowed INTEGER DEFAULT 5,
+      service_fee_free_used INTEGER DEFAULT 0,
+      service_fee_free_allowed INTEGER DEFAULT 0,
       issued_at TIMESTAMP NOT NULL DEFAULT NOW(),
       expires_at TIMESTAMP NOT NULL,
       is_active BOOLEAN DEFAULT TRUE,
@@ -293,6 +295,15 @@ async function initializeSchema() {
     )
   `).catch(() => {
     // Table might already exist, ignore error
+  });
+
+  // Add service fee columns if they don't exist (migration)
+  await pool.query(`
+    ALTER TABLE onramp_credits
+    ADD COLUMN IF NOT EXISTS service_fee_free_used INTEGER DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS service_fee_free_allowed INTEGER DEFAULT 0
+  `).catch(() => {
+    // Columns might already exist, ignore error
   });
 
   // Create indexes for onramp_credits
@@ -571,6 +582,8 @@ export interface OnrampCredit extends QueryResultRow {
   credits_remaining: number;
   card_adds_free_used: number;
   card_adds_allowed: number;
+  service_fee_free_used: number;
+  service_fee_free_allowed: number;
   issued_at: Date;
   expires_at: Date;
   is_active: boolean;
@@ -666,6 +679,8 @@ export async function createOnrampCredit(data: {
   credits_remaining?: number;
   card_adds_free_used?: number;
   card_adds_allowed?: number;
+  service_fee_free_used?: number;
+  service_fee_free_allowed?: number;
   expires_at: Date;
   onramp_transaction_id?: string | null;
 }): Promise<OnrampCredit> {
@@ -673,14 +688,18 @@ export async function createOnrampCredit(data: {
     `
     INSERT INTO onramp_credits (
       id, user_id, total_credits_issued, credits_remaining,
-      card_adds_free_used, card_adds_allowed, expires_at, onramp_transaction_id
+      card_adds_free_used, card_adds_allowed, 
+      service_fee_free_used, service_fee_free_allowed,
+      expires_at, onramp_transaction_id
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     ON CONFLICT (user_id)
     DO UPDATE SET
       is_active = TRUE,
       credits_remaining = EXCLUDED.credits_remaining,
       card_adds_free_used = EXCLUDED.card_adds_free_used,
+      service_fee_free_used = EXCLUDED.service_fee_free_used,
+      service_fee_free_allowed = EXCLUDED.service_fee_free_allowed,
       expires_at = EXCLUDED.expires_at,
       onramp_transaction_id = EXCLUDED.onramp_transaction_id,
       updated_at = NOW()
@@ -693,6 +712,8 @@ export async function createOnrampCredit(data: {
       data.credits_remaining || 5.0,
       data.card_adds_free_used || 0,
       data.card_adds_allowed || 5,
+      data.service_fee_free_used || 0,
+      data.service_fee_free_allowed || 0,
       data.expires_at,
       data.onramp_transaction_id || null,
     ]
@@ -705,6 +726,7 @@ export async function updateOnrampCredit(
   updates: {
     credits_remaining?: number;
     card_adds_free_used?: number;
+    service_fee_free_used?: number;
     is_active?: boolean;
   }
 ): Promise<OnrampCredit | null> {
@@ -719,6 +741,10 @@ export async function updateOnrampCredit(
   if (updates.card_adds_free_used !== undefined) {
     updateFields.push(`card_adds_free_used = $${paramIndex++}`);
     values.push(updates.card_adds_free_used);
+  }
+  if (updates.service_fee_free_used !== undefined) {
+    updateFields.push(`service_fee_free_used = $${paramIndex++}`);
+    values.push(updates.service_fee_free_used);
   }
   if (updates.is_active !== undefined) {
     updateFields.push(`is_active = $${paramIndex++}`);

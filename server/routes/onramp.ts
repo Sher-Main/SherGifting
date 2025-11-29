@@ -94,6 +94,17 @@ router.post('/onramp/detect-transaction', authenticateToken, async (req: AuthReq
 
     console.log(`📝 OnrampTransaction created: ${onrampTx.id}`);
 
+    // Check if this is the user's first onramp transaction
+    const previousTransactions = await pool.query(
+      `SELECT COUNT(*) as count FROM onramp_transactions 
+       WHERE user_id = $1 AND id != $2`,
+      [userId, onrampTx.id]
+    );
+    const isFirstOnramp = parseInt(previousTransactions.rows[0]?.count || '0') === 0;
+    
+    console.log(`   ${isFirstOnramp ? '🎉 FIRST-TIME ONRAMPER' : '🔄 RETURNING USER'}`);
+    console.log(`   Service fee discounts: ${isFirstOnramp ? '5 (first-time bonus)' : '0'}`);
+
     // Issue $5 credit
     try {
       const creditId = `credit_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -106,6 +117,8 @@ router.post('/onramp/detect-transaction', authenticateToken, async (req: AuthReq
         credits_remaining: 5.0,
         card_adds_free_used: 0,
         card_adds_allowed: 5,
+        service_fee_free_used: 0,
+        service_fee_free_allowed: isFirstOnramp ? 5 : 0, // 5 free service fees only for first-time onrampers
         expires_at: expiresAt,
         onramp_transaction_id: onrampTx.id,
       });
@@ -289,6 +302,17 @@ async function processManualAdd(data: {
 
     console.log(`✅ OnrampTransaction created: ${onrampTx.id}`);
 
+    // Check if this is the user's first onramp transaction
+    const previousTransactions = await pool.query(
+      `SELECT COUNT(*) as count FROM onramp_transactions 
+       WHERE user_id = $1 AND id != $2`,
+      [userId, onrampTx.id]
+    );
+    const isFirstOnramp = parseInt(previousTransactions.rows[0]?.count || '0') === 0;
+    
+    console.log(`   ${isFirstOnramp ? '🎉 FIRST-TIME ONRAMPER' : '🔄 RETURNING USER'}`);
+    console.log(`   Service fee discounts: ${isFirstOnramp ? '5 (first-time bonus)' : '0'}`);
+
     // Check if user already has active credit
     const existingCredit = await pool.query(
       `SELECT * FROM onramp_credits 
@@ -324,6 +348,8 @@ async function processManualAdd(data: {
         credits_remaining: 5.0,
         card_adds_free_used: 0,
         card_adds_allowed: 5,
+        service_fee_free_used: 0,
+        service_fee_free_allowed: isFirstOnramp ? 5 : 0, // 5 free service fees only for first-time onrampers
         expires_at: expiresAt,
         onramp_transaction_id: onrampTx.id,
       });
@@ -414,6 +440,9 @@ router.get('/users/:userId/onramp-credit', async (req: Request, res: Response) =
       cardAddsFreeUsed: credit.card_adds_free_used,
       cardAddsAllowed: credit.card_adds_allowed,
       cardAddsFreeRemaining: credit.card_adds_allowed - credit.card_adds_free_used,
+      serviceFeeFreeUsed: credit.service_fee_free_used || 0,
+      serviceFeeFreeAllowed: credit.service_fee_free_allowed || 0,
+      serviceFeeFreeRemaining: (credit.service_fee_free_allowed || 0) - (credit.service_fee_free_used || 0),
       daysRemaining,
       expiresAt: credit.expires_at.toISOString(),
       issuedAt: credit.issued_at.toISOString(),

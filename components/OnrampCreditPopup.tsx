@@ -5,6 +5,8 @@ interface OnrampCreditData {
   creditsRemaining: number;
   cardAddsFreeRemaining: number;
   cardAddsAllowed: number;
+  serviceFeeFreeRemaining?: number;
+  serviceFeeFreeAllowed?: number;
   daysRemaining: number;
   expiresAt: string;
 }
@@ -83,13 +85,27 @@ export function OnrampCreditPopup({
             </div>
 
             {/* What it means */}
-            <div className="text-sm text-slate-300">
+            <div className="text-sm text-slate-300 mb-2">
               = {credit.cardAddsAllowed} free card transfers
             </div>
 
-            {/* Remaining counter */}
-            <div className="text-sm font-semibold text-green-400 mt-2">
-              ({credit.cardAddsFreeRemaining} of {credit.cardAddsAllowed} remaining)
+            {/* Service Fee Credits (if available) */}
+            {credit.serviceFeeFreeAllowed && credit.serviceFeeFreeAllowed > 0 && (
+              <div className="text-sm text-slate-300 mb-2">
+                + {credit.serviceFeeFreeAllowed} free service fee discounts
+              </div>
+            )}
+
+            {/* Remaining counters */}
+            <div className="text-sm font-semibold text-green-400 mt-2 space-y-1">
+              <div>
+                Cards: {credit.cardAddsFreeRemaining} of {credit.cardAddsAllowed} remaining
+              </div>
+              {credit.serviceFeeFreeAllowed && credit.serviceFeeFreeAllowed > 0 && (
+                <div>
+                  Service Fees: {credit.serviceFeeFreeRemaining || 0} of {credit.serviceFeeFreeAllowed} remaining
+                </div>
+              )}
             </div>
           </div>
 
@@ -103,13 +119,23 @@ export function OnrampCreditPopup({
               </div>
             </div>
 
-            {/* Item 2: Free now */}
+            {/* Item 2: Free cards now */}
             <div className="flex items-start mb-3.5 text-sm">
               <span className="mr-2.5 text-lg text-green-400">✨</span>
               <div className="text-white">
-                <strong>Now: FREE</strong> (up to {credit.cardAddsAllowed} times)
+                <strong>Cards: FREE</strong> (up to {credit.cardAddsAllowed} times)
               </div>
             </div>
+
+            {/* Item 2b: Free service fees (if available) */}
+            {credit.serviceFeeFreeAllowed && credit.serviceFeeFreeAllowed > 0 && (
+              <div className="flex items-start mb-3.5 text-sm">
+                <span className="mr-2.5 text-lg text-green-400">💰</span>
+                <div className="text-white">
+                  <strong>Service Fees: FREE</strong> (up to {credit.serviceFeeFreeAllowed} times)
+                </div>
+              </div>
+            )}
 
             {/* Item 3: Expiry */}
             <div className="flex items-start text-sm">

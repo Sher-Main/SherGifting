@@ -12,6 +12,12 @@ export interface HandleCardAddResult {
   transactionId: string;
 }
 
+export interface HandleServiceFeeResult {
+  isFree: boolean;
+  serviceFeeFreeRemaining: number;
+  creditsRemaining: number;
+}
+
 /**
  * handleCardAdd
  * 
@@ -111,6 +117,91 @@ export async function handleCardAdd(
 
   } catch (error) {
     console.error('❌ Error in handleCardAdd:', error);
+    throw error;
+  }
+}
+
+/**
+ * handleServiceFee
+ * 
+ * Called when user sends a gift (to check if service fee is free)
+ * 
+ * Logic:
+ * 1. Check if user has active onramp credit
+ * 2. If yes AND hasn't used all 5 free service fee discounts:
+ *    - Mark service fee as FREE
+ *    - Charge $0
+ *    - Decrement service fee counter
+ * 3. If no OR used all 5 free discounts:
+ *    - Mark service fee as PAID
+ *    - Charge $1
+ * 4. Return result to caller
+ */
+export async function handleServiceFee(
+  userId: string
+): Promise<HandleServiceFeeResult> {
+  console.log(`💰 handleServiceFee called for user ${userId}`);
+
+  try {
+    // Step 1: Get user's active credit (if exists)
+    const activeCredit = await getOnrampCreditByUserId(userId);
+
+    console.log(`   Active Credit: ${activeCredit ? 'YES' : 'NO'}`);
+
+    // Step 2: Determine if this service fee is FREE or PAID
+    let isFree = false;
+    let creditsRemaining = 0;
+    let serviceFeeFreeRemaining = 0;
+
+    // Check conditions for free service fee
+    if (
+      activeCredit &&
+      activeCredit.service_fee_free_used < activeCredit.service_fee_free_allowed
+    ) {
+      // YES: This service fee is FREE!
+      isFree = true;
+
+      console.log(`   ✨ FREE SERVICE FEE (${activeCredit.service_fee_free_used} of ${activeCredit.service_fee_free_allowed} used)`);
+
+      // Step 3: Update credit tracking
+      const updated = await updateOnrampCredit(activeCredit.id, {
+        service_fee_free_used: activeCredit.service_fee_free_used + 1,
+      });
+
+      if (updated) {
+        creditsRemaining = updated.credits_remaining;
+        serviceFeeFreeRemaining = updated.service_fee_free_allowed - updated.service_fee_free_used;
+
+        console.log(`   Updated Credit: ${serviceFeeFreeRemaining} service fee discounts remaining`);
+      } else {
+        // Fallback if update failed
+        creditsRemaining = activeCredit.credits_remaining;
+        serviceFeeFreeRemaining = activeCredit.service_fee_free_allowed - (activeCredit.service_fee_free_used + 1);
+      }
+
+    } else {
+      // NO: This service fee costs $1
+      isFree = false;
+      serviceFeeFreeRemaining = activeCredit
+        ? activeCredit.service_fee_free_allowed - activeCredit.service_fee_free_used
+        : 0;
+
+      console.log(`   💳 PAID SERVICE FEE ($1.00)`);
+    }
+
+    // Step 4: Return result
+    const result: HandleServiceFeeResult = {
+      isFree,
+      serviceFeeFreeRemaining,
+      creditsRemaining,
+    };
+
+    console.log(`   ✅ Result:`, result);
+
+    return result;
+
+  } catch (error) {
+    console.error('❌ Error in handleServiceFee:', error);
     throw error;
   }
 }

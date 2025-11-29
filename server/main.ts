@@ -21,7 +21,7 @@ import {
   pool,
   DbUser,
 } from './database';
-import { handleCardAdd } from './lib/onramp';
+import { handleCardAdd, handleServiceFee } from './lib/onramp';
 import userRoutes from './routes/user';
 import onrampRoutes from './routes/onramp';
 import cronRoutes from './routes/cron';
@@ -880,24 +880,111 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
     console.log('✅ Funding transaction verified!');
 
     // Check if a card is selected first
-    const hasCard = !!card_type && !!card_recipient_name;
+    // IMPORTANT: If card_type is provided, we should generate the card even if recipient_name is missing
+    // We'll use a fallback name if needed
+    const hasCard = !!card_type;
+    const effectiveRecipientName = card_recipient_name || (hasCard ? 'Friend' : null);
     
-    // Check if this card is FREE (using onramp credit) - ONLY if card is selected
-    let cardResult = null;
+    console.log('🎴 Card selection check:', {
+      hasCard,
+      card_type,
+      card_recipient_name,
+      effectiveRecipientName,
+      card_price_usd,
+    });
+    
+    // CRITICAL FIX: Generate card URL FIRST (before consuming credit)
+    // This ensures we only consume credit if card generation succeeds
+    let cardCloudinaryUrl: string | null = null;
+    let cardGenerationSucceeded = false;
+    
     if (hasCard) {
       try {
+        console.log('🎴 Generating personalized card URL...', {
+          card_type,
+          card_recipient_name,
+          effectiveRecipientName,
+        });
+        
+        // Validate inputs before attempting generation
+        if (!card_type) {
+          throw new Error('card_type is required but was not provided');
+        }
+        
+        // Check Cloudinary config before attempting
+        if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY) {
+          throw new Error('Cloudinary credentials not configured');
+        }
+        
+        cardCloudinaryUrl = generatePersonalizedCardUrl(card_type, effectiveRecipientName);
+        
+        if (!cardCloudinaryUrl || cardCloudinaryUrl.trim() === '') {
+          throw new Error('Card URL generation returned empty string');
+        }
+        
+        console.log('✅ Card URL generated:', cardCloudinaryUrl);
+        cardGenerationSucceeded = true;
+        
+      } catch (cardError: any) {
+        console.error('❌ Error generating card URL:', cardError);
+        console.error('❌ Card error details:', {
+          message: cardError?.message,
+          stack: cardError?.stack,
+          card_type,
+          card_recipient_name,
+          effectiveRecipientName,
+          hasCloudinaryConfig: !!(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY),
+        });
+        // Don't fail gift creation, but mark card generation as failed
+        console.warn('⚠️ Card generation failed - will NOT consume credit to prevent credit loss');
+        cardCloudinaryUrl = null;
+        cardGenerationSucceeded = false;
+      }
+    } else {
+      console.log('📤 No card selected, skipping card generation');
+      if (card_type || card_recipient_name) {
+        console.warn('⚠️ WARNING: Card fields partially set but hasCard is false!', {
+          card_type: !!card_type,
+          card_recipient_name: !!card_recipient_name,
+        });
+      }
+    }
+    
+    // ONLY consume credit if card generation succeeded
+    // This prevents credits from being consumed when card generation fails
+    let cardResult = null;
+    if (hasCard && cardGenerationSucceeded) {
+      try {
         cardResult = await handleCardAdd(sender_did);
-        console.log(`📤 Card credit check:`, {
+        console.log(`📤 Card credit consumed:`, {
           isFree: cardResult.isFree,
           freeRemaining: cardResult.cardAddsFreeRemaining,
           creditsRemaining: cardResult.creditsRemaining,
         });
       } catch (creditError) {
-        console.error('⚠️ Error checking credit (continuing with normal flow):', creditError);
-        // Don't fail gift creation if credit check fails
+        console.error('⚠️ Error consuming credit (card was generated but credit update failed):', creditError);
+        // Card was generated but credit wasn't consumed - this is a problem
+        // We should ideally rollback or handle this case
+        console.warn('⚠️ WARNING: Card was generated but credit was not consumed!');
       }
+    } else if (hasCard && !cardGenerationSucceeded) {
+      console.log('📤 Card generation failed - skipping credit consumption to prevent credit loss');
     } else {
-      console.log('📤 No card selected, skipping credit check');
+      console.log('📤 No card selected - skipping credit check');
+    }
+
+    // Check if service fee is FREE (using onramp credit)
+    let serviceFeeResult = null;
+    try {
+      serviceFeeResult = await handleServiceFee(sender_did);
+      console.log(`💰 Service fee credit check:`, {
+        isFree: serviceFeeResult.isFree,
+        freeRemaining: serviceFeeResult.serviceFeeFreeRemaining,
+        creditsRemaining: serviceFeeResult.creditsRemaining,
+      });
+    } catch (serviceFeeError) {
+      console.error('⚠️ Error checking service fee credit (continuing with normal flow):', serviceFeeError);
+      // Don't fail gift creation if credit check fails
     }
 
     // Fetch token price and calculate USD value for storage (before creating gift record)
@@ -936,20 +1023,8 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       return res.status(500).json({ error: 'Failed to encrypt TipLink URL' });
     }
 
-    // Generate personalized card URL if card is selected
-    let cardCloudinaryUrl: string | null = null;
-    
-    if (hasCard) {
-      try {
-        console.log('🎴 Generating personalized card URL...');
-        cardCloudinaryUrl = generatePersonalizedCardUrl(card_type, card_recipient_name);
-        console.log('✅ Card URL generated:', cardCloudinaryUrl);
-      } catch (cardError: any) {
-        console.error('❌ Error generating card URL:', cardError);
-        // Don't fail gift creation if card generation fails, just log the error
-        console.warn('⚠️ Continuing without card URL');
-      }
-    }
+    // Card URL generation moved earlier (before credit consumption)
+    // cardCloudinaryUrl is already set above
 
     // Create gift record
     const giftId = `gift_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -980,13 +1055,13 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
         claim_token: claimToken,
         tiplink_url_encrypted: encryptedTipLink,
         expires_at: expiresAt,
-        has_greeting_card: hasCard,
-        card_type: card_type || null,
+        has_greeting_card: hasCard && cardGenerationSucceeded, // Only mark as having card if generation succeeded
+        card_type: (hasCard && cardGenerationSucceeded) ? card_type : null,
         card_cloudinary_url: cardCloudinaryUrl,
-        card_recipient_name: card_recipient_name || null,
-        card_price_usd: hasCard 
+        card_recipient_name: (hasCard && cardGenerationSucceeded) ? effectiveRecipientName : null,
+        card_price_usd: (hasCard && cardGenerationSucceeded)
           ? (cardResult?.isFree ? 0.00 : (card_price_usd || 1.00))
-          : null,
+          : null, // Don't charge if card generation failed
       });
       sharedCache.delete(`gift_history:${sender_did}`);
       console.log('✅ Gift saved to database with security fields and card info:', newGift.id);
@@ -1019,6 +1094,15 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
     const fullClaimUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}${claimUrl}`;
     
     console.log('📧 Sending email notification to recipient with secure claim token...');
+    console.log('📧 Email details:', {
+      recipientEmail: recipient_email,
+      senderEmail: sender.email,
+      hasCard,
+      cardGenerationSucceeded,
+      cardCloudinaryUrl: cardCloudinaryUrl ? 'SET' : 'NULL',
+      cardUrlLength: cardCloudinaryUrl?.length || 0,
+    });
+    
     const emailResult = await sendGiftNotification({
       recipientEmail: recipient_email,
       senderEmail: sender.email,
@@ -1028,8 +1112,14 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       usdValue: usdValue, // Use the USD value we calculated and stored in gift
       claimUrl: fullClaimUrl,
       message: message || undefined,
-      cardImageUrl: cardCloudinaryUrl || undefined,
+      cardImageUrl: cardCloudinaryUrl || undefined, // Will be undefined if generation failed
     });
+    
+    if (hasCard && !cardGenerationSucceeded) {
+      console.error('❌ CRITICAL: Card was selected but generation failed! Email sent without card image. Credit was NOT consumed.');
+    } else if (hasCard && cardGenerationSucceeded && !cardCloudinaryUrl) {
+      console.error('❌ CRITICAL: Card generation succeeded but cardCloudinaryUrl is NULL! This should not happen.');
+    }
 
     if (emailResult.success) {
       console.log('✅ Email sent successfully to:', recipient_email);
@@ -1047,6 +1137,8 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       cardWasFree: cardResult?.isFree || false,
       creditsRemaining: cardResult?.creditsRemaining || 0,
       freeAddsRemaining: cardResult?.cardAddsFreeRemaining || 0,
+      serviceFeeWasFree: serviceFeeResult?.isFree || false,
+      serviceFeeFreeRemaining: serviceFeeResult?.serviceFeeFreeRemaining || 0,
     });
   } catch (error: any) {
     console.error('❌ Error creating gift:', error);
