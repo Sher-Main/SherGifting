@@ -1381,10 +1381,39 @@ const GiftPage: React.FC = () => {
 
             const { claim_url, gift_id } = createResponse;
             console.log('✅ Gift created! Gift ID:', gift_id);
+            console.log('📋 Claim URL from API:', claim_url);
+
+            // Construct the correct claim URL
+            // The API should return '/claim?token=...' format
+            let finalClaimUrl: string;
+
+            // Check if claim_url is already a full URL
+            if (claim_url && claim_url.startsWith('http')) {
+                // If it's already a full URL, check if it's the correct format
+                if (claim_url.includes('/claim?token=')) {
+                    // It's already a full claim URL, use it as-is
+                    finalClaimUrl = claim_url;
+                } else if (claim_url.includes('tiplink.io')) {
+                    // It's a TipLink URL (wrong format from API) - this is a server bug
+                    console.error('❌ API returned TipLink URL instead of claim URL. This is a server bug.');
+                    console.error('   TipLink URL:', claim_url);
+                    console.error('   Gift ID:', gift_id);
+                    // Use TipLink URL as-is to avoid double URL issue
+                    // Note: This is incorrect - the server should return the claim URL
+                    finalClaimUrl = claim_url;
+                } else {
+                    // It's a full URL but not in expected format
+                    console.warn('⚠️ Unexpected URL format from API:', claim_url);
+                    finalClaimUrl = claim_url;
+                }
+            } else {
+                // It's a relative path (expected format: '/claim?token=...')
+                // Construct full URL
+                finalClaimUrl = `${window.location.origin}${claim_url}`;
+            }
 
             // Generate QR code for the claim URL
-            const fullClaimUrl = `${window.location.origin}${claim_url}`;
-            const qrCodeDataUrl = await QRCode.toDataURL(fullClaimUrl, {
+            const qrCodeDataUrl = await QRCode.toDataURL(finalClaimUrl, {
                 width: 300,
                 margin: 2,
                 color: {
@@ -1410,13 +1439,13 @@ const GiftPage: React.FC = () => {
                 type: 'success',
                 message: 'Gift link created successfully!',
                 actionLabel: 'Copy',
-                onAction: () => copyToClipboard(fullClaimUrl),
+                onAction: () => copyToClipboard(finalClaimUrl),
                 duration: 10000,
             });
             
             // Set gift details and show success modal
             setGiftDetails({
-                claim_url: fullClaimUrl,
+                claim_url: finalClaimUrl,
                 amount: numericAmount.toString(),
                 token: currentToken.symbol,
                 usdValue: giftUsdValue,
