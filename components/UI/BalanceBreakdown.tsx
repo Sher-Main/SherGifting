@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { TokenBalance } from '../../types';
 
 interface BalanceBreakdownProps {
@@ -12,6 +12,17 @@ const BalanceBreakdown: React.FC<BalanceBreakdownProps> = ({
   lastUpdated,
   totalBalance,
 }) => {
+  const [currentTime, setCurrentTime] = useState(Date.now());
+
+  // Update current time every second to refresh "Last updated" display
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -22,8 +33,8 @@ const BalanceBreakdown: React.FC<BalanceBreakdownProps> = ({
   };
 
   const getRelativeTime = (timestamp: number) => {
-    const seconds = Math.floor((Date.now() - timestamp) / 1000);
-    if (seconds < 60) return `${seconds} seconds ago`;
+    const seconds = Math.floor((currentTime - timestamp) / 1000);
+    if (seconds < 60) return `${seconds} second${seconds !== 1 ? 's' : ''} ago`;
     const minutes = Math.floor(seconds / 60);
     if (minutes < 60) return `${minutes} minute${minutes !== 1 ? 's' : ''} ago`;
     const hours = Math.floor(minutes / 60);
@@ -32,31 +43,44 @@ const BalanceBreakdown: React.FC<BalanceBreakdownProps> = ({
     return `${days} day${days !== 1 ? 's' : ''} ago`;
   };
 
-  // Get top 3 tokens by USD value
-  const topTokens = balances
-    .filter((b) => b.usdValue && b.usdValue > 0)
+  // Get SOL balance first, then other tokens
+  const solBalance = balances.find(b => b.symbol === 'SOL');
+  const otherTokens = balances
+    .filter((b) => b.symbol !== 'SOL' && b.usdValue && b.usdValue > 0)
     .sort((a, b) => (b.usdValue || 0) - (a.usdValue || 0))
-    .slice(0, 3);
+    .slice(0, 2); // Show SOL + 2 other tokens
 
   return (
     <div className="space-y-2">
       {/* Token breakdown */}
-      {topTokens.length > 0 && (
+      {(solBalance || otherTokens.length > 0) && (
         <div className="flex flex-wrap items-center gap-3 text-sm">
-          {topTokens.map((token, index) => (
+          {/* Show SOL balance with actual amount */}
+          {solBalance && (
+            <div className="flex items-center gap-2">
+              <span className="text-white font-medium">{solBalance.symbol}</span>
+              <span className="text-[#94A3B8]">
+                {solBalance.balance.toFixed(4)}
+              </span>
+            </div>
+          )}
+          
+          {/* Show other tokens with USD value */}
+          {otherTokens.map((token, index) => (
             <div key={token.address} className="flex items-center gap-2">
-              {index > 0 && <span className="text-[#64748B]">•</span>}
+              {(solBalance || index > 0) && <span className="text-[#64748B]">•</span>}
               <span className="text-white font-medium">{token.symbol}</span>
               <span className="text-[#94A3B8]">
                 {formatCurrency(token.usdValue || 0)}
               </span>
             </div>
           ))}
-          {balances.length > 3 && (
+          
+          {balances.length > (solBalance ? 3 : 2) && (
             <>
               <span className="text-[#64748B]">•</span>
               <span className="text-[#64748B] text-xs">
-                +{balances.length - 3} more
+                +{balances.length - (solBalance ? 3 : 2)} more
               </span>
             </>
           )}

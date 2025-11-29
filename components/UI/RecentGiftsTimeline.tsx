@@ -115,13 +115,6 @@ const RecentGiftsTimeline: React.FC<RecentGiftsTimelineProps> = ({
             </div>
             <div>
               <p className="text-sm text-[#94A3B8] mb-2">No gifts sent yet</p>
-              <GlowButton
-                variant="cyan"
-                onClick={() => navigate('/gift')}
-                className="!py-2 !px-4 !text-sm"
-              >
-                Send Your First Gift
-              </GlowButton>
             </div>
           </div>
         ) : (

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { User, LogOut, Copy, Settings, UserCircle, ChevronDown } from 'lucide-react';
+import { User, LogOut, Copy, ChevronDown } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from './ToastContainer';
 import GlowButton from './GlowButton';
@@ -122,22 +122,6 @@ const UserMenuDropdown: React.FC<UserMenuDropdownProps> = ({ user, onLogout }) =
 
             {/* Menu Items */}
             <div className="py-2">
-              <button
-                onClick={() => setIsOpen(false)}
-                className="w-full px-4 py-3 text-left text-sm text-[#94A3B8] hover:bg-white/5 hover:text-white transition-colors flex items-center gap-3"
-                role="menuitem"
-              >
-                <UserCircle size={16} />
-                <span>View Profile</span>
-              </button>
-              <button
-                onClick={() => setIsOpen(false)}
-                className="w-full px-4 py-3 text-left text-sm text-[#94A3B8] hover:bg-white/5 hover:text-white transition-colors flex items-center gap-3"
-                role="menuitem"
-              >
-                <Settings size={16} />
-                <span>Settings</span>
-              </button>
               <div className="h-px bg-white/10 my-2" />
               <button
                 onClick={() => {

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ChevronDown, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { ChevronDown, ArrowUpDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export type SortDirection = 'asc' | 'desc';
@@ -40,11 +40,6 @@ const SortDropdown: React.FC<SortDropdownProps> = ({
 
   const selectedOption = options.find((opt) => opt.value === value) || options[0];
 
-  const handleToggleDirection = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onChange(value, direction === 'asc' ? 'desc' : 'asc');
-  };
-
   return (
     <div className={`relative ${className}`} ref={dropdownRef}>
       <button
@@ -56,18 +51,6 @@ const SortDropdown: React.FC<SortDropdownProps> = ({
       >
         <ArrowUpDown size={16} className="text-[#94A3B8]" />
         <span className="text-sm font-medium">{selectedOption.label}</span>
-        <button
-          type="button"
-          onClick={handleToggleDirection}
-          className="ml-1 p-1 rounded hover:bg-white/10 transition-colors"
-          aria-label={`Sort ${direction === 'asc' ? 'ascending' : 'descending'}`}
-        >
-          {direction === 'asc' ? (
-            <ArrowUp size={14} className="text-[#06B6D4]" />
-          ) : (
-            <ArrowDown size={14} className="text-[#06B6D4]" />
-          )}
-        </button>
         <ChevronDown size={16} className={`text-[#94A3B8] transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 

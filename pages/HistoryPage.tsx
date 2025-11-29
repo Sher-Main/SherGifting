@@ -10,7 +10,6 @@ import GlassCard from '../components/UI/GlassCard';
 import StatusChip from '../components/UI/StatusChip';
 import SearchBar from '../components/UI/SearchBar';
 import FilterChips from '../components/UI/FilterChips';
-import SortDropdown, { SortDirection } from '../components/UI/SortDropdown';
 import ViewToggle from '../components/UI/ViewToggle';
 import EmptyState from '../components/UI/EmptyState';
 import GiftDetailsModal from '../components/UI/GiftDetailsModal';
@@ -31,7 +30,8 @@ interface Transaction {
   createdAt?: string;
 }
 
-type SortField = 'date' | 'amount' | 'status' | 'recipient';
+type SortField = 'amount' | 'status' | 'recipient';
+type SortDirection = 'asc' | 'desc';
 
 const HistoryPage: React.FC = () => {
   const { user } = useAuth();
@@ -49,7 +49,7 @@ const HistoryPage: React.FC = () => {
   // Search and filter state
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
-  const [sortField, setSortField] = useState<SortField>('date');
+  const [sortField, setSortField] = useState<SortField>('amount');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [selectedGift, setSelectedGift] = useState<Gift | null>(null);
@@ -136,9 +136,6 @@ const HistoryPage: React.FC = () => {
     filtered.sort((a, b) => {
       let comparison = 0;
       switch (sortField) {
-        case 'date':
-          comparison = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-          break;
         case 'amount':
           comparison = (a.usd_value || a.amount) - (b.usd_value || b.amount);
           break;
@@ -268,12 +265,6 @@ const HistoryPage: React.FC = () => {
     ];
   }, [gifts]);
 
-  const sortOptions = [
-    { value: 'date', label: 'Date' },
-    { value: 'amount', label: 'Amount' },
-    { value: 'status', label: 'Status' },
-    { value: 'recipient', label: 'Recipient' },
-  ];
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-10 animate-fade-in-up">
@@ -329,15 +320,6 @@ const HistoryPage: React.FC = () => {
                 />
                 
                 <div className="flex items-center gap-3">
-                  <SortDropdown
-                    options={sortOptions}
-                    value={sortField}
-                    direction={sortDirection}
-                    onChange={(value, direction) => {
-                      setSortField(value as SortField);
-                      setSortDirection(direction);
-                    }}
-                  />
                   <ViewToggle
                     viewMode={viewMode}
                     onViewChange={setViewMode}
