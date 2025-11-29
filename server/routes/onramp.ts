@@ -500,101 +500,125 @@ router.get('/users/me/transaction-history', authenticateToken, async (req: AuthR
       return res.status(503).json({ error: 'Database not available' });
     }
 
-    // Privy user ID is the internal ID, but transactions are stored with privy_did (did:privy:...)
-    // Try multiple methods to get the correct privy_did
-    let userId: string;
+    // 🔥 CRITICAL FIX: First, try to find the user in the database by Privy userId
+    // Privy's userId might be in format "clxxxxx" or "did:privy:clxxxxx"
+    let userId: string | null = null;
     
-    // Method 1: Check if req.user has privy_did or id field that starts with did:privy:
-    if (req.user?.id && req.user.id.startsWith('did:privy:')) {
-      userId = req.user.id;
-      console.log(`   Method 1: Using req.user.id: ${userId}`);
-    } else if (req.user?.privy_did) {
-      userId = req.user.privy_did;
-      console.log(`   Method 2: Using req.user.privy_did: ${userId}`);
+    // Method 1: Check if req.user.id matches a privy_did in database (try multiple formats)
+    const possibleUserIds = [
+      privyUserId,
+      `did:privy:${privyUserId}`,
+      privyUserId.replace('did:privy:', ''),
+    ];
+    
+    const userLookup1 = await pool.query(
+      `SELECT privy_did FROM users WHERE privy_did = ANY($1::text[]) LIMIT 1`,
+      [possibleUserIds]
+    );
+    
+    if (userLookup1.rows.length > 0) {
+      userId = userLookup1.rows[0].privy_did;
+      console.log(`   ✅ Found user in DB (Method 1): ${userId}`);
     } else {
-      // Method 3: Look up user in database by Privy user ID to get their privy_did
-      try {
-        const { getUserByPrivyDid } = await import('../database');
-        // First try to find user by constructing privy_did
-        const constructedDid = `did:privy:${privyUserId}`;
-        let dbUser = await getUserByPrivyDid(constructedDid);
+      // Method 2: Try to find by email if available
+      if (req.user?.email?.address) {
+        const userLookup2 = await pool.query(
+          `SELECT privy_did FROM users WHERE email = $1 LIMIT 1`,
+          [req.user.email.address.toLowerCase()]
+        );
         
-        if (!dbUser) {
-          // If not found, try querying users table to find matching user
-          const userResult = await pool.query(
-            `SELECT privy_did FROM users WHERE privy_did LIKE $1 OR privy_did = $2 LIMIT 1`,
-            [`%${privyUserId}%`, privyUserId]
-          );
-          
-          if (userResult.rows.length > 0) {
-            userId = userResult.rows[0].privy_did;
-            console.log(`   Method 3a: Found user in DB: ${userId}`);
-          } else {
-            // Last resort: construct it
-            userId = constructedDid;
-            console.log(`   Method 3b: Constructed privy_did: ${userId}`);
-          }
-        } else {
-          userId = dbUser.privy_did;
-          console.log(`   Method 3c: Found user by constructed DID: ${userId}`);
+        if (userLookup2.rows.length > 0) {
+          userId = userLookup2.rows[0].privy_did;
+          console.log(`   ✅ Found user in DB (Method 2 - by email): ${userId}`);
         }
-      } catch (error) {
-        // Fallback: construct it
-        userId = `did:privy:${privyUserId}`;
-        console.log(`   Method 3d: Fallback - constructed privy_did: ${userId}`);
+      }
+    }
+    
+    // Method 3: If still not found, use the most likely format
+    if (!userId) {
+      if (req.user?.id && req.user.id.startsWith('did:privy:')) {
+        userId = req.user.id;
+        console.log(`   Method 3a: Using req.user.id: ${userId}`);
+      } else if (req.user?.privy_did) {
+        userId = req.user.privy_did;
+        console.log(`   Method 3b: Using req.user.privy_did: ${userId}`);
+      } else {
+        // Privy userId might be "clxxxxx" format, need to check if it should be "did:privy:clxxxxx"
+        if (privyUserId.startsWith('did:privy:')) {
+          userId = privyUserId;
+        } else {
+          userId = `did:privy:${privyUserId}`;
+        }
+        console.log(`   ⚠️ User not found in DB, using constructed: ${userId}`);
       }
     }
     
     console.log(`   Final privy_did: ${userId}`);
 
-    // Query 1: Get all onramp transactions
-    let onrampTxs = await getOnrampTransactionsByUserId(userId);
-    console.log(`   Onramp transactions found with ${userId}: ${onrampTxs.length}`);
-
-    // If no transactions found, try alternative user ID formats
+    // Query 1: Get all onramp transactions - try exact match first, then flexible
+    let onrampTxs: any[] = [];
+    
+    const exactMatch = await pool.query(
+      `SELECT * FROM onramp_transactions WHERE user_id = $1 ORDER BY created_at DESC`,
+      [userId]
+    );
+    onrampTxs = exactMatch.rows;
+    console.log(`   Onramp transactions (exact match with ${userId}): ${onrampTxs.length}`);
+    
+    // If no results, try all possible user ID formats
     if (onrampTxs.length === 0) {
-      console.log(`   No transactions found, trying alternative formats...`);
+      const allFormats = [
+        userId,
+        userId.replace('did:privy:', ''),
+        `did:privy:${userId.replace('did:privy:', '')}`,
+        privyUserId,
+        `did:privy:${privyUserId}`,
+        privyUserId.replace('did:privy:', ''),
+      ];
+      // Remove duplicates
+      const uniqueFormats = [...new Set(allFormats)];
       
-      // Try without did:privy: prefix
-      if (userId.startsWith('did:privy:')) {
-        const altUserId = userId.replace('did:privy:', '');
-        onrampTxs = await getOnrampTransactionsByUserId(altUserId);
-        console.log(`   Tried ${altUserId}: ${onrampTxs.length} transactions`);
-      }
-      
-      // Try with did:privy: prefix if we don't have it
-      if (onrampTxs.length === 0 && !userId.startsWith('did:privy:')) {
-        const altUserId = `did:privy:${userId}`;
-        onrampTxs = await getOnrampTransactionsByUserId(altUserId);
-        console.log(`   Tried ${altUserId}: ${onrampTxs.length} transactions`);
-      }
-      
-      // Last resort: query all transactions and filter by matching user_id patterns
-      if (onrampTxs.length === 0) {
-        const allTxsResult = await pool.query(`
-          SELECT * FROM onramp_transactions 
-          WHERE user_id LIKE $1 OR user_id = $2 OR user_id LIKE $3
-          ORDER BY created_at DESC
-        `, [`%${privyUserId}%`, privyUserId, `did:privy:%${privyUserId}%`]);
-        onrampTxs = allTxsResult.rows;
-        console.log(`   Tried pattern matching: ${onrampTxs.length} transactions`);
-      }
+      const patternMatch = await pool.query(
+        `SELECT * FROM onramp_transactions 
+         WHERE user_id = ANY($1::text[])
+         ORDER BY created_at DESC`,
+        [uniqueFormats]
+      );
+      onrampTxs = patternMatch.rows;
+      console.log(`   Onramp transactions (flexible match): ${onrampTxs.length}`);
     }
 
-    // Query 2: Get all card transactions
-    let cardTxs = await getCardTransactionsByUserId(userId);
-    console.log(`   Card transactions found with ${userId}: ${cardTxs.length}`);
-
-    // If no card transactions found, try alternative formats
+    // Query 2: Get all card transactions - try exact match first, then flexible
+    let cardTxs: any[] = [];
+    
+    const cardExactMatch = await pool.query(
+      `SELECT * FROM card_transactions WHERE user_id = $1 ORDER BY created_at DESC`,
+      [userId]
+    );
+    cardTxs = cardExactMatch.rows;
+    console.log(`   Card transactions (exact match with ${userId}): ${cardTxs.length}`);
+    
+    // If no results, try all possible user ID formats
     if (cardTxs.length === 0) {
-      if (userId.startsWith('did:privy:')) {
-        const altUserId = userId.replace('did:privy:', '');
-        cardTxs = await getCardTransactionsByUserId(altUserId);
-      }
-      if (cardTxs.length === 0 && !userId.startsWith('did:privy:')) {
-        const altUserId = `did:privy:${userId}`;
-        cardTxs = await getCardTransactionsByUserId(altUserId);
-      }
+      const allFormats = [
+        userId,
+        userId.replace('did:privy:', ''),
+        `did:privy:${userId.replace('did:privy:', '')}`,
+        privyUserId,
+        `did:privy:${privyUserId}`,
+        privyUserId.replace('did:privy:', ''),
+      ];
+      // Remove duplicates
+      const uniqueFormats = [...new Set(allFormats)];
+      
+      const cardPatternMatch = await pool.query(
+        `SELECT * FROM card_transactions 
+         WHERE user_id = ANY($1::text[])
+         ORDER BY created_at DESC`,
+        [uniqueFormats]
+      );
+      cardTxs = cardPatternMatch.rows;
+      console.log(`   Card transactions (flexible match): ${cardTxs.length}`);
     }
 
     // Format and combine
@@ -624,7 +648,8 @@ router.get('/users/me/transaction-history', authenticateToken, async (req: AuthR
       return bTime - aTime;
     });
 
-    console.log(`   Total transactions: ${sorted.length}`);
+    console.log(`   ✅ Total transactions found: ${sorted.length}`);
+    console.log(`   Breakdown: ${onrampTxs.length} onramp, ${cardTxs.length} card`);
 
     return res.status(200).json(sorted);
 
