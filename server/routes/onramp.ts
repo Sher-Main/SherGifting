@@ -553,24 +553,33 @@ router.get('/users/me/transaction-history', authenticateToken, async (req: AuthR
       }
     }
     
-    console.log(`   Final privy_did: ${userId}`);
+    // 🔥 FIX: Ensure userId is never null (TypeScript safety check)
+    if (!userId) {
+      console.error('❌ Failed to resolve userId, using fallback');
+      userId = `did:privy:${privyUserId}`;
+    }
+
+    // Now TypeScript knows userId is not null
+    const finalUserId: string = userId;
+    
+    console.log(`   Final privy_did: ${finalUserId}`);
 
     // Query 1: Get all onramp transactions - try exact match first, then flexible
     let onrampTxs: any[] = [];
     
     const exactMatch = await pool.query(
       `SELECT * FROM onramp_transactions WHERE user_id = $1 ORDER BY created_at DESC`,
-      [userId]
+      [finalUserId]
     );
     onrampTxs = exactMatch.rows;
-    console.log(`   Onramp transactions (exact match with ${userId}): ${onrampTxs.length}`);
+    console.log(`   Onramp transactions (exact match with ${finalUserId}): ${onrampTxs.length}`);
     
     // If no results, try all possible user ID formats
     if (onrampTxs.length === 0) {
       const allFormats = [
-        userId,
-        userId.replace('did:privy:', ''),
-        `did:privy:${userId.replace('did:privy:', '')}`,
+        finalUserId,
+        finalUserId.replace('did:privy:', ''),
+        `did:privy:${finalUserId.replace('did:privy:', '')}`,
         privyUserId,
         `did:privy:${privyUserId}`,
         privyUserId.replace('did:privy:', ''),
@@ -593,17 +602,17 @@ router.get('/users/me/transaction-history', authenticateToken, async (req: AuthR
     
     const cardExactMatch = await pool.query(
       `SELECT * FROM card_transactions WHERE user_id = $1 ORDER BY created_at DESC`,
-      [userId]
+      [finalUserId]
     );
     cardTxs = cardExactMatch.rows;
-    console.log(`   Card transactions (exact match with ${userId}): ${cardTxs.length}`);
+    console.log(`   Card transactions (exact match with ${finalUserId}): ${cardTxs.length}`);
     
     // If no results, try all possible user ID formats
     if (cardTxs.length === 0) {
       const allFormats = [
-        userId,
-        userId.replace('did:privy:', ''),
-        `did:privy:${userId.replace('did:privy:', '')}`,
+        finalUserId,
+        finalUserId.replace('did:privy:', ''),
+        `did:privy:${finalUserId.replace('did:privy:', '')}`,
         privyUserId,
         `did:privy:${privyUserId}`,
         privyUserId.replace('did:privy:', ''),
