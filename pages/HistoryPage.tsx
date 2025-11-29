@@ -50,27 +50,57 @@ const HistoryPage: React.FC = () => {
 
   useEffect(() => {
     const fetchTransactions = async () => {
-      if (!user?.privy_did) return;
+      if (!user?.privy_did) {
+        console.log('⏳ Waiting for user privy_did...');
+        return;
+      }
 
       setIsLoadingTransactions(true);
       try {
         const token = await getAccessToken();
-        const response = await fetch(getApiUrl('users/me/transaction-history'), {
+        const apiUrl = getApiUrl('users/me/transaction-history');
+        
+        console.log('🔍 Fetching transaction history:', {
+          apiUrl,
+          hasToken: !!token,
+          tokenPreview: token ? `${token.substring(0, 20)}...` : 'none',
+          userPrivyDid: user.privy_did,
+        });
+        
+        const response = await fetch(apiUrl, {
           headers: {
             'Authorization': `Bearer ${token || ''}`,
             'Content-Type': 'application/json',
           },
         });
 
+        console.log('📡 Transaction history response:', {
+          status: response.status,
+          statusText: response.statusText,
+          ok: response.ok,
+          url: response.url,
+        });
+
         if (!response.ok) {
-          throw new Error('Failed to fetch transaction history');
+          const errorText = await response.text();
+          console.error('❌ Transaction history error response:', {
+            status: response.status,
+            statusText: response.statusText,
+            body: errorText,
+          });
+          throw new Error(`Failed to fetch transaction history: ${response.status} ${response.statusText}`);
         }
 
         const data = await response.json();
+        console.log(`📜 Loaded ${data.length} transactions`, data);
         setTransactions(data);
-        console.log(`📜 Loaded ${data.length} transactions`);
       } catch (err) {
-        console.error('Error fetching transaction history:', err);
+        console.error('❌ Error fetching transaction history:', {
+          error: err,
+          message: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
+        // Don't set error state, just log it - user will see "No transactions yet"
       } finally {
         setIsLoadingTransactions(false);
       }
