@@ -1017,9 +1017,8 @@ const GiftPage: React.FC = () => {
                 }
                 
                 // ✅ FIX: Add SOL reserve for TipLink (needed for claim transaction fees + ATA creation)
-                const RENT_EXEMPTION_FOR_ATA = 0.00203928; // Rent for token account
-                const BASE_FEE = 0.000005; // Transaction fee
-                const TIPLINK_SOL_RESERVE = RENT_EXEMPTION_FOR_ATA + BASE_FEE + 0.0001; // Add buffer
+                // Reuse existing BASE_FEE and RENT_PER_ATA variables from above
+                const TIPLINK_SOL_RESERVE = RENT_PER_ATA + BASE_FEE + 0.0001; // Add buffer
                 estimatedRequiredSol += TIPLINK_SOL_RESERVE;
                 console.log(`💎 Adding TipLink SOL reserve: ${TIPLINK_SOL_RESERVE} SOL (for claim transaction fees and potential ATA creation)`);
                 
