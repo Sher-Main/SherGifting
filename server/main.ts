@@ -1528,12 +1528,24 @@ async function processGiftClaim(
       let tiplinkTokenAccount;
       try {
         tiplinkTokenAccount = await getAccount(connection, tiplinkATA);
-        const tokenBalance = Number(tiplinkTokenAccount.amount) / (10 ** gift.token_decimals);
+        const tokenBalanceRaw = Number(tiplinkTokenAccount.amount);
+        const tokenBalance = tokenBalanceRaw / (10 ** gift.token_decimals);
         console.log(`💰 TipLink ${gift.token_symbol} balance: ${tokenBalance} ${gift.token_symbol}`);
         
-        // Check if TipLink has enough tokens
-        if (tokenBalance < gift.amount) {
-          throw new Error(`Insufficient ${gift.token_symbol} balance in TipLink. Required: ${gift.amount}, Available: ${tokenBalance}`);
+        // Calculate required amount in raw units (smallest unit) to avoid floating-point precision issues
+        const requiredAmountRaw = Math.floor(gift.amount * (10 ** gift.token_decimals));
+        
+        // Check if TipLink has enough tokens (compare raw amounts to avoid floating-point issues)
+        if (tokenBalanceRaw < requiredAmountRaw) {
+          // If insufficient due to precision, use what's available (but log a warning)
+          const difference = (requiredAmountRaw - tokenBalanceRaw) / (10 ** gift.token_decimals);
+          if (difference < 0.000001) {
+            // Very small difference (likely precision issue) - allow it and transfer what's available
+            console.warn(`⚠️ TipLink has slightly less than requested (precision issue). Available: ${tokenBalance}, Requested: ${gift.amount}, Difference: ${difference}`);
+          } else {
+            // Significant difference - throw error
+            throw new Error(`Insufficient ${gift.token_symbol} balance in TipLink. Required: ${gift.amount}, Available: ${tokenBalance}`);
+          }
         }
         
         console.log(`✅ TipLink has sufficient ${gift.token_symbol} balance`);
@@ -1563,12 +1575,18 @@ async function processGiftClaim(
       }
 
       // Calculate transfer amount in token's smallest unit
-      const transferAmount = BigInt(Math.floor(gift.amount * (10 ** gift.token_decimals)));
+      // Use the minimum of requested amount and available balance to handle precision issues
+      const requestedAmountRaw = Math.floor(gift.amount * (10 ** gift.token_decimals));
+      const availableAmountRaw = Number(tiplinkTokenAccount.amount);
+      const transferAmount = BigInt(Math.min(requestedAmountRaw, availableAmountRaw));
+      
       console.log(`📊 Transfer details:`, {
         tokenSymbol: gift.token_symbol,
         tokenAmount: gift.amount,
+        requestedAmountRaw: requestedAmountRaw.toString(),
+        availableAmountRaw: availableAmountRaw.toString(),
         transferAmountRaw: transferAmount.toString(),
-        tiplinkBalance: Number(tiplinkTokenAccount.amount).toString(),
+        actualTransferAmount: Number(transferAmount) / (10 ** gift.token_decimals),
         recipientATA: recipientATA.toBase58()
       });
 
@@ -1589,6 +1607,9 @@ async function processGiftClaim(
         [tipLink.keypair],
         { commitment: 'confirmed' }
       );
+      
+      // Update claimedAmount to reflect actual amount transferred (may be less due to precision)
+      claimedAmount = Number(transferAmount) / (10 ** gift.token_decimals);
     }
 
     console.log('✅ Gift claimed! Transaction:', signature);
