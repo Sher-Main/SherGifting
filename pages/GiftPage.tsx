@@ -73,6 +73,11 @@ const GiftPage: React.FC = () => {
     const [onrampCredit, setOnrampCredit] = useState<any | null>(null);
     const [showCreditPopup, setShowCreditPopup] = useState(false);
     
+    // ATA fee state (for UI display)
+    const [recipientNeedsATA, setRecipientNeedsATA] = useState<boolean>(false);
+    const [ataFeeInSOL, setAtaFeeInSOL] = useState<number>(0);
+    const [solPrice, setSolPrice] = useState<number | null>(null);
+    
     // Confirmation modal state
     const [showConfirmModal, setShowConfirmModal] = useState(false);
     const [confirmDetails, setConfirmDetails] = useState<{
@@ -92,7 +97,38 @@ const GiftPage: React.FC = () => {
         cardFee: number;
         cardFeeUsd: number | null;
         hasCard: boolean;
+        ataFee: number;
+        ataFeeUsd: number | null;
+        recipientNeedsATA: boolean;
     } | null>(null);
+    
+    // Helper function to check if recipient ATA exists
+    const checkRecipientATA = async (
+        recipientWallet: string,
+        tokenMint: string
+    ): Promise<boolean> => {
+        try {
+            const splToken = await import('@solana/spl-token');
+            const { getAssociatedTokenAddress, getAccount, TOKEN_PROGRAM_ID } = splToken;
+            const recipientPubkey = new PublicKey(recipientWallet);
+            const mintPubkey = new PublicKey(tokenMint);
+            const recipientATA = await getAssociatedTokenAddress(
+                mintPubkey,
+                recipientPubkey,
+                true,
+                TOKEN_PROGRAM_ID
+            );
+            await getAccount(connection, recipientATA);
+            return true; // ATA exists
+        } catch (error: any) {
+            if (error.name === 'TokenAccountNotFoundError') {
+                return false; // ATA doesn't exist
+            }
+            // For other errors, assume ATA doesn't exist (safer to charge the fee)
+            console.warn('Error checking recipient ATA:', error);
+            return false;
+        }
+    };
     
     // Success modal state
     const [showSuccessModal, setShowSuccessModal] = useState(false);
@@ -274,6 +310,51 @@ const GiftPage: React.FC = () => {
         fetchFeeConfig();
     }, []);
 
+    // Fetch SOL price
+    useEffect(() => {
+        const fetchSOLPrice = async () => {
+            try {
+                const price = await priceService.getTokenPrice('So11111111111111111111111111111111111111112');
+                setSolPrice(price?.price || null);
+            } catch (error) {
+                console.warn('Failed to fetch SOL price:', error);
+            }
+        };
+        fetchSOLPrice();
+    }, []);
+    
+    // Check recipient ATA when recipient or token changes
+    useEffect(() => {
+        const checkATA = async () => {
+            if (!selectedToken || selectedToken.isNative || selectedToken.mint === 'So11111111111111111111111111111111111111112') {
+                setRecipientNeedsATA(false);
+                setAtaFeeInSOL(0);
+                return;
+            }
+            
+            const recipientWallet = resolvedRecipient?.wallet_address;
+            if (!recipientWallet) {
+                // Assume ATA needs to be created if we don't have recipient wallet
+                setRecipientNeedsATA(true);
+                setAtaFeeInSOL(0.00203928);
+                return;
+            }
+            
+            try {
+                const needsATA = !(await checkRecipientATA(recipientWallet, selectedToken.mint));
+                setRecipientNeedsATA(needsATA);
+                setAtaFeeInSOL(needsATA ? 0.00203928 : 0);
+            } catch (error) {
+                console.warn('Error checking recipient ATA:', error);
+                // Assume ATA needs to be created on error (safer)
+                setRecipientNeedsATA(true);
+                setAtaFeeInSOL(0.00203928);
+            }
+        };
+        
+        checkATA();
+    }, [selectedToken, resolvedRecipient]);
+    
     useEffect(() => {
         if (!isUsernameRecipient) {
             setResolvedRecipient(null);
@@ -741,14 +822,54 @@ const GiftPage: React.FC = () => {
             ? CARD_FEE_USD / tokenPrice
             : 0;
         
-        // Total fees (service + card)
-        const totalFeeAmount = serviceFeeAmount + cardFeeInTokens;
+        // Calculate ATA creation fee for SPL tokens (if recipient ATA doesn't exist)
+        let ataFeeAmount = 0;
+        let ataFeeInSOL = 0;
+        let recipientNeedsATA = false;
+        
+        if (!selectedToken.isNative && selectedToken.mint !== 'So11111111111111111111111111111111111111112') {
+            // Check if recipient wallet is available
+            if (resolvedRecipient?.wallet_address) {
+                try {
+                    recipientNeedsATA = !(await checkRecipientATA(resolvedRecipient.wallet_address, selectedToken.mint));
+                    if (recipientNeedsATA) {
+                        const RENT_EXEMPTION_FOR_ATA = 0.00203928; // Rent for token account
+                        ataFeeInSOL = RENT_EXEMPTION_FOR_ATA;
+                        // Convert to token amount if needed (for display)
+                        const solPrice = await priceService.getTokenPrice('So11111111111111111111111111111111111111112');
+                        ataFeeAmount = solPrice && solPrice > 0 ? ataFeeInSOL / solPrice : 0;
+                        console.log(`📝 Recipient needs ATA creation: ${ataFeeInSOL} SOL (~$${(ataFeeInSOL * (solPrice || 0)).toFixed(2)})`);
+                    } else {
+                        console.log(`✅ Recipient ATA already exists - no ATA fee needed`);
+                    }
+                } catch (error) {
+                    console.warn('Error checking recipient ATA, assuming it needs creation:', error);
+                    // If we can't check, assume ATA needs to be created (safer)
+                    recipientNeedsATA = true;
+                    const RENT_EXEMPTION_FOR_ATA = 0.00203928;
+                    ataFeeInSOL = RENT_EXEMPTION_FOR_ATA;
+                    const solPrice = await priceService.getTokenPrice('So11111111111111111111111111111111111111112');
+                    ataFeeAmount = solPrice && solPrice > 0 ? ataFeeInSOL / solPrice : 0;
+                }
+            } else {
+                // Recipient not resolved yet - assume ATA needs to be created (safer)
+                console.log('⚠️ Recipient wallet not available, assuming ATA creation needed');
+                recipientNeedsATA = true;
+                const RENT_EXEMPTION_FOR_ATA = 0.00203928;
+                ataFeeInSOL = RENT_EXEMPTION_FOR_ATA;
+                const solPrice = await priceService.getTokenPrice('So11111111111111111111111111111111111111112');
+                ataFeeAmount = solPrice && solPrice > 0 ? ataFeeInSOL / solPrice : 0;
+            }
+        }
+        
+        // Total fees (service + card + ATA)
+        const totalFeeAmount = serviceFeeAmount + cardFeeInTokens + ataFeeAmount;
         const totalAmount = numericAmount + totalFeeAmount;
         
         // Check user balance (including fees)
-        // First try to collect fees in the token being transferred
-        let feesToCollectInToken = totalFeeAmount;
-        let feesToCollectInSOL = 0;
+        // For SPL tokens, also need SOL for ATA creation fee (if needed)
+        let feesToCollectInSOL = ataFeeInSOL; // Start with ATA fee
+        let feesToCollectInToken = serviceFeeAmount + cardFeeInTokens; // Service + card fees
         
         if (selectedToken.isNative) {
             // For native SOL, fees are also collected in SOL
@@ -762,9 +883,12 @@ const GiftPage: React.FC = () => {
             feesToCollectInSOL = 0;
         } else {
             // For SPL tokens, try to collect fees in token first, then fallback to SOL
-            // Check if user has enough token balance for gift + fees
-            if (totalAmount > userBalance) {
-                // Not enough token balance - check if we can collect fees in SOL as fallback
+            // Note: ATA fee is always in SOL, service/card fees can be in token or SOL
+            const serviceAndCardFees = serviceFeeAmount + cardFeeInTokens;
+            
+            // Check if user has enough token balance for gift + service/card fees
+            if (numericAmount + serviceAndCardFees > userBalance) {
+                // Not enough token balance - check if we can collect service/card fees in SOL as fallback
                 const tokenBalanceForGift = userBalance - numericAmount;
                 if (tokenBalanceForGift < 0) {
                     // Not even enough for the gift itself
@@ -772,9 +896,10 @@ const GiftPage: React.FC = () => {
                     return;
                 }
                 
-                // Calculate how much fee we can collect in token, rest in SOL
+                // Calculate how much service/card fee we can collect in token, rest in SOL
                 feesToCollectInToken = Math.max(0, tokenBalanceForGift);
-                feesToCollectInSOL = totalFeeAmount - feesToCollectInToken;
+                const serviceCardFeesInSOL = serviceAndCardFees - feesToCollectInToken;
+                feesToCollectInSOL = ataFeeInSOL + serviceCardFeesInSOL; // ATA fee + any service/card fees in SOL
                 
                 // Get SOL balance and price to check if we can collect fees there
                 const solBalance = await getSolBalance();
@@ -790,9 +915,11 @@ const GiftPage: React.FC = () => {
                 // We can collect fees in SOL - proceed
                 console.log(`✅ Will collect fees: ${feesToCollectInToken.toFixed(4)} ${selectedToken.symbol} + ${feesInSOL.toFixed(6)} SOL`);
             } else {
-                // Enough token balance for gift + fees
-                feesToCollectInToken = totalFeeAmount;
-                feesToCollectInSOL = 0;
+                // Enough token balance for gift + service/card fees
+                // ATA fee is always in SOL
+                feesToCollectInToken = serviceAndCardFees;
+                feesToCollectInSOL = ataFeeInSOL;
+                console.log(`✅ Will collect fees: ${feesToCollectInToken.toFixed(4)} ${selectedToken.symbol} + ${feesToCollectInSOL.toFixed(6)} SOL (ATA fee)`);
             }
             
             // Still need SOL for network fees (transaction fees, not service fees)
@@ -811,7 +938,9 @@ const GiftPage: React.FC = () => {
         const usdValue = tokenPrice ? numericAmount * tokenPrice : null;
         const usdServiceFee = SERVICE_FEE_USD; // Use calculated service fee (0 if free, 1.00 if paid)
         const usdCardFee = hasCard ? CARD_FEE_USD : 0;
-        const usdTotalFees = usdServiceFee + usdCardFee;
+        const solPrice = await priceService.getTokenPrice('So11111111111111111111111111111111111111112');
+        const usdAtaFee = solPrice && solPrice > 0 ? ataFeeInSOL * solPrice : null;
+        const usdTotalFees = usdServiceFee + usdCardFee + (usdAtaFee || 0);
         const usdTotal = tokenPrice ? (numericAmount * tokenPrice) + usdTotalFees : null;
         
         // Calculate remaining balance after transaction
@@ -836,6 +965,9 @@ const GiftPage: React.FC = () => {
             cardFee: cardFeeInTokens, // Card fee in tokens
             cardFeeUsd: hasCard ? usdCardFee : null, // $1 card fee
             hasCard,
+            ataFee: ataFeeInSOL, // ATA fee in SOL
+            ataFeeUsd: usdAtaFee, // ATA fee in USD
+            recipientNeedsATA: recipientNeedsATA, // Whether ATA needs to be created
         });
         setShowConfirmModal(true);
         return;
@@ -886,17 +1018,23 @@ const GiftPage: React.FC = () => {
         const cardFeeAmount = confirmDetails.hasCard && tokenPrice && tokenPrice > 0 ? CARD_FEE_USD / tokenPrice : 0;
         const totalFeeAmount = serviceFeeAmount + cardFeeAmount;
         
+        // Get ATA fee from confirmDetails (already calculated in handleSendGift)
+        const ataFeeInSOL = confirmDetails.ataFee || 0;
+        const recipientNeedsATA = confirmDetails.recipientNeedsATA || false;
+        
         // Determine fee collection: token first, SOL fallback
-        let feesToCollectInToken = totalFeeAmount;
-        let feesToCollectInSOL = 0;
+        // For SPL tokens, ATA fee is always in SOL, service/card fees can be in token or SOL
+        const serviceAndCardFees = totalFeeAmount;
+        let feesToCollectInToken = serviceAndCardFees;
+        let feesToCollectInSOL = ataFeeInSOL; // Start with ATA fee
         
         if (currentToken.isNative) {
             // For native SOL, fees are in SOL
             feesToCollectInToken = totalFeeAmount;
             feesToCollectInSOL = 0;
         } else {
-            // For SPL tokens, try token first, then SOL fallback
-            if (userBalance < numericAmount + totalFeeAmount) {
+            // For SPL tokens, try token first for service/card fees, then SOL fallback
+            if (userBalance < numericAmount + serviceAndCardFees) {
                 // Not enough token balance - check SOL fallback
                 const tokenBalanceForGift = userBalance - numericAmount;
                 if (tokenBalanceForGift < 0) {
@@ -904,9 +1042,10 @@ const GiftPage: React.FC = () => {
                     throw new Error(`Insufficient ${currentToken.symbol} balance. You need ${numericAmount.toFixed(4)} ${currentToken.symbol} for the gift. You have ${userBalance.toFixed(4)} ${currentToken.symbol} available.`);
                 }
                 
-                // Calculate fees split
+                // Calculate fees split (service/card fees)
                 feesToCollectInToken = Math.max(0, tokenBalanceForGift);
-                feesToCollectInSOL = totalFeeAmount - feesToCollectInToken;
+                const serviceCardFeesInSOL = serviceAndCardFees - feesToCollectInToken;
+                feesToCollectInSOL = ataFeeInSOL + serviceCardFeesInSOL; // ATA fee + any service/card fees in SOL
                 
                 // Get SOL balance and price to verify we can collect fees there
                 const solBalance = await getSolBalance();
@@ -915,14 +1054,16 @@ const GiftPage: React.FC = () => {
                 
                 if (solBalance < feesInSOL) {
                     // Not enough in either
-                    throw new Error(`Insufficient balance. You need ${numericAmount.toFixed(4)} ${currentToken.symbol} for the gift and $${(FLAT_SERVICE_FEE_USD + CARD_FEE_USD).toFixed(2)} in fees. You have ${userBalance.toFixed(4)} ${currentToken.symbol} and ${solBalance.toFixed(6)} SOL available, but need ${feesToCollectInToken.toFixed(4)} ${currentToken.symbol} + ${feesInSOL.toFixed(6)} SOL for fees.`);
+                    throw new Error(`Insufficient balance. You need ${numericAmount.toFixed(4)} ${currentToken.symbol} for the gift and $${(FLAT_SERVICE_FEE_USD + CARD_FEE_USD + (confirmDetails.ataFeeUsd || 0)).toFixed(2)} in fees. You have ${userBalance.toFixed(4)} ${currentToken.symbol} and ${solBalance.toFixed(6)} SOL available, but need ${feesToCollectInToken.toFixed(4)} ${currentToken.symbol} + ${feesInSOL.toFixed(6)} SOL for fees.`);
                 }
                 
                 console.log(`✅ Will collect fees: ${feesToCollectInToken.toFixed(4)} ${currentToken.symbol} + ${feesInSOL.toFixed(6)} SOL`);
             } else {
-                // Enough token balance for gift + fees
-                feesToCollectInToken = totalFeeAmount;
-                feesToCollectInSOL = 0;
+                // Enough token balance for gift + service/card fees
+                // ATA fee is always in SOL
+                feesToCollectInToken = serviceAndCardFees;
+                feesToCollectInSOL = ataFeeInSOL;
+                console.log(`✅ Will collect fees: ${feesToCollectInToken.toFixed(4)} ${currentToken.symbol} + ${feesToCollectInSOL.toFixed(6)} SOL (ATA fee)`);
             }
         }
 
@@ -1268,14 +1409,13 @@ const GiftPage: React.FC = () => {
                     );
                 }
                 
-                // ✅ FIX 1: Always send SOL to TipLink for SPL token gifts
-                // This ensures TipLink can pay transaction fees AND create recipient ATA if needed
-                const RENT_EXEMPTION_FOR_ATA = 0.00203928; // Rent for token account
+                // ✅ FIX: Send exact SOL reserve needed (transaction fees + ATA creation if needed)
                 const BASE_FEE = 0.000005; // Transaction fee
-                const TIPLINK_SOL_RESERVE = RENT_EXEMPTION_FOR_ATA + BASE_FEE + 0.0001; // Add buffer
-                // Total: ~0.00214428 SOL (enough for ATA creation + fees + buffer)
+                const PRIORITY_FEE_BUFFER = 0.0003; // Priority fees during congestion
+                const TIPLINK_SOL_RESERVE = (recipientNeedsATA ? ataFeeInSOL : 0) + BASE_FEE + PRIORITY_FEE_BUFFER;
+                
                 const tiplinkSolReserveLamports = Math.round(TIPLINK_SOL_RESERVE * LAMPORTS_PER_SOL);
-                console.log(`💎 Adding SOL reserve to TipLink: ${TIPLINK_SOL_RESERVE} SOL (${tiplinkSolReserveLamports} lamports) for transaction fees and potential ATA creation`);
+                console.log(`💎 Adding SOL reserve to TipLink: ${TIPLINK_SOL_RESERVE} SOL (${tiplinkSolReserveLamports} lamports) - ATA needed: ${recipientNeedsATA}, Base fee: ${BASE_FEE}, Priority buffer: ${PRIORITY_FEE_BUFFER}`);
                 transaction.add(
                     SystemProgram.transfer({
                         fromPubkey: senderPubkey,
@@ -1634,6 +1774,28 @@ const GiftPage: React.FC = () => {
                                             <p className="text-slate-500 text-xs mt-1">{confirmDetails.cardFee.toFixed(6)} {confirmDetails.token}</p>
                                                 )}
                                             </>
+                                        )}
+                                    </div>
+                                )}
+                                
+                                {/* First-Time Ownership Fee (ATA creation) - only for SPL tokens if recipient needs it */}
+                                {confirmDetails.recipientNeedsATA && confirmDetails.ataFee > 0 && (
+                                    <div className="pb-3 border-b border-slate-700">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <p className="text-slate-400 text-xs">First-Time Ownership Fee</p>
+                                            <div className="group relative">
+                                                <svg className="w-4 h-4 text-slate-500 cursor-help" fill="currentColor" viewBox="0 0 20 20">
+                                                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+                                                </svg>
+                                                <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-64 p-2 bg-slate-800 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                                                    This fee is charged when the recipient has never owned this token before. It covers the cost of creating their token account on the Solana blockchain.
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {confirmDetails.ataFeeUsd !== null ? (
+                                            <p className="text-slate-300 font-medium">${confirmDetails.ataFeeUsd.toFixed(2)} USD</p>
+                                        ) : (
+                                            <p className="text-slate-300 font-medium">{confirmDetails.ataFee.toFixed(6)} SOL</p>
                                         )}
                                     </div>
                                 )}
@@ -2073,8 +2235,28 @@ const GiftPage: React.FC = () => {
                                             {onrampCredit && onrampCredit.isActive && onrampCredit.cardAddsFreeRemaining > 0 ? (
                                                 <span className="text-green-400 font-bold">FREE ✨</span>
                                             ) : (
-                                            <span className="text-green-400">$1.00 USD</span>
+                                                <span className="text-green-400">$1.00 USD</span>
                                             )}
+                                        </div>
+                                    )}
+                                    {!selectedToken?.isNative && 
+                                     selectedToken?.mint !== 'So11111111111111111111111111111111111111112' &&
+                                     recipientNeedsATA && (
+                                        <div className="flex justify-between text-sm mb-1">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-slate-400">First-Time Ownership Fee</span>
+                                                <div className="group relative">
+                                                    <svg className="w-4 h-4 text-slate-500 cursor-help" fill="currentColor" viewBox="0 0 20 20">
+                                                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+                                                    </svg>
+                                                    <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-64 p-2 bg-slate-800 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                                                        This fee is charged when the recipient has never owned this token before. It covers the cost of creating their token account on the Solana blockchain.
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <span className="text-slate-300">
+                                                {solPrice ? `$${(ataFeeInSOL * solPrice).toFixed(2)}` : `${ataFeeInSOL.toFixed(6)} SOL`}
+                                            </span>
                                         </div>
                                     )}
                                     <div className="flex justify-between text-sm pt-2 border-t border-slate-700">

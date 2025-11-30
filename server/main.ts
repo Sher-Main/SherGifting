@@ -1603,16 +1603,26 @@ async function processGiftClaim(
       console.warn(`⚠️ Using default token info: ${tokenInfo.symbol} (${tokenInfo.decimals} decimals)`);
     }
 
-    // ✅ FIX 3: For SPL tokens, verify TipLink has SOL for transaction fees AND ATA creation
+    // ✅ FIX 3: For SPL tokens, verify TipLink has SOL for transaction fees
+    // Check if recipient ATA exists to determine minimum SOL needed
     if (!tokenInfo.isNative) {
-      const RENT_EXEMPTION_FOR_ATA = 0.00203928; // Rent for token account
       const BASE_FEE = 0.000005; // Transaction fee
-      const MIN_SOL_FOR_FEES = RENT_EXEMPTION_FOR_ATA + BASE_FEE + 0.0001; // Add buffer
+      const PRIORITY_FEE_BUFFER = 0.0003; // Priority fees during congestion
+      
+      // Check if recipient ATA exists
+      const mintPubkey = new PublicKey(gift.token_mint);
+      const recipientATA = await getAssociatedTokenAddress(mintPubkey, recipientPubkey);
+      const recipientAccountInfo = await connection.getAccountInfo(recipientATA);
+      const recipientNeedsATA = !recipientAccountInfo;
+      
+      // Calculate minimum SOL needed based on whether ATA needs to be created
+      const RENT_EXEMPTION_FOR_ATA = 0.00203928; // Rent for token account (only if ATA needs creation)
+      const MIN_SOL_FOR_FEES = (recipientNeedsATA ? RENT_EXEMPTION_FOR_ATA : 0) + BASE_FEE + PRIORITY_FEE_BUFFER;
       
       if (tiplinkBalanceSOL < MIN_SOL_FOR_FEES) {
-        throw new Error(`TipLink has insufficient SOL balance to pay transaction fees and create recipient token account. Required: ${MIN_SOL_FOR_FEES} SOL, Available: ${tiplinkBalanceSOL} SOL. This gift may not have been funded correctly.`);
+        throw new Error(`TipLink has insufficient SOL balance to pay transaction fees${recipientNeedsATA ? ' and create recipient token account' : ''}. Required: ${MIN_SOL_FOR_FEES} SOL, Available: ${tiplinkBalanceSOL} SOL. This gift may not have been funded correctly.`);
       }
-      console.log(`✅ TipLink has sufficient SOL (${tiplinkBalanceSOL} SOL) for transaction fees and ATA creation`);
+      console.log(`✅ TipLink has sufficient SOL (${tiplinkBalanceSOL} SOL) for transaction fees${recipientNeedsATA ? ' and ATA creation' : ''} (ATA needed: ${recipientNeedsATA})`);
     }
 
     let signature: string;
