@@ -234,6 +234,139 @@ async function initializeSchema() {
   `).catch(() => {
     // Index might already exist, ignore error
   });
+
+  // ========================================
+  // ONRAMP SYSTEM TABLES
+  // ========================================
+
+  // Create onramp_transactions table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS onramp_transactions (
+      id VARCHAR(255) PRIMARY KEY,
+      user_id VARCHAR(255) NOT NULL,
+      wallet_address VARCHAR(255) NOT NULL,
+      moonpay_id VARCHAR(255) UNIQUE,
+      moonpay_status VARCHAR(50) NOT NULL DEFAULT 'pending',
+      moonpay_fee_charged DECIMAL(10, 2) DEFAULT 5.0,
+      amount_fiat DECIMAL(20, 2) NOT NULL,
+      amount_crypto DECIMAL(20, 9),
+      currency VARCHAR(10) DEFAULT 'USD',
+      crypto_asset VARCHAR(10) DEFAULT 'SOL',
+      credit_issued BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      completed_at TIMESTAMP,
+      expires_at TIMESTAMP
+    )
+  `).catch(() => {
+    // Table might already exist, ignore error
+  });
+
+  // Create indexes for onramp_transactions
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_onramp_transactions_user_id ON onramp_transactions(user_id)
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_onramp_transactions_moonpay_id ON onramp_transactions(moonpay_id)
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_onramp_transactions_wallet_address ON onramp_transactions(wallet_address)
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_onramp_transactions_created_at ON onramp_transactions(created_at)
+  `).catch(() => {});
+
+  // Create onramp_credits table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS onramp_credits (
+      id VARCHAR(255) PRIMARY KEY,
+      user_id VARCHAR(255) UNIQUE NOT NULL,
+      total_credits_issued DECIMAL(10, 2) DEFAULT 5.0,
+      credits_remaining DECIMAL(10, 2) DEFAULT 5.0,
+      card_adds_free_used INTEGER DEFAULT 0,
+      card_adds_allowed INTEGER DEFAULT 5,
+      service_fee_free_used INTEGER DEFAULT 0,
+      service_fee_free_allowed INTEGER DEFAULT 0,
+      issued_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMP NOT NULL,
+      is_active BOOLEAN DEFAULT TRUE,
+      onramp_transaction_id VARCHAR(255),
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {
+    // Table might already exist, ignore error
+  });
+
+  // Add service fee columns if they don't exist (migration)
+  await pool.query(`
+    ALTER TABLE onramp_credits
+    ADD COLUMN IF NOT EXISTS service_fee_free_used INTEGER DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS service_fee_free_allowed INTEGER DEFAULT 0
+  `).catch(() => {
+    // Columns might already exist, ignore error
+  });
+
+  // Create indexes for onramp_credits
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_onramp_credits_user_id ON onramp_credits(user_id)
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_onramp_credits_expires_at ON onramp_credits(expires_at)
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_onramp_credits_is_active ON onramp_credits(is_active)
+  `).catch(() => {});
+
+  // Create card_transactions table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS card_transactions (
+      id VARCHAR(255) PRIMARY KEY,
+      user_id VARCHAR(255) NOT NULL,
+      card_address_added VARCHAR(255),
+      amount_charged DECIMAL(10, 2) DEFAULT 1.0,
+      is_free BOOLEAN DEFAULT FALSE,
+      onramp_credit_id VARCHAR(255),
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {
+    // Table might already exist, ignore error
+  });
+
+  // Create indexes for card_transactions
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_card_transactions_user_id ON card_transactions(user_id)
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_card_transactions_onramp_credit_id ON card_transactions(onramp_credit_id)
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_card_transactions_is_free ON card_transactions(is_free)
+  `).catch(() => {});
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_card_transactions_created_at ON card_transactions(created_at)
+  `).catch(() => {});
+
+  // Create trigger function for onramp_credits updated_at
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION update_onramp_credits_updated_at()
+    RETURNS TRIGGER AS $$
+    BEGIN
+      NEW.updated_at = NOW();
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql
+  `).catch(() => {});
+
+  // Attach trigger to onramp_credits table
+  await pool.query(`
+    DROP TRIGGER IF EXISTS update_onramp_credits_updated_at ON onramp_credits
+  `).catch(() => {});
+  await pool.query(`
+    CREATE TRIGGER update_onramp_credits_updated_at
+    BEFORE UPDATE ON onramp_credits
+    FOR EACH ROW
+    EXECUTE FUNCTION update_onramp_credits_updated_at()
+  `).catch(() => {});
 }
 
 export async function query<T extends QueryResultRow = any>(
@@ -419,6 +552,325 @@ export async function updateGiftClaim(
      WHERE id = $3`,
     [claimed_by, claim_signature, giftId]
   );
+}
+
+// ========================================
+// ONRAMP SYSTEM DATABASE FUNCTIONS
+// ========================================
+
+export interface OnrampTransaction extends QueryResultRow {
+  id: string;
+  user_id: string;
+  wallet_address: string;
+  moonpay_id: string | null;
+  moonpay_status: string;
+  moonpay_fee_charged: number;
+  amount_fiat: number;
+  amount_crypto: number | null;
+  currency: string;
+  crypto_asset: string;
+  credit_issued: boolean;
+  created_at: Date;
+  completed_at: Date | null;
+  expires_at: Date | null;
+}
+
+export interface OnrampCredit extends QueryResultRow {
+  id: string;
+  user_id: string;
+  total_credits_issued: number;
+  credits_remaining: number;
+  card_adds_free_used: number;
+  card_adds_allowed: number;
+  service_fee_free_used: number;
+  service_fee_free_allowed: number;
+  issued_at: Date;
+  expires_at: Date;
+  is_active: boolean;
+  onramp_transaction_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface CardTransaction extends QueryResultRow {
+  id: string;
+  user_id: string;
+  card_address_added: string | null;
+  amount_charged: number;
+  is_free: boolean;
+  onramp_credit_id: string | null;
+  created_at: Date;
+}
+
+export async function upsertOnrampTransaction(data: {
+  id: string;
+  user_id: string;
+  wallet_address: string;
+  moonpay_id?: string | null;
+  moonpay_status?: string;
+  moonpay_fee_charged?: number;
+  amount_fiat: number;
+  amount_crypto?: number | null;
+  currency?: string;
+  crypto_asset?: string;
+  credit_issued?: boolean;
+  completed_at?: Date | null;
+  expires_at?: Date | null;
+  idempotency_key?: string | null;
+  transaction_hash?: string | null;
+}): Promise<OnrampTransaction> {
+  const [result] = await query<OnrampTransaction>(
+    `
+    INSERT INTO onramp_transactions (
+      id, user_id, wallet_address, moonpay_id, moonpay_status, moonpay_fee_charged,
+      amount_fiat, amount_crypto, currency, crypto_asset, credit_issued,
+      completed_at, expires_at, idempotency_key, transaction_hash
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+    ON CONFLICT (id)
+    DO UPDATE SET
+      moonpay_status = COALESCE(EXCLUDED.moonpay_status, onramp_transactions.moonpay_status),
+      completed_at = COALESCE(EXCLUDED.completed_at, onramp_transactions.completed_at),
+      credit_issued = COALESCE(EXCLUDED.credit_issued, onramp_transactions.credit_issued),
+      idempotency_key = COALESCE(EXCLUDED.idempotency_key, onramp_transactions.idempotency_key),
+      transaction_hash = COALESCE(EXCLUDED.transaction_hash, onramp_transactions.transaction_hash)
+    RETURNING *
+    `,
+    [
+      data.id,
+      data.user_id,
+      data.wallet_address,
+      data.moonpay_id || null,
+      data.moonpay_status || 'pending',
+      data.moonpay_fee_charged || 5.0,
+      data.amount_fiat,
+      data.amount_crypto || null,
+      data.currency || 'USD',
+      data.crypto_asset || 'SOL',
+      data.credit_issued || false,
+      data.completed_at || null,
+      data.expires_at || null,
+      data.idempotency_key || null,
+      data.transaction_hash || null,
+    ]
+  );
+  return result;
+}
+
+export async function getOnrampCreditByUserId(userId: string): Promise<OnrampCredit | null> {
+  const results = await query<OnrampCredit>(
+    `
+    SELECT * FROM onramp_credits
+    WHERE user_id = $1
+      AND is_active = TRUE
+      AND expires_at > NOW()
+    ORDER BY created_at DESC
+    LIMIT 1
+    `,
+    [userId]
+  );
+  return results[0] || null;
+}
+
+export async function createOnrampCredit(data: {
+  id: string;
+  user_id: string;
+  total_credits_issued?: number;
+  credits_remaining?: number;
+  card_adds_free_used?: number;
+  card_adds_allowed?: number;
+  service_fee_free_used?: number;
+  service_fee_free_allowed?: number;
+  expires_at: Date;
+  onramp_transaction_id?: string | null;
+}): Promise<OnrampCredit> {
+  const [result] = await query<OnrampCredit>(
+    `
+    INSERT INTO onramp_credits (
+      id, user_id, total_credits_issued, credits_remaining,
+      card_adds_free_used, card_adds_allowed, 
+      service_fee_free_used, service_fee_free_allowed,
+      expires_at, onramp_transaction_id
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    ON CONFLICT (user_id)
+    DO UPDATE SET
+      is_active = TRUE,
+      credits_remaining = EXCLUDED.credits_remaining,
+      card_adds_free_used = EXCLUDED.card_adds_free_used,
+      service_fee_free_used = EXCLUDED.service_fee_free_used,
+      service_fee_free_allowed = EXCLUDED.service_fee_free_allowed,
+      expires_at = EXCLUDED.expires_at,
+      onramp_transaction_id = EXCLUDED.onramp_transaction_id,
+      updated_at = NOW()
+    RETURNING *
+    `,
+    [
+      data.id,
+      data.user_id,
+      data.total_credits_issued || 5.0,
+      data.credits_remaining || 5.0,
+      data.card_adds_free_used || 0,
+      data.card_adds_allowed || 5,
+      data.service_fee_free_used || 0,
+      data.service_fee_free_allowed || 0,
+      data.expires_at,
+      data.onramp_transaction_id || null,
+    ]
+  );
+  return result;
+}
+
+export async function updateOnrampCredit(
+  creditId: string,
+  updates: {
+    credits_remaining?: number;
+    card_adds_free_used?: number;
+    service_fee_free_used?: number;
+    is_active?: boolean;
+  }
+): Promise<OnrampCredit | null> {
+  const updateFields: string[] = [];
+  const values: any[] = [];
+  let paramIndex = 1;
+
+  if (updates.credits_remaining !== undefined) {
+    updateFields.push(`credits_remaining = $${paramIndex++}`);
+    values.push(updates.credits_remaining);
+  }
+  if (updates.card_adds_free_used !== undefined) {
+    updateFields.push(`card_adds_free_used = $${paramIndex++}`);
+    values.push(updates.card_adds_free_used);
+  }
+  if (updates.service_fee_free_used !== undefined) {
+    updateFields.push(`service_fee_free_used = $${paramIndex++}`);
+    values.push(updates.service_fee_free_used);
+  }
+  if (updates.is_active !== undefined) {
+    updateFields.push(`is_active = $${paramIndex++}`);
+    values.push(updates.is_active);
+  }
+
+  if (updateFields.length === 0) {
+    // No updates, just return the current record
+    const results = await query<OnrampCredit>(
+      `SELECT * FROM onramp_credits WHERE id = $1`,
+      [creditId]
+    );
+    return results[0] || null;
+  }
+
+  values.push(creditId);
+  const results = await query<OnrampCredit>(
+    `
+    UPDATE onramp_credits
+    SET ${updateFields.join(', ')}, updated_at = NOW()
+    WHERE id = $${paramIndex}
+    RETURNING *
+    `,
+    values
+  );
+  return results[0] || null;
+}
+
+export async function createCardTransaction(data: {
+  id: string;
+  user_id: string;
+  card_address_added?: string | null;
+  amount_charged: number;
+  is_free: boolean;
+  onramp_credit_id?: string | null;
+}): Promise<CardTransaction> {
+  const [result] = await query<CardTransaction>(
+    `
+    INSERT INTO card_transactions (
+      id, user_id, card_address_added, amount_charged, is_free, onramp_credit_id
+    )
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING *
+    `,
+    [
+      data.id,
+      data.user_id,
+      data.card_address_added || null,
+      data.amount_charged,
+      data.is_free,
+      data.onramp_credit_id || null,
+    ]
+  );
+  return result;
+}
+
+export async function getCardTransactionsByUserId(userId: string): Promise<CardTransaction[]> {
+  return await query<CardTransaction>(
+    `
+    SELECT * FROM card_transactions
+    WHERE user_id = $1
+    ORDER BY created_at DESC
+    `,
+    [userId]
+  );
+}
+
+export async function getOnrampTransactionsByUserId(userId: string): Promise<OnrampTransaction[]> {
+  return await query<OnrampTransaction>(
+    `
+    SELECT * FROM onramp_transactions
+    WHERE user_id = $1
+    ORDER BY created_at DESC
+    `,
+    [userId]
+  );
+}
+
+// Create pending onramp when user opens funding modal
+export async function createPendingOnramp(data: {
+  id: string;
+  user_id: string;
+  wallet_address: string;
+  expires_at: Date;
+}): Promise<void> {
+  if (!pool) throw new Error('Database not available');
+  
+  await pool.query(
+    `INSERT INTO pending_onramps (id, user_id, wallet_address, expires_at)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (id) DO NOTHING`,
+    [data.id, data.user_id, data.wallet_address, data.expires_at]
+  );
+}
+
+// Find and consume pending onramp (used by webhook)
+export async function findAndConsumePendingOnramp(
+  walletAddress: string,
+  withinMinutes: number = 10
+): Promise<{ id: string; user_id: string } | null> {
+  if (!pool) throw new Error('Database not available');
+  
+  const result = await pool.query(
+    `SELECT id, user_id FROM pending_onramps
+     WHERE wallet_address = $1
+       AND started_at > NOW() - INTERVAL '${withinMinutes} minutes'
+       AND expires_at > NOW()
+     ORDER BY started_at DESC
+     LIMIT 1
+     FOR UPDATE SKIP LOCKED`,
+    [walletAddress]
+  );
+  
+  if (result.rows.length === 0) {
+    return null;
+  }
+  
+  const pending = result.rows[0];
+  
+  // Delete the pending onramp (consume it)
+  await pool.query(
+    `DELETE FROM pending_onramps WHERE id = $1`,
+    [pending.id]
+  );
+  
+  return { id: pending.id, user_id: pending.user_id };
 }
 
 export { pool };

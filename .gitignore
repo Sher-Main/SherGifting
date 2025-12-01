@@ -7,24 +7,74 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencies
 node_modules
+.pnp
+.pnp.js
+
+# Build outputs
 dist
 dist-ssr
+build
 *.local
 
 # Environment variables
 .env
 .env.local
 .env.*.local
+.env.production
+.env.development
 server/.env
+
+# Solana keypairs and wallets (CRITICAL - never commit private keys!)
+*.json.keypair
+*-keypair.json
+wallet.json
+keypair.json
+*.key
+*.pem
+id.json
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
+!.vscode/settings.json
 .idea
+*.swp
+*.swo
+*~
 .DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# OS files
+Thumbs.db
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# TypeScript
+*.tsbuildinfo
+.tsbuildinfo
+
+# Testing
+coverage
+*.lcov
+.nyc_output
+
+# Vite
+.vite
+vite.config.*.timestamp-*
+
+# Temporary files
+*.tmp
+*.temp
+.cache
+.parcel-cache

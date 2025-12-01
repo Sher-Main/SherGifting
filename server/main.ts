@@ -21,8 +21,12 @@ import {
   pool,
   DbUser,
 } from './database';
+import { handleCardAdd, handleServiceFee } from './lib/onramp';
 import userRoutes from './routes/user';
+import onrampRoutes from './routes/onramp';
+import cronRoutes from './routes/cron';
 import { startGiftExpiryJob } from './jobs/giftExpiryJob';
+import { startCreditCleanupJob } from './jobs/creditCleanupJob';
 
 
 // --- Types (duplicated from frontend for simplicity) ---
@@ -174,6 +178,8 @@ app.use(cors({
 }));
 
 app.use('/api/user', userRoutes);
+app.use('/api', onrampRoutes);
+app.use('/api/cron', cronRoutes);
 
 // --- ENV VARS & MOCKS ---
 const PORT = process.env.PORT || 3001;
@@ -873,6 +879,114 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
 
     console.log('✅ Funding transaction verified!');
 
+    // Check if a card is selected first
+    // IMPORTANT: If card_type is provided, we should generate the card even if recipient_name is missing
+    // We'll use a fallback name if needed
+    const hasCard = !!card_type;
+    const effectiveRecipientName = card_recipient_name || (hasCard ? 'Friend' : null);
+    
+    console.log('🎴 Card selection check:', {
+      hasCard,
+      card_type,
+      card_recipient_name,
+      effectiveRecipientName,
+      card_price_usd,
+    });
+    
+    // CRITICAL FIX: Generate card URL FIRST (before consuming credit)
+    // This ensures we only consume credit if card generation succeeds
+    let cardCloudinaryUrl: string | null = null;
+    let cardGenerationSucceeded = false;
+    
+    if (hasCard) {
+      try {
+        console.log('🎴 Generating personalized card URL...', {
+          card_type,
+          card_recipient_name,
+          effectiveRecipientName,
+        });
+        
+        // Validate inputs before attempting generation
+        if (!card_type) {
+          throw new Error('card_type is required but was not provided');
+        }
+        
+        // Check Cloudinary config before attempting
+        if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY) {
+          throw new Error('Cloudinary credentials not configured');
+        }
+        
+        cardCloudinaryUrl = generatePersonalizedCardUrl(card_type, effectiveRecipientName);
+        
+        if (!cardCloudinaryUrl || cardCloudinaryUrl.trim() === '') {
+          throw new Error('Card URL generation returned empty string');
+        }
+        
+        console.log('✅ Card URL generated:', cardCloudinaryUrl);
+        cardGenerationSucceeded = true;
+        
+      } catch (cardError: any) {
+        console.error('❌ Error generating card URL:', cardError);
+        console.error('❌ Card error details:', {
+          message: cardError?.message,
+          stack: cardError?.stack,
+          card_type,
+          card_recipient_name,
+          effectiveRecipientName,
+          hasCloudinaryConfig: !!(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY),
+        });
+        // Don't fail gift creation, but mark card generation as failed
+        console.warn('⚠️ Card generation failed - will NOT consume credit to prevent credit loss');
+        cardCloudinaryUrl = null;
+        cardGenerationSucceeded = false;
+      }
+    } else {
+      console.log('📤 No card selected, skipping card generation');
+      if (card_type || card_recipient_name) {
+        console.warn('⚠️ WARNING: Card fields partially set but hasCard is false!', {
+          card_type: !!card_type,
+          card_recipient_name: !!card_recipient_name,
+        });
+      }
+    }
+    
+    // ONLY consume credit if card generation succeeded
+    // This prevents credits from being consumed when card generation fails
+    let cardResult = null;
+    if (hasCard && cardGenerationSucceeded) {
+      try {
+        cardResult = await handleCardAdd(sender_did);
+        console.log(`📤 Card credit consumed:`, {
+          isFree: cardResult.isFree,
+          freeRemaining: cardResult.cardAddsFreeRemaining,
+          creditsRemaining: cardResult.creditsRemaining,
+        });
+      } catch (creditError) {
+        console.error('⚠️ Error consuming credit (card was generated but credit update failed):', creditError);
+        // Card was generated but credit wasn't consumed - this is a problem
+        // We should ideally rollback or handle this case
+        console.warn('⚠️ WARNING: Card was generated but credit was not consumed!');
+      }
+    } else if (hasCard && !cardGenerationSucceeded) {
+      console.log('📤 Card generation failed - skipping credit consumption to prevent credit loss');
+    } else {
+      console.log('📤 No card selected - skipping credit check');
+    }
+
+    // Check if service fee is FREE (using onramp credit)
+    let serviceFeeResult = null;
+    try {
+      serviceFeeResult = await handleServiceFee(sender_did);
+      console.log(`💰 Service fee credit check:`, {
+        isFree: serviceFeeResult.isFree,
+        freeRemaining: serviceFeeResult.serviceFeeFreeRemaining,
+        creditsRemaining: serviceFeeResult.creditsRemaining,
+      });
+    } catch (serviceFeeError) {
+      console.error('⚠️ Error checking service fee credit (continuing with normal flow):', serviceFeeError);
+      // Don't fail gift creation if credit check fails
+    }
+
     // Fetch token price and calculate USD value for storage (before creating gift record)
     let usdValue: number | null = null;
     try {
@@ -909,21 +1023,8 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       return res.status(500).json({ error: 'Failed to encrypt TipLink URL' });
     }
 
-    // Generate personalized card URL if card is selected
-    let cardCloudinaryUrl: string | null = null;
-    const hasCard = !!card_type && !!card_recipient_name;
-    
-    if (hasCard) {
-      try {
-        console.log('🎴 Generating personalized card URL...');
-        cardCloudinaryUrl = generatePersonalizedCardUrl(card_type, card_recipient_name);
-        console.log('✅ Card URL generated:', cardCloudinaryUrl);
-      } catch (cardError: any) {
-        console.error('❌ Error generating card URL:', cardError);
-        // Don't fail gift creation if card generation fails, just log the error
-        console.warn('⚠️ Continuing without card URL');
-      }
-    }
+    // Card URL generation moved earlier (before credit consumption)
+    // cardCloudinaryUrl is already set above
 
     // Create gift record
     const giftId = `gift_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -954,11 +1055,13 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
         claim_token: claimToken,
         tiplink_url_encrypted: encryptedTipLink,
         expires_at: expiresAt,
-        has_greeting_card: hasCard,
-        card_type: card_type || null,
+        has_greeting_card: hasCard && cardGenerationSucceeded, // Only mark as having card if generation succeeded
+        card_type: (hasCard && cardGenerationSucceeded) ? card_type : null,
         card_cloudinary_url: cardCloudinaryUrl,
-        card_recipient_name: card_recipient_name || null,
-        card_price_usd: card_price_usd || (hasCard ? 0.00 : null), // Free for testing
+        card_recipient_name: (hasCard && cardGenerationSucceeded) ? effectiveRecipientName : null,
+        card_price_usd: (hasCard && cardGenerationSucceeded)
+          ? (cardResult?.isFree ? 0.00 : (card_price_usd || 1.00))
+          : null, // Don't charge if card generation failed
       });
       sharedCache.delete(`gift_history:${sender_did}`);
       console.log('✅ Gift saved to database with security fields and card info:', newGift.id);
@@ -991,6 +1094,15 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
     const fullClaimUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}${claimUrl}`;
     
     console.log('📧 Sending email notification to recipient with secure claim token...');
+    console.log('📧 Email details:', {
+      recipientEmail: recipient_email,
+      senderEmail: sender.email,
+      hasCard,
+      cardGenerationSucceeded,
+      cardCloudinaryUrl: cardCloudinaryUrl ? 'SET' : 'NULL',
+      cardUrlLength: cardCloudinaryUrl?.length || 0,
+    });
+    
     const emailResult = await sendGiftNotification({
       recipientEmail: recipient_email,
       senderEmail: sender.email,
@@ -1000,8 +1112,14 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       usdValue: usdValue, // Use the USD value we calculated and stored in gift
       claimUrl: fullClaimUrl,
       message: message || undefined,
-      cardImageUrl: cardCloudinaryUrl || undefined,
+      cardImageUrl: cardCloudinaryUrl || undefined, // Will be undefined if generation failed
     });
+    
+    if (hasCard && !cardGenerationSucceeded) {
+      console.error('❌ CRITICAL: Card was selected but generation failed! Email sent without card image. Credit was NOT consumed.');
+    } else if (hasCard && cardGenerationSucceeded && !cardCloudinaryUrl) {
+      console.error('❌ CRITICAL: Card generation succeeded but cardCloudinaryUrl is NULL! This should not happen.');
+    }
 
     if (emailResult.success) {
       console.log('✅ Email sent successfully to:', recipient_email);
@@ -1015,7 +1133,12 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       gift_id: newGift.id,
       claim_url: claimUrl,
       tiplink_public_key,
-      signature: funding_signature
+      signature: funding_signature,
+      cardWasFree: cardResult?.isFree || false,
+      creditsRemaining: cardResult?.creditsRemaining || 0,
+      freeAddsRemaining: cardResult?.cardAddsFreeRemaining || 0,
+      serviceFeeWasFree: serviceFeeResult?.isFree || false,
+      serviceFeeFreeRemaining: serviceFeeResult?.serviceFeeFreeRemaining || 0,
     });
   } catch (error: any) {
     console.error('❌ Error creating gift:', error);
@@ -1193,7 +1316,38 @@ app.get('/api/gifts/:giftId', async (req, res) => {
 // Secure claim endpoint (requires authentication and email verification)
 app.post('/api/gifts/claim', claimLimiter, authenticateToken, async (req: AuthRequest, res) => {
   const { claim_token } = req.body;
-  const user_email = req.user?.email?.address || req.user?.google?.email;
+  
+  // ✅ FIX: Get ALL emails from Privy user object
+  const getAllUserEmails = (user: any): string[] => {
+    const emails: string[] = [];
+    
+    // Primary email
+    if (user?.email?.address) {
+      emails.push(user.email.address.toLowerCase().trim());
+    }
+    
+    // Google OAuth email
+    if (user?.google?.email) {
+      emails.push(user.google.email.toLowerCase().trim());
+    }
+    
+    // Emails from linked accounts
+    if (user?.linkedAccounts) {
+      user.linkedAccounts.forEach((account: any) => {
+        if (account.type === 'email' && account.address) {
+          emails.push(account.address.toLowerCase().trim());
+        }
+        if (account.email) {
+          emails.push(account.email.toLowerCase().trim());
+        }
+      });
+    }
+    
+    // Remove duplicates
+    return [...new Set(emails)];
+  };
+  
+  const userEmails = getAllUserEmails(req.user);
   const user_wallet = req.user?.wallet?.address;
   // Handle IP address (can be string or string[])
   const ipHeader = req.headers['x-forwarded-for'];
@@ -1213,7 +1367,7 @@ app.post('/api/gifts/claim', claimLimiter, authenticateToken, async (req: AuthRe
     return res.status(400).json({ error: 'Missing claim token' });
   }
 
-  if (!user_email) {
+  if (userEmails.length === 0) {
     return res.status(400).json({ error: 'User email not found. Please ensure you are signed in.' });
   }
 
@@ -1275,12 +1429,12 @@ app.post('/api/gifts/claim', claimLimiter, authenticateToken, async (req: AuthRe
     }
   }
 
-  // CRITICAL: Verify email matches recipient
+  // ✅ FIX: Check if recipient email matches ANY of the user's emails
   const recipientEmailNormalized = gift.recipient_email.toLowerCase().trim();
-  const userEmailNormalized = user_email.toLowerCase().trim();
+  const emailMatches = userEmails.some(email => email === recipientEmailNormalized);
   
-  if (recipientEmailNormalized !== userEmailNormalized) {
-    console.error(`❌ Email mismatch: Expected ${gift.recipient_email}, got ${user_email} from IP ${ip_address}`);
+  if (!emailMatches) {
+    console.error(`❌ Email mismatch: Expected ${gift.recipient_email}, got emails: ${userEmails.join(', ')} from IP ${ip_address}`);
     
     // Increment claim attempts
     if (pool) {
@@ -1321,16 +1475,17 @@ app.post('/api/gifts/claim', claimLimiter, authenticateToken, async (req: AuthRe
     });
   }
 
-  console.log(`✅ Email verified: ${user_email} matches recipient`);
+  console.log(`✅ Email verified: ${recipientEmailNormalized} matches one of user's emails: ${userEmails.join(', ')}`);
 
   // Get recipient wallet from user data (from Privy)
   if (!user_wallet) {
     // Try to get wallet from user's database record
     if (pool) {
       try {
+        // Try to find user by any of their emails
         const userResult = await pool.query(
-          `SELECT wallet_address FROM users WHERE email = $1`,
-          [user_email]
+          `SELECT wallet_address FROM users WHERE email = ANY($1::text[])`,
+          [userEmails]
         );
         if (userResult.rows.length > 0 && userResult.rows[0].wallet_address) {
           const recipient_wallet = userResult.rows[0].wallet_address;
@@ -1396,7 +1551,8 @@ async function processGiftClaim(
     
     // Check TipLink balance (will check SOL or SPL token balance based on token type)
     const tiplinkBalanceLamports = await connection.getBalance(tipLink.keypair.publicKey);
-    console.log('💰 TipLink SOL balance:', tiplinkBalanceLamports / LAMPORTS_PER_SOL, 'SOL');
+    const tiplinkBalanceSOL = tiplinkBalanceLamports / LAMPORTS_PER_SOL;
+    console.log('💰 TipLink SOL balance:', tiplinkBalanceSOL, 'SOL');
 
     const recipientPubkey = new PublicKey(recipient_wallet);
     console.log('👤 Recipient wallet:', recipientPubkey.toBase58());
@@ -1445,6 +1601,28 @@ async function processGiftClaim(
         isNative: gift.token_mint === 'So11111111111111111111111111111111111111112'
       };
       console.warn(`⚠️ Using default token info: ${tokenInfo.symbol} (${tokenInfo.decimals} decimals)`);
+    }
+
+    // ✅ FIX 3: For SPL tokens, verify TipLink has SOL for transaction fees
+    // Check if recipient ATA exists to determine minimum SOL needed
+    if (!tokenInfo.isNative) {
+      const BASE_FEE = 0.000005; // Transaction fee
+      const PRIORITY_FEE_BUFFER = 0.0003; // Priority fees during congestion
+      
+      // Check if recipient ATA exists
+      const mintPubkey = new PublicKey(gift.token_mint);
+      const recipientATA = await getAssociatedTokenAddress(mintPubkey, recipientPubkey);
+      const recipientAccountInfo = await connection.getAccountInfo(recipientATA);
+      const recipientNeedsATA = !recipientAccountInfo;
+      
+      // Calculate minimum SOL needed based on whether ATA needs to be created
+      const RENT_EXEMPTION_FOR_ATA = 0.00203928; // Rent for token account (only if ATA needs creation)
+      const MIN_SOL_FOR_FEES = (recipientNeedsATA ? RENT_EXEMPTION_FOR_ATA : 0) + BASE_FEE + PRIORITY_FEE_BUFFER;
+      
+      if (tiplinkBalanceSOL < MIN_SOL_FOR_FEES) {
+        throw new Error(`TipLink has insufficient SOL balance to pay transaction fees${recipientNeedsATA ? ' and create recipient token account' : ''}. Required: ${MIN_SOL_FOR_FEES} SOL, Available: ${tiplinkBalanceSOL} SOL. This gift may not have been funded correctly.`);
+      }
+      console.log(`✅ TipLink has sufficient SOL (${tiplinkBalanceSOL} SOL) for transaction fees${recipientNeedsATA ? ' and ATA creation' : ''} (ATA needed: ${recipientNeedsATA})`);
     }
 
     let signature: string;
@@ -1503,14 +1681,25 @@ async function processGiftClaim(
       // ✅ CRITICAL: Check if TipLink has the SPL tokens before attempting transfer
       console.log(`🔍 Checking TipLink token account: ${tiplinkATA.toBase58()}`);
       let tiplinkTokenAccount;
+      let tokenBalanceRaw: bigint;
       try {
         tiplinkTokenAccount = await getAccount(connection, tiplinkATA);
-        const tokenBalance = Number(tiplinkTokenAccount.amount) / (10 ** gift.token_decimals);
-        console.log(`💰 TipLink ${gift.token_symbol} balance: ${tokenBalance} ${gift.token_symbol}`);
         
-        // Check if TipLink has enough tokens
-        if (tokenBalance < gift.amount) {
-          throw new Error(`Insufficient ${gift.token_symbol} balance in TipLink. Required: ${gift.amount}, Available: ${tokenBalance}`);
+        // ✅ FIX 2: Use BigInt for precise comparison to avoid floating point errors
+        tokenBalanceRaw = tiplinkTokenAccount.amount; // Already a BigInt
+        const requiredAmountRaw = BigInt(Math.floor(gift.amount * (10 ** gift.token_decimals)));
+        
+        // For display purposes only
+        const tokenBalance = Number(tokenBalanceRaw) / (10 ** gift.token_decimals);
+        console.log(`💰 TipLink ${gift.token_symbol} balance: ${tokenBalance} ${gift.token_symbol} (raw: ${tokenBalanceRaw.toString()})`);
+        console.log(`📊 Required amount: ${gift.amount} ${gift.token_symbol} (raw: ${requiredAmountRaw.toString()})`);
+        
+        // ✅ FIX 2: Compare raw amounts (BigInt) with small tolerance for rounding errors
+        // Allow 1 raw unit tolerance to handle floating point precision issues
+        const TOLERANCE = BigInt(1);
+        if (tokenBalanceRaw < (requiredAmountRaw - TOLERANCE)) {
+          const available = Number(tokenBalanceRaw) / (10 ** gift.token_decimals);
+          throw new Error(`Insufficient ${gift.token_symbol} balance in TipLink. Required: ${gift.amount}, Available: ${available}`);
         }
         
         console.log(`✅ TipLink has sufficient ${gift.token_symbol} balance`);
@@ -1539,13 +1728,13 @@ async function processGiftClaim(
         console.log(`✅ Recipient token account exists: ${recipientATA.toBase58()}`);
       }
 
-      // Calculate transfer amount in token's smallest unit
+      // ✅ FIX 2: Use the same calculation method as balance check (with BigInt)
       const transferAmount = BigInt(Math.floor(gift.amount * (10 ** gift.token_decimals)));
       console.log(`📊 Transfer details:`, {
         tokenSymbol: gift.token_symbol,
         tokenAmount: gift.amount,
         transferAmountRaw: transferAmount.toString(),
-        tiplinkBalance: Number(tiplinkTokenAccount.amount).toString(),
+        tiplinkBalanceRaw: tokenBalanceRaw.toString(),
         recipientATA: recipientATA.toBase58()
       });
 
@@ -1560,6 +1749,18 @@ async function processGiftClaim(
       );
 
       const transaction = new Transaction().add(...instructions);
+      
+      // ✅ CRITICAL FIX: Set fee payer and blockhash BEFORE sending
+      const { blockhash } = await connection.getLatestBlockhash('finalized');
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = tipLink.keypair.publicKey;
+      
+      console.log('📝 Transaction configured:', {
+        feePayer: tipLink.keypair.publicKey.toBase58(),
+        blockhash: blockhash.substring(0, 8) + '...',
+        instructionCount: instructions.length
+      });
+      
       signature = await sendAndConfirmTransaction(
         connection,
         transaction,
@@ -1753,5 +1954,6 @@ if (KEEP_ALIVE_URL && process.env.NODE_ENV === 'production') {
 // Initialize background jobs
 console.log('🚀 Initializing background jobs...');
 startGiftExpiryJob();
+startCreditCleanupJob();
 
 app.listen(PORT, () => console.log(`Server listening on http://localhost:${PORT}`));

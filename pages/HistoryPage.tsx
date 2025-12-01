@@ -1,14 +1,34 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { usePrivy } from '@privy-io/react-auth';
 import { giftService } from '../services/api';
+import { getApiUrl } from '../services/apiConfig';
 import { Gift, GiftStatus } from '../types';
 import Spinner from '../components/Spinner';
 import { ArrowLeftIcon } from '../components/icons';
 
+interface Transaction {
+  id: string;
+  type: 'onramp' | 'card';
+  amountFiat?: number;
+  creditIssued?: boolean;
+  completedAt?: string;
+  status?: string;
+  isFree?: boolean;
+  amountCharged?: number;
+  createdAt?: string;
+}
+
 const HistoryPage: React.FC = () => {
+  const { user } = useAuth();
+  const { getAccessToken } = usePrivy();
   const [gifts, setGifts] = useState<Gift[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingTransactions, setIsLoadingTransactions] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'gifts' | 'transactions'>('gifts');
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -27,6 +47,66 @@ const HistoryPage: React.FC = () => {
     };
     fetchHistory();
   }, []);
+
+  useEffect(() => {
+    const fetchTransactions = async () => {
+      if (!user?.privy_did) {
+        console.log('⏳ Waiting for user privy_did...');
+        return;
+      }
+
+      setIsLoadingTransactions(true);
+      try {
+        const token = await getAccessToken();
+        const apiUrl = getApiUrl('users/me/transaction-history');
+        
+        console.log('🔍 Fetching transaction history:', {
+          apiUrl,
+          hasToken: !!token,
+          tokenPreview: token ? `${token.substring(0, 20)}...` : 'none',
+          userPrivyDid: user.privy_did,
+        });
+        
+        const response = await fetch(apiUrl, {
+          headers: {
+            'Authorization': `Bearer ${token || ''}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        console.log('📡 Transaction history response:', {
+          status: response.status,
+          statusText: response.statusText,
+          ok: response.ok,
+          url: response.url,
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('❌ Transaction history error response:', {
+            status: response.status,
+            statusText: response.statusText,
+            body: errorText,
+          });
+          throw new Error(`Failed to fetch transaction history: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        console.log(`📜 Loaded ${data.length} transactions`, data);
+        setTransactions(data);
+      } catch (err) {
+        console.error('❌ Error fetching transaction history:', {
+          error: err,
+          message: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
+        // Don't set error state, just log it - user will see "No transactions yet"
+      } finally {
+        setIsLoadingTransactions(false);
+      }
+    };
+    fetchTransactions();
+  }, [user?.privy_did, getAccessToken]);
 
   const getStatusChip = (gift: Gift) => {
     switch (gift.status) {
@@ -69,7 +149,34 @@ const HistoryPage: React.FC = () => {
             <span>Back</span>
         </button>
         <div className="bg-slate-800/50 border border-slate-700 rounded-2xl shadow-lg">
-          <h1 className="text-3xl font-bold p-6 border-b border-slate-700">Gift History</h1>
+          <div className="flex items-center justify-between p-6 border-b border-slate-700">
+            <h1 className="text-3xl font-bold">History</h1>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setActiveTab('gifts')}
+                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                  activeTab === 'gifts'
+                    ? 'bg-sky-500 text-white'
+                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                }`}
+              >
+                Gifts
+              </button>
+              <button
+                onClick={() => setActiveTab('transactions')}
+                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                  activeTab === 'transactions'
+                    ? 'bg-sky-500 text-white'
+                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                }`}
+              >
+                Transactions
+              </button>
+            </div>
+          </div>
+
+          {activeTab === 'gifts' ? (
+            <>
           {isLoading ? (
             <div className="flex justify-center items-center h-64">
               <Spinner />
@@ -150,6 +257,87 @@ const HistoryPage: React.FC = () => {
                     </tbody>
                 </table>
             </div>
+          )}
+            </>
+          ) : (
+            <>
+              {isLoadingTransactions ? (
+                <div className="flex justify-center items-center h-64">
+                  <Spinner />
+                </div>
+              ) : transactions.length === 0 ? (
+                <p className="text-center text-slate-400 py-10">No transactions yet.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead className="text-xs text-slate-400 uppercase bg-slate-800">
+                      <tr>
+                        <th scope="col" className="px-6 py-3">Type</th>
+                        <th scope="col" className="px-6 py-3">Amount</th>
+                        <th scope="col" className="px-6 py-3">Date</th>
+                        <th scope="col" className="px-6 py-3 whitespace-nowrap">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-700">
+                      {transactions.map((tx) => (
+                        <tr key={tx.id} className="hover:bg-slate-800 transition-colors">
+                          <td className="px-6 py-4 font-medium text-white whitespace-nowrap">
+                            {tx.type === 'onramp' ? (
+                              <div className="flex items-center gap-2">
+                                <span>💰 Added Funds (MoonPay)</span>
+                                {tx.creditIssued && (
+                                  <span className="px-2 py-1 text-xs font-medium text-green-300 bg-green-900/50 rounded-full">
+                                    ✨ $5 Credit
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <span>{tx.isFree ? '🎁' : '💳'} Card Transfer</span>
+                                {tx.isFree && (
+                                  <span className="px-2 py-1 text-xs font-medium text-green-300 bg-green-900/50 rounded-full">
+                                    FREE
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-6 py-4">
+                            {tx.type === 'onramp' ? (
+                              <span className="text-white font-semibold">
+                                +${tx.amountFiat?.toFixed(2) || '0.00'}
+                              </span>
+                            ) : (
+                              <span className={tx.isFree ? 'text-green-400 font-semibold' : 'text-white'}>
+                                {tx.isFree ? 'FREE' : `$${tx.amountCharged?.toFixed(2) || '0.00'}`}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 text-slate-300">
+                            {formatDate(tx.completedAt || tx.createdAt || new Date().toISOString())}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            {tx.type === 'onramp' ? (
+                              <span className="inline-flex items-center px-2 py-1 text-xs font-medium text-green-300 bg-green-900/50 rounded-full whitespace-nowrap">
+                                ✓ Completed
+                              </span>
+                            ) : (
+                              <span className={`inline-flex items-center px-2 py-1 text-xs font-medium rounded-full whitespace-nowrap ${
+                                tx.isFree
+                                  ? 'text-green-300 bg-green-900/50'
+                                  : 'text-slate-300 bg-slate-700/50'
+                              }`}>
+                                {tx.isFree ? '💚 On Us' : 'Charged'}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
           )}
         </div>
     </div>

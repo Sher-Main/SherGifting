@@ -11,11 +11,62 @@ import {
 } from '../types';
 
 // Use environment variable for backend URL in production, fallback to /api for local dev
-// If VITE_BACKEND_URL is set but doesn't end with /api, append it
-let BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '/api';
+// IMPORTANT: Vite environment variables are embedded at BUILD TIME
+// Make sure VITE_BACKEND_URL is set in Vercel before building
+const envValue = import.meta.env.VITE_BACKEND_URL;
+let BACKEND_URL = envValue || '/api';
+
+// Log the backend URL for debugging (without exposing secrets)
+console.log('🔧 API Configuration:', {
+  hasViteBackendUrl: !!envValue,
+  envValuePreview: envValue ? (envValue.length > 50 ? envValue.substring(0, 50) + '...' : envValue) : 'NOT SET',
+  backendUrlPreview: BACKEND_URL.length > 50 ? BACKEND_URL.substring(0, 50) + '...' : BACKEND_URL,
+  isProduction: import.meta.env.PROD,
+  mode: import.meta.env.MODE,
+  hostname: typeof window !== 'undefined' ? window.location.hostname : 'unknown',
+  allEnvKeys: Object.keys(import.meta.env).filter(k => k.startsWith('VITE_')),
+});
+
+// In production, we MUST have a valid backend URL (not localhost)
+// Check if we're in production by hostname (more reliable than import.meta.env.PROD)
+const isProduction = typeof window !== 'undefined' && 
+  (window.location.hostname.includes('cryptogifting.app') || 
+   window.location.hostname.includes('vercel.app') ||
+   (!window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')));
+
+if (isProduction) {
+  // If env var is missing, empty, or points to localhost, use fallback
+  if (!envValue || 
+      envValue.trim() === '' || 
+      envValue === '/api' || 
+      envValue.includes('localhost') || 
+      envValue.includes('127.0.0.1') ||
+      envValue.includes(':3001')) {
+    const errorMsg = `❌ CRITICAL: VITE_BACKEND_URL is not properly configured for production!
+    
+Current value: ${envValue || 'NOT SET'}
+Expected: A production URL like https://crypto-gifting-app.onrender.com
+
+Using fallback URL. Please ensure VITE_BACKEND_URL is set in Vercel environment variables and rebuild the application.`;
+    console.error(errorMsg);
+    // Use hardcoded fallback for production
+    BACKEND_URL = 'https://crypto-gifting-app.onrender.com';
+    console.warn('⚠️ Using fallback backend URL:', BACKEND_URL);
+  }
+}
+
+// If BACKEND_URL is set but doesn't end with /api, append it
 if (BACKEND_URL !== '/api' && !BACKEND_URL.endsWith('/api')) {
   BACKEND_URL = `${BACKEND_URL}/api`;
 }
+
+// Final safety check - never use localhost in production
+if (isProduction && (BACKEND_URL.includes('localhost') || BACKEND_URL.includes('127.0.0.1') || BACKEND_URL.includes(':3001'))) {
+  console.error('❌ BLOCKED: Attempted to use localhost in production! Forcing fallback.');
+  BACKEND_URL = 'https://crypto-gifting-app.onrender.com/api';
+}
+
+console.log('✅ Final BACKEND_URL:', BACKEND_URL);
 
 const apiClient = axios.create({
   baseURL: BACKEND_URL,
