@@ -1359,7 +1359,7 @@ app.post('/api/gifts/claim', claimLimiter, authenticateToken, async (req: AuthRe
 
   console.log('🎁 Secure claim attempt:', { 
     claim_token: claim_token?.substring(0, 8) + '...', 
-    user_email,
+    user_emails: userEmails,
     ip_address 
   });
 
