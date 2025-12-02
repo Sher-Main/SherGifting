@@ -21,7 +21,7 @@ import {
   pool,
   DbUser,
 } from './database';
-import { handleCardAdd, handleServiceFee } from './lib/onramp';
+import { handleCardAdd } from './lib/onramp';
 import userRoutes from './routes/user';
 import onrampRoutes from './routes/onramp';
 import cronRoutes from './routes/cron';
@@ -973,19 +973,7 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       console.log('📤 No card selected - skipping credit check');
     }
 
-    // Check if service fee is FREE (using onramp credit)
-    let serviceFeeResult = null;
-    try {
-      serviceFeeResult = await handleServiceFee(sender_did);
-      console.log(`💰 Service fee credit check:`, {
-        isFree: serviceFeeResult.isFree,
-        freeRemaining: serviceFeeResult.serviceFeeFreeRemaining,
-        creditsRemaining: serviceFeeResult.creditsRemaining,
-      });
-    } catch (serviceFeeError) {
-      console.error('⚠️ Error checking service fee credit (continuing with normal flow):', serviceFeeError);
-      // Don't fail gift creation if credit check fails
-    }
+    // Service fee removed - no longer checking for service fee credits
 
     // Fetch token price and calculate USD value for storage (before creating gift record)
     let usdValue: number | null = null;
@@ -1137,8 +1125,8 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       cardWasFree: cardResult?.isFree || false,
       creditsRemaining: cardResult?.creditsRemaining || 0,
       freeAddsRemaining: cardResult?.cardAddsFreeRemaining || 0,
-      serviceFeeWasFree: serviceFeeResult?.isFree || false,
-      serviceFeeFreeRemaining: serviceFeeResult?.serviceFeeFreeRemaining || 0,
+      serviceFeeWasFree: false, // Service fee removed
+      serviceFeeFreeRemaining: 0, // Service fee removed
     });
   } catch (error: any) {
     console.error('❌ Error creating gift:', error);
