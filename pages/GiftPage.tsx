@@ -1082,21 +1082,33 @@ const GiftPage: React.FC = () => {
                 // Get actual SOL balance
                 const solBalance = await getSolBalance();
                 
-                // Estimate required SOL based on actual transaction
-                const BASE_FEE = 0.000005; // Base transaction fee (~5,000 lamports)
-                const RENT_PER_ATA = 0.00203928; // Rent exemption for token account (~2,039,280 lamports)
-                const BUFFER_PERCENT = 0.01; // 1% buffer
-                let estimatedRequiredSol = BASE_FEE;
-                
                 // ✅ Detect token program ID
                 const tokenProgramId = await getTokenProgramId(currentToken.mint);
-                const isToken2022 = tokenProgramId.equals((await import('@solana/spl-token')).TOKEN_2022_PROGRAM_ID);
+                const splToken = await import('@solana/spl-token');
+                const isToken2022 = tokenProgramId.equals(splToken.TOKEN_2022_PROGRAM_ID);
                 console.log(`🔍 Detected token program: ${isToken2022 ? 'Token2022' : 'SPL Token'} for ${currentToken.symbol}`);
                 
-                const splToken = await import('@solana/spl-token');
+                // ✅ FIXED SOL SPONSORSHIP AMOUNTS (as per Perplexity recommendations + safety buffer)
+                // Base calculation:
+                //   - Receiver ATA Rent: 0.00203928 SOL
+                //   - Network Fee Buffer: 0.00001 SOL
+                //   - Safety Margin: 0.0005 SOL
+                //   - Rent Buffer (10%): 0.0002 SOL (extra safety for rent variations)
+                //   - Total: ~0.00275 SOL, rounded up to 0.003 SOL for SPL Token
+                //   - Token2022: 0.005 SOL (accounts for extensions, higher compute costs, + extra buffer)
+                const SPL_TOKEN_SPONSOR_AMOUNT = 0.003; // SOL (includes ~10% buffer on rent)
+                const TOKEN2022_SPONSOR_AMOUNT = 0.005; // SOL (includes buffer for extensions + rent variations)
+                
+                // Use fixed amount based on token type
+                const TIPLINK_SOL_RESERVE = isToken2022 ? TOKEN2022_SPONSOR_AMOUNT : SPL_TOKEN_SPONSOR_AMOUNT;
+                
+                // Calculate total SOL needed (sender ATA creation + TipLink sponsor amount)
+                const RENT_PER_ATA = 0.00203928; // Rent exemption for token account
+                const BASE_FEE = 0.000005; // Base transaction fee
+                const PRIORITY_FEE_BUFFER = 0.0003; // Priority fees buffer
+                
                 const { getAssociatedTokenAddress, getAccount } = splToken;
                 const senderPubkey = new PublicKey(embeddedWallet.address);
-                const tipLinkPubkey = new PublicKey(tiplink_public_key);
                 const mintPubkey = new PublicKey(currentToken.mint);
                 
                 // ✅ Check if sender ATA exists
@@ -1113,67 +1125,22 @@ const GiftPage: React.FC = () => {
                 } catch (error: any) {
                     if (error.name === 'TokenAccountNotFoundError') {
                         senderNeedsATA = true;
-                        estimatedRequiredSol += RENT_PER_ATA;
                         console.log('📝 Sender ATA needs to be created (+0.00203928 SOL)');
                     } else {
                         throw error;
                     }
                 }
                 
-                // Check TipLink ATA
-                const tipLinkATA = await getAssociatedTokenAddress(
-                    mintPubkey,
-                    tipLinkPubkey,
-                    true,
-                    tokenProgramId
-                );
-                let tipLinkNeedsATA = false;
-                try {
-                    await getAccount(connection, tipLinkATA);
-                    console.log('✅ TipLink ATA already exists');
-                } catch (error: any) {
-                    if (error.name === 'TokenAccountNotFoundError') {
-                        tipLinkNeedsATA = true;
-                        estimatedRequiredSol += RENT_PER_ATA;
-                        console.log('📝 TipLink ATA needs to be created (+0.00203928 SOL)');
-                    } else {
-                        throw error;
-                    }
-                }
-                
-                // Check fee wallet ATA (if fee wallet is configured)
-                if (feeWalletAddress) {
-                    const feeWalletPubkey = new PublicKey(feeWalletAddress);
-                    const feeWalletATA = await getAssociatedTokenAddress(
-                        mintPubkey,
-                        feeWalletPubkey,
-                        true,
-                        tokenProgramId
-                    );
-                    try {
-                        await getAccount(connection, feeWalletATA);
-                        console.log('✅ Fee wallet ATA already exists');
-                    } catch (error: any) {
-                        if (error.name === 'TokenAccountNotFoundError') {
-                            estimatedRequiredSol += RENT_PER_ATA;
-                            console.log('📝 Fee wallet ATA needs to be created (+0.00203928 SOL)');
-                        } else {
-                            throw error;
-                        }
-                    }
-                }
-                
-                // ✅ FIX: Add SOL reserve for TipLink (needed for claim transaction fees + ATA creation)
-                // Include sender ATA cost + recipient ATA cost (if needed) + 1% buffer
+                // Calculate total SOL needed
                 const SENDER_ATA_COST = senderNeedsATA ? RENT_PER_ATA : 0;
-                const RECIPIENT_ATA_COST = recipientNeedsATA ? RENT_PER_ATA : 0;
-                const TOTAL_ATA_COST = SENDER_ATA_COST + RECIPIENT_ATA_COST;
-                const TIPLINK_SOL_RESERVE = (TOTAL_ATA_COST * (1 + BUFFER_PERCENT)) + BASE_FEE + 0.0003; // 1% buffer on ATA costs + base fee + priority buffer
-                estimatedRequiredSol += TIPLINK_SOL_RESERVE;
-                console.log(`💎 Adding TipLink SOL reserve: ${TIPLINK_SOL_RESERVE.toFixed(6)} SOL (sender ATA: ${SENDER_ATA_COST}, recipient ATA: ${RECIPIENT_ATA_COST}, 1% buffer: ${(TOTAL_ATA_COST * BUFFER_PERCENT).toFixed(6)}, base fee: ${BASE_FEE}, priority buffer: 0.0003)`);
+                const estimatedRequiredSol = SENDER_ATA_COST + TIPLINK_SOL_RESERVE + BASE_FEE + PRIORITY_FEE_BUFFER;
                 
-                // Add 5% buffer for safety (reduced from 10% to be less strict)
-                estimatedRequiredSol *= 1.05;
+                console.log(`💎 SOL Requirements:`);
+                console.log(`   - Sender ATA cost: ${SENDER_ATA_COST.toFixed(6)} SOL (needed: ${senderNeedsATA})`);
+                console.log(`   - TipLink sponsor amount: ${TIPLINK_SOL_RESERVE.toFixed(6)} SOL (${isToken2022 ? 'Token2022' : 'SPL Token'})`);
+                console.log(`   - Base fee: ${BASE_FEE} SOL`);
+                console.log(`   - Priority buffer: ${PRIORITY_FEE_BUFFER} SOL`);
+                console.log(`   - Total required: ${estimatedRequiredSol.toFixed(6)} SOL`);
                 
                 console.log('🔍 SOL Balance Check (Accurate):', {
                     solBalance: solBalance.toFixed(6),
@@ -1332,28 +1299,22 @@ const GiftPage: React.FC = () => {
                 
                 // Service and card fees removed - no fee transfer needed
                 
-                // ATA fee and TipLink reserve are handled separately in SOL (below)
+                // ✅ FIXED SOL SPONSORSHIP: Send fixed amount to TipLink based on token type
+                // This amount covers: Receiver ATA Rent + Rent Buffer (10%) + Network Fees + Safety Buffer
+                const tokenProgramId = await getTokenProgramId(currentToken.mint);
+                const splToken = await import('@solana/spl-token');
+                const isToken2022 = tokenProgramId.equals(splToken.TOKEN_2022_PROGRAM_ID);
                 
-                // ✅ FIX: Send exact SOL reserve needed (sender ATA + recipient ATA + 1% buffer + transaction fees)
-                const BASE_FEE = 0.000005; // Transaction fee
-                const PRIORITY_FEE_BUFFER = 0.0003; // Priority fees during congestion
-                const RENT_PER_ATA = 0.00203928; // Rent exemption for token account
-                const BUFFER_PERCENT = 0.01; // 1% buffer
-                
-                // Check if sender ATA exists (we already checked earlier, but need to recalculate here)
-                const senderNeedsATA = !(await checkSenderATA(embeddedWallet.address, currentToken.mint));
-                const SENDER_ATA_COST = senderNeedsATA ? RENT_PER_ATA : 0;
-                const RECIPIENT_ATA_COST = recipientNeedsATA ? RENT_PER_ATA : 0;
-                const TOTAL_ATA_COST = SENDER_ATA_COST + RECIPIENT_ATA_COST;
-                const TIPLINK_SOL_RESERVE = (TOTAL_ATA_COST * (1 + BUFFER_PERCENT)) + BASE_FEE + PRIORITY_FEE_BUFFER;
+                // Base amounts with safety buffers:
+                // SPL Token: 0.003 SOL (Rent: 0.00203928 + 10% buffer: 0.0002 + Fees: 0.00076)
+                // Token2022: 0.005 SOL (Higher due to extensions + extra buffer for compute variations)
+                const SPL_TOKEN_SPONSOR_AMOUNT = 0.003; // SOL (includes ~10% buffer on rent for safety)
+                const TOKEN2022_SPONSOR_AMOUNT = 0.005; // SOL (includes buffer for extensions + rent variations)
+                const TIPLINK_SOL_RESERVE = isToken2022 ? TOKEN2022_SPONSOR_AMOUNT : SPL_TOKEN_SPONSOR_AMOUNT;
                 
                 const tiplinkSolReserveLamports = Math.round(TIPLINK_SOL_RESERVE * LAMPORTS_PER_SOL);
-                console.log(`💎 Adding SOL reserve to TipLink: ${TIPLINK_SOL_RESERVE.toFixed(6)} SOL (${tiplinkSolReserveLamports} lamports)`);
-                console.log(`   - Sender ATA cost: ${SENDER_ATA_COST.toFixed(6)} SOL (needed: ${senderNeedsATA})`);
-                console.log(`   - Recipient ATA cost: ${RECIPIENT_ATA_COST.toFixed(6)} SOL (needed: ${recipientNeedsATA})`);
-                console.log(`   - 1% buffer on ATA costs: ${(TOTAL_ATA_COST * BUFFER_PERCENT).toFixed(6)} SOL`);
-                console.log(`   - Base fee: ${BASE_FEE} SOL`);
-                console.log(`   - Priority buffer: ${PRIORITY_FEE_BUFFER} SOL`);
+                console.log(`💎 Adding fixed SOL sponsor amount to TipLink: ${TIPLINK_SOL_RESERVE.toFixed(6)} SOL (${tiplinkSolReserveLamports} lamports) [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
+                console.log(`   This covers: Receiver ATA rent + 10% rent buffer + Network fees + Safety buffer`);
                 transaction.add(
                     SystemProgram.transfer({
                         fromPubkey: senderPubkey,

@@ -315,15 +315,36 @@ const WithdrawPage: React.FC = () => {
           );
         }
       } else {
-        // SPL Token transfer
+        // SPL Token transfer (supports both SPL Token and Token2022)
         const splToken = await import('@solana/spl-token');
         const {
           getAssociatedTokenAddress,
           createTransferInstruction,
           createAssociatedTokenAccountInstruction,
           TOKEN_PROGRAM_ID,
+          TOKEN_2022_PROGRAM_ID,
           getAccount
         } = splToken;
+        
+        // ✅ Helper function to detect token program ID
+        const getTokenProgramId = async (mintAddress: string): Promise<PublicKey> => {
+          try {
+            const mintPubkey = new PublicKey(mintAddress);
+            const mintInfo = await connection.getAccountInfo(mintPubkey);
+            if (mintInfo?.owner.equals(TOKEN_2022_PROGRAM_ID)) {
+              return TOKEN_2022_PROGRAM_ID;
+            }
+            return TOKEN_PROGRAM_ID;
+          } catch (error) {
+            console.warn(`⚠️ Could not detect token program for ${mintAddress}, defaulting to TOKEN_PROGRAM_ID:`, error);
+            return TOKEN_PROGRAM_ID;
+          }
+        };
+        
+        // ✅ Detect token program ID (SPL Token vs Token2022)
+        const tokenProgramId = await getTokenProgramId(selectedToken.mint);
+        const isToken2022 = tokenProgramId.equals(TOKEN_2022_PROGRAM_ID);
+        console.log(`🔍 Detected token program: ${isToken2022 ? 'Token2022' : 'SPL Token'} for ${selectedToken.symbol}`);
         
         const mintPubkey = new PublicKey(selectedToken.mint);
         const decimals = selectedToken.decimals || 9;
@@ -331,19 +352,46 @@ const WithdrawPage: React.FC = () => {
         const withdrawalAmountRaw = Math.round(numericAmount * Math.pow(10, decimals));
         const feeAmountRaw = Math.round(feeAmount * Math.pow(10, decimals));
         
-        // Get associated token addresses
-        const senderATA = await getAssociatedTokenAddress(
-          mintPubkey,
-          senderPubkey,
-          false,
-          TOKEN_PROGRAM_ID
-        );
+        // ✅ Check if sender has sufficient SOL for ATA creation if needed
+        const solBalance = await connection.getBalance(senderPubkey);
+        const solBalanceSOL = solBalance / LAMPORTS_PER_SOL;
+        const RENT_EXEMPTION_FOR_ATA = 0.00203928; // Rent for token account
+        const BASE_TX_FEE = 0.000005; // Base transaction fee
+        const PRIORITY_FEE_BUFFER = 0.0003; // Priority fees buffer
         
+        // Check if recipient ATA exists
         const recipientATA = await getAssociatedTokenAddress(
           mintPubkey,
           recipientPubkey,
           true,
-          TOKEN_PROGRAM_ID
+          tokenProgramId
+        );
+        
+        let recipientNeedsATA = false;
+        try {
+          await getAccount(connection, recipientATA);
+          console.log(`✅ Recipient ATA exists: ${recipientATA.toBase58()}`);
+        } catch (error: any) {
+          if (error.name === 'TokenAccountNotFoundError') {
+            recipientNeedsATA = true;
+            console.log(`📝 Recipient ATA needs to be created: ${recipientATA.toBase58()}`);
+            
+            // ✅ Verify sender has enough SOL for ATA creation
+            const requiredSOL = RENT_EXEMPTION_FOR_ATA + BASE_TX_FEE + PRIORITY_FEE_BUFFER;
+            if (solBalanceSOL < requiredSOL) {
+              throw new Error(`Insufficient SOL balance. You need at least ${requiredSOL.toFixed(6)} SOL to create the recipient's token account. You have ${solBalanceSOL.toFixed(6)} SOL available.`);
+            }
+          } else {
+            throw error;
+          }
+        }
+        
+        // Get associated token addresses (using correct program ID)
+        const senderATA = await getAssociatedTokenAddress(
+          mintPubkey,
+          senderPubkey,
+          false,
+          tokenProgramId
         );
         
         // Check sender balance
@@ -359,26 +407,20 @@ const WithdrawPage: React.FC = () => {
           throw error;
         }
         
-        // Check if recipient ATA exists, create if not
-        try {
-          await getAccount(connection, recipientATA);
-        } catch (error: any) {
-          if (error.name === 'TokenAccountNotFoundError') {
-            transaction.add(
-              createAssociatedTokenAccountInstruction(
-                senderPubkey,
-                recipientATA,
-                recipientPubkey,
-                mintPubkey,
-                TOKEN_PROGRAM_ID
-              )
-            );
-          } else {
-            throw error;
-          }
+        // Check if recipient ATA exists, create if not (using correct program ID)
+        if (recipientNeedsATA) {
+          transaction.add(
+            createAssociatedTokenAccountInstruction(
+              senderPubkey,
+              recipientATA,
+              recipientPubkey,
+              mintPubkey,
+              tokenProgramId
+            )
+          );
         }
         
-        // Add withdrawal amount transfer
+        // Add withdrawal amount transfer (using correct program ID)
         transaction.add(
           createTransferInstruction(
             senderATA,
@@ -386,7 +428,7 @@ const WithdrawPage: React.FC = () => {
             senderPubkey,
             BigInt(withdrawalAmountRaw),
             [],
-            TOKEN_PROGRAM_ID
+            tokenProgramId
           )
         );
         
@@ -397,25 +439,38 @@ const WithdrawPage: React.FC = () => {
             mintPubkey,
             feeWalletPubkey,
             true,
-            TOKEN_PROGRAM_ID
+            tokenProgramId
           );
           
+          let feeWalletNeedsATA = false;
           try {
             await getAccount(connection, feeWalletATA);
+            console.log(`✅ Fee wallet ATA exists: ${feeWalletATA.toBase58()}`);
           } catch (error: any) {
             if (error.name === 'TokenAccountNotFoundError') {
-              transaction.add(
-                createAssociatedTokenAccountInstruction(
-                  senderPubkey,
-                  feeWalletATA,
-                  feeWalletPubkey,
-                  mintPubkey,
-                  TOKEN_PROGRAM_ID
-                )
-              );
+              feeWalletNeedsATA = true;
+              console.log(`📝 Fee wallet ATA needs to be created: ${feeWalletATA.toBase58()}`);
+              
+              // ✅ Verify sender has enough SOL for fee wallet ATA creation
+              const requiredSOL = (recipientNeedsATA ? 0 : RENT_EXEMPTION_FOR_ATA) + BASE_TX_FEE + PRIORITY_FEE_BUFFER;
+              if (solBalanceSOL < requiredSOL) {
+                throw new Error(`Insufficient SOL balance. You need at least ${requiredSOL.toFixed(6)} SOL to create the fee wallet's token account. You have ${solBalanceSOL.toFixed(6)} SOL available.`);
+              }
             } else {
               throw error;
             }
+          }
+          
+          if (feeWalletNeedsATA) {
+            transaction.add(
+              createAssociatedTokenAccountInstruction(
+                senderPubkey,
+                feeWalletATA,
+                feeWalletPubkey,
+                mintPubkey,
+                tokenProgramId
+              )
+            );
           }
           
           transaction.add(
@@ -425,7 +480,7 @@ const WithdrawPage: React.FC = () => {
               senderPubkey,
               BigInt(feeAmountRaw),
               [],
-              TOKEN_PROGRAM_ID
+              tokenProgramId
             )
           );
         }
@@ -437,6 +492,40 @@ const WithdrawPage: React.FC = () => {
       transaction.feePayer = new PublicKey(embeddedWallet.address);
       if (lastValidBlockHeight) {
         transaction.lastValidBlockHeight = lastValidBlockHeight;
+      }
+
+      // ✅ Simulate transaction before sending to catch errors early
+      console.log('🔍 Simulating transaction before sending...');
+      try {
+        const simulation = await connection.simulateTransaction(transaction);
+        
+        if (simulation.value.err) {
+          console.error('❌ Transaction simulation failed:', simulation.value.err);
+          console.error('📋 Simulation logs:', simulation.value.logs);
+          
+          // Parse error for user-friendly message
+          const errStr = JSON.stringify(simulation.value.err);
+          if (errStr.includes('-32002') || errStr.includes('insufficient funds') || errStr.includes('InsufficientFunds')) {
+            throw new Error('Insufficient SOL balance for transaction fees. Please ensure you have enough SOL to cover transaction fees and account creation costs.');
+          } else if (errStr.includes('rent') || errStr.includes('RentExempt')) {
+            throw new Error('Insufficient SOL balance for account rent exemption. Please add more SOL to your wallet.');
+          } else {
+            throw new Error(`Transaction simulation failed: ${errStr}. Please check your balance and try again.`);
+          }
+        }
+        
+        console.log('✅ Transaction simulation passed:', {
+          fee: simulation.value.fee ? `${(simulation.value.fee / LAMPORTS_PER_SOL).toFixed(6)} SOL` : 'N/A',
+          unitsConsumed: simulation.value.unitsConsumed || 'N/A',
+        });
+      } catch (simError: any) {
+        console.error('❌ Transaction simulation error:', simError);
+        // If simulation fails, check if it's a known error
+        if (simError.message && simError.message.includes('Insufficient')) {
+          throw simError;
+        }
+        // For other simulation errors, still try to send but log warning
+        console.warn('⚠️ Simulation failed but proceeding with transaction:', simError.message);
       }
 
       const serializedTransaction = transaction.serialize({

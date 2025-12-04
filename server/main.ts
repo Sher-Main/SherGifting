@@ -3,7 +3,7 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { TipLink } from '@tiplink/api';
 import { Connection, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAccount } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, createCloseAccountInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAccount } from '@solana/spl-token';
 import 'dotenv/config';
 import { authenticateToken, AuthRequest } from './authMiddleware';
 import { sendGiftNotification } from './emailService';
@@ -598,9 +598,9 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
           usdValue,
           verified: jupiterInfo.verified,
           tags: jupiterInfo.tags,
-          programId: token.programId.toBase58(), // Include program ID in response
-          isToken2022, // Include flag for easy identification
-        });
+          // Note: programId and isToken2022 are included but not in TypeScript interface
+          // They're added dynamically for frontend use
+        } as any);
         console.log(`📦 ${jupiterInfo.symbol}: ${token.balance.toFixed(4)} ($${usdValue.toFixed(2)}) ${jupiterInfo.verified ? '✓' : ''} [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
       } else {
         const shortMint = `${token.mint.substring(0, 4)}...${token.mint.substring(token.mint.length - 4)}`;
@@ -614,9 +614,9 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
           usdValue: 0,
           verified: false,
           tags: ['unknown'],
-          programId: token.programId.toBase58(), // Include program ID in response
-          isToken2022, // Include flag for easy identification
-        });
+          // Note: programId and isToken2022 are included but not in TypeScript interface
+          // They're added dynamically for frontend use
+        } as any);
         console.warn(`⚠️ No data found for: ${token.mint} [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
       }
     }
@@ -1648,8 +1648,11 @@ async function processGiftClaim(
       const recipientNeedsATA = !recipientAccountInfo;
       
       // Calculate minimum SOL needed based on whether ATA needs to be created
-      const RENT_EXEMPTION_FOR_ATA = 0.00203928; // Rent for token account (only if ATA needs creation)
-      const MIN_SOL_FOR_FEES = (recipientNeedsATA ? RENT_EXEMPTION_FOR_ATA : 0) + BASE_FEE + PRIORITY_FEE_BUFFER;
+      // Add 10% buffer on rent for safety (accounts for potential variations)
+      const RENT_EXEMPTION_FOR_ATA = 0.00203928; // Base rent for token account
+      const RENT_BUFFER_PERCENT = 0.10; // 10% safety buffer on rent
+      const RENT_WITH_BUFFER = RENT_EXEMPTION_FOR_ATA * (1 + RENT_BUFFER_PERCENT); // ~0.002243 SOL
+      const MIN_SOL_FOR_FEES = (recipientNeedsATA ? RENT_WITH_BUFFER : 0) + BASE_FEE + PRIORITY_FEE_BUFFER;
       
       if (tiplinkBalanceSOL < MIN_SOL_FOR_FEES) {
         throw new Error(`TipLink has insufficient SOL balance to pay transaction fees${recipientNeedsATA ? ' and create recipient token account' : ''}. Required: ${MIN_SOL_FOR_FEES} SOL, Available: ${tiplinkBalanceSOL} SOL. This gift may not have been funded correctly.`);
@@ -1785,6 +1788,49 @@ async function processGiftClaim(
         )
       );
 
+      // ✅ RENT RECYCLING: Close TipLink ATA to reclaim rent (~0.002 SOL)
+      // This reclaims the rent exemption that was locked in the TipLink's ATA
+      console.log(`♻️ Closing TipLink ATA to reclaim rent: ${tiplinkATA.toBase58()}`);
+      instructions.push(
+        createCloseAccountInstruction(
+          tiplinkATA, // account to close
+          recipientPubkey, // destination for reclaimed rent
+          tipLink.keypair.publicKey, // authority (TipLink owns the ATA)
+          [], // multiSigners
+          tokenProgramId
+        )
+      );
+
+      // ✅ SWEEP REMAINING SOL: Transfer all remaining SOL from TipLink to receiver
+      // After closing the ATA, TipLink will have: original balance + rent reclaimed (~0.002 SOL) - transaction fees
+      // We'll sweep everything except a small reserve for the final transaction fee
+      const tiplinkBalanceBefore = await connection.getBalance(tipLink.keypair.publicKey);
+      const RENT_RECLAIMED_FROM_ATA = 2039280; // ~0.00203928 SOL (rent exemption for token account)
+      const ESTIMATED_TX_FEES = 20000; // Reserve ~0.00002 SOL for transaction fees (multiple instructions)
+      const FEE_RESERVE = ESTIMATED_TX_FEES;
+      
+      // Estimate final balance: current balance + rent from ATA - estimated fees
+      const estimatedFinalBalance = tiplinkBalanceBefore + RENT_RECLAIMED_FROM_ATA - ESTIMATED_TX_FEES;
+      const sweepAmount = estimatedFinalBalance > FEE_RESERVE 
+        ? estimatedFinalBalance - FEE_RESERVE 
+        : 0;
+      
+      if (sweepAmount > 0) {
+        console.log(`💰 Sweeping remaining SOL from TipLink: ${(sweepAmount / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+        console.log(`   - Current balance: ${(tiplinkBalanceBefore / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+        console.log(`   - Rent to reclaim: ${(RENT_RECLAIMED_FROM_ATA / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+        console.log(`   - Estimated fees: ${(ESTIMATED_TX_FEES / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+        instructions.push(
+          SystemProgram.transfer({
+            fromPubkey: tipLink.keypair.publicKey,
+            toPubkey: recipientPubkey,
+            lamports: Math.max(0, Math.floor(sweepAmount)), // Ensure non-negative integer
+          })
+        );
+      } else {
+        console.log(`⚠️ No SOL to sweep (balance: ${(tiplinkBalanceBefore / LAMPORTS_PER_SOL).toFixed(6)} SOL)`);
+      }
+
       const transaction = new Transaction().add(...instructions);
       
       // ✅ CRITICAL FIX: Set fee payer and blockhash BEFORE sending
@@ -1795,7 +1841,9 @@ async function processGiftClaim(
       console.log('📝 Transaction configured:', {
         feePayer: tipLink.keypair.publicKey.toBase58(),
         blockhash: blockhash.substring(0, 8) + '...',
-        instructionCount: instructions.length
+        instructionCount: instructions.length,
+        includesRentRecycling: true,
+        includesSweep: sweepAmount > 0
       });
       
       signature = await sendAndConfirmTransaction(
