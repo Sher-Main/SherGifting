@@ -1301,19 +1301,19 @@ const GiftPage: React.FC = () => {
                 
                 // ✅ FIXED SOL SPONSORSHIP: Send fixed amount to TipLink based on token type
                 // This amount covers: Receiver ATA Rent + Rent Buffer (10%) + Network Fees + Safety Buffer
-                const tokenProgramId = await getTokenProgramId(currentToken.mint);
-                const splToken = await import('@solana/spl-token');
-                const isToken2022 = tokenProgramId.equals(splToken.TOKEN_2022_PROGRAM_ID);
+                const tokenProgramIdForSponsor = await getTokenProgramId(currentToken.mint);
+                // Token2022 program ID: TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb
+                const isToken2022ForSponsor = tokenProgramIdForSponsor.toBase58() === 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
                 
                 // Base amounts with safety buffers:
                 // SPL Token: 0.003 SOL (Rent: 0.00203928 + 10% buffer: 0.0002 + Fees: 0.00076)
                 // Token2022: 0.005 SOL (Higher due to extensions + extra buffer for compute variations)
                 const SPL_TOKEN_SPONSOR_AMOUNT = 0.003; // SOL (includes ~10% buffer on rent for safety)
                 const TOKEN2022_SPONSOR_AMOUNT = 0.005; // SOL (includes buffer for extensions + rent variations)
-                const TIPLINK_SOL_RESERVE = isToken2022 ? TOKEN2022_SPONSOR_AMOUNT : SPL_TOKEN_SPONSOR_AMOUNT;
+                const TIPLINK_SOL_RESERVE = isToken2022ForSponsor ? TOKEN2022_SPONSOR_AMOUNT : SPL_TOKEN_SPONSOR_AMOUNT;
                 
                 const tiplinkSolReserveLamports = Math.round(TIPLINK_SOL_RESERVE * LAMPORTS_PER_SOL);
-                console.log(`💎 Adding fixed SOL sponsor amount to TipLink: ${TIPLINK_SOL_RESERVE.toFixed(6)} SOL (${tiplinkSolReserveLamports} lamports) [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
+                console.log(`💎 Adding fixed SOL sponsor amount to TipLink: ${TIPLINK_SOL_RESERVE.toFixed(6)} SOL (${tiplinkSolReserveLamports} lamports) [${isToken2022ForSponsor ? 'Token2022' : 'SPL Token'}]`);
                 console.log(`   This covers: Receiver ATA rent + 10% rent buffer + Network fees + Safety buffer`);
                 transaction.add(
                     SystemProgram.transfer({
