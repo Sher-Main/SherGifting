@@ -1,5 +1,5 @@
 import { Connection, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, getAccount } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAccount } from '@solana/spl-token';
 import { TipLink } from '@tiplink/api';
 import { decryptTipLink } from '../utils/encryption';
 import { pool } from '../database';
@@ -23,6 +23,24 @@ export class GiftRefundService {
 
     if (!this.encryptionKey || this.encryptionKey.length < 32) {
       throw new Error('TIPLINK_ENCRYPTION_KEY not set or too short in environment variables');
+    }
+  }
+
+  /**
+   * Helper function to detect token program ID from mint address
+   */
+  private async getTokenProgramId(mintAddress: string): Promise<PublicKey> {
+    try {
+      const mintPubkey = new PublicKey(mintAddress);
+      const mintInfo = await this.connection.getAccountInfo(mintPubkey);
+      if (mintInfo?.owner.equals(TOKEN_2022_PROGRAM_ID)) {
+        return TOKEN_2022_PROGRAM_ID;
+      }
+      return TOKEN_PROGRAM_ID;
+    } catch (error) {
+      // Default to TOKEN_PROGRAM_ID if detection fails
+      console.warn(`⚠️ Could not detect token program for ${mintAddress}, defaulting to TOKEN_PROGRAM_ID:`, error);
+      return TOKEN_PROGRAM_ID;
     }
   }
 
@@ -194,12 +212,17 @@ export class GiftRefundService {
 
         return { success: true, signature };
       } else {
-        // SPL Token refund
+        // SPL Token refund (supports both SPL Token and Token2022)
         console.log(`💸 Preparing SPL token refund: ${gift.amount} ${gift.token_symbol} to sender...`);
 
+        // ✅ Detect token program ID (SPL Token vs Token2022)
+        const tokenProgramId = await this.getTokenProgramId(gift.token_mint);
+        const isToken2022 = tokenProgramId.equals(TOKEN_2022_PROGRAM_ID);
+        console.log(`🔍 Detected token program: ${isToken2022 ? 'Token2022' : 'SPL Token'} for ${gift.token_symbol}`);
+
         const mintPubkey = new PublicKey(gift.token_mint);
-        const tiplinkATA = await getAssociatedTokenAddress(mintPubkey, tipLinkPublicKey);
-        const senderATA = await getAssociatedTokenAddress(mintPubkey, new PublicKey(gift.sender_wallet));
+        const tiplinkATA = await getAssociatedTokenAddress(mintPubkey, tipLinkPublicKey, false, tokenProgramId);
+        const senderATA = await getAssociatedTokenAddress(mintPubkey, new PublicKey(gift.sender_wallet), false, tokenProgramId);
 
         // Check if TipLink has the SPL tokens
         console.log(`🔍 Checking TipLink token account: ${tiplinkATA.toBase58()}`);
@@ -248,16 +271,17 @@ export class GiftRefundService {
 
         const instructions = [];
 
-        // Create sender's associated token account if it doesn't exist
+        // Create sender's associated token account if it doesn't exist (using correct program ID)
         const senderAccountInfo = await this.connection.getAccountInfo(senderATA);
         if (!senderAccountInfo) {
-          console.log(`📝 Creating sender token account: ${senderATA.toBase58()}`);
+          console.log(`📝 Creating sender token account: ${senderATA.toBase58()} [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
           instructions.push(
             createAssociatedTokenAccountInstruction(
               tipLinkPublicKey,
               senderATA,
               new PublicKey(gift.sender_wallet),
-              mintPubkey
+              mintPubkey,
+              tokenProgramId
             )
           );
         } else {
@@ -273,16 +297,19 @@ export class GiftRefundService {
           tokenAmount: gift.amount,
           transferAmountRaw: transferAmount.toString(),
           tiplinkBalance: availableBalance.toString(),
-          senderATA: senderATA.toBase58()
+          senderATA: senderATA.toBase58(),
+          programId: isToken2022 ? 'Token2022' : 'SPL Token'
         });
 
-        // Transfer SPL tokens
+        // Transfer SPL tokens (using correct program ID)
         instructions.push(
           createTransferInstruction(
             tiplinkATA,
             senderATA,
             tipLinkPublicKey,
-            transferAmount
+            transferAmount,
+            [],
+            tokenProgramId
           )
         );
 

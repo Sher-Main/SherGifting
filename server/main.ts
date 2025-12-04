@@ -3,7 +3,7 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { TipLink } from '@tiplink/api';
 import { Connection, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, getAccount } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAccount } from '@solana/spl-token';
 import 'dotenv/config';
 import { authenticateToken, AuthRequest } from './authMiddleware';
 import { sendGiftNotification } from './emailService';
@@ -411,6 +411,22 @@ const isSolanaAddress = (address: string): boolean => {
          address.length <= 44;
 };
 
+// ✅ Helper function to detect token program ID from mint address
+async function getTokenProgramId(mintAddress: string): Promise<PublicKey> {
+  try {
+    const mintPubkey = new PublicKey(mintAddress);
+    const mintInfo = await connection.getAccountInfo(mintPubkey);
+    if (mintInfo?.owner.equals(TOKEN_2022_PROGRAM_ID)) {
+      return TOKEN_2022_PROGRAM_ID;
+    }
+    return TOKEN_PROGRAM_ID;
+  } catch (error) {
+    // Default to TOKEN_PROGRAM_ID if detection fails
+    console.warn(`⚠️ Could not detect token program for ${mintAddress}, defaulting to TOKEN_PROGRAM_ID:`, error);
+    return TOKEN_PROGRAM_ID;
+  }
+}
+
 // --- ROUTES ---
 
 app.post('/api/user/sync', authenticateToken, async (req: AuthRequest, res) => {
@@ -484,9 +500,11 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
     let cachedSolPrice = getCachedPrice(solMint);
     const shouldFetchSolMeta = !solTokenMeta || cachedSolPrice === null;
 
-    const [solBalanceLamports, tokenAccounts, fetchedSolMeta] = await Promise.all([
+    // ✅ Query both TOKEN_PROGRAM_ID and TOKEN_2022_PROGRAM_ID in parallel
+    const [solBalanceLamports, tokenAccountsSPL, tokenAccounts2022, fetchedSolMeta] = await Promise.all([
       connection.getBalance(ownerPublicKey),
       connection.getParsedTokenAccountsByOwner(ownerPublicKey, { programId: TOKEN_PROGRAM_ID }),
+      connection.getParsedTokenAccountsByOwner(ownerPublicKey, { programId: TOKEN_2022_PROGRAM_ID }),
       shouldFetchSolMeta
         ? fetch(solSearchUrl)
             .then(async (response) => {
@@ -502,6 +520,14 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
             })
         : Promise.resolve(null),
     ]);
+    
+    // Merge token accounts from both programs
+    const allTokenAccounts = [
+      ...tokenAccountsSPL.value.map(acc => ({ ...acc, programId: TOKEN_PROGRAM_ID })),
+      ...tokenAccounts2022.value.map(acc => ({ ...acc, programId: TOKEN_2022_PROGRAM_ID }))
+    ];
+    
+    console.log(`🪙 Found ${tokenAccountsSPL.value.length} SPL Token accounts and ${tokenAccounts2022.value.length} Token2022 accounts`);
 
     if (fetchedSolMeta) {
       solTokenMeta = fetchedSolMeta;
@@ -517,9 +543,10 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
     const solInLamports = solBalanceLamports / LAMPORTS_PER_SOL;
 
     console.log(`💰 SOL Balance: ${solInLamports.toFixed(4)} SOL ($${(solInLamports * solPrice).toFixed(2)})`);
-    console.log(`🪙 Found ${tokenAccounts.value.length} token accounts`);
+    console.log(`🪙 Found ${allTokenAccounts.length} total token accounts (${tokenAccountsSPL.value.length} SPL + ${tokenAccounts2022.value.length} Token2022)`);
 
-    const tokenData = tokenAccounts.value
+    // Process token accounts and detect program ID
+    const tokenData = allTokenAccounts
       .map((account) => {
         const parsed = account.account.data.parsed.info;
         const amount = parsed.tokenAmount.uiAmount;
@@ -528,6 +555,7 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
             mint: parsed.mint,
             balance: amount,
             decimals: parsed.tokenAmount.decimals,
+            programId: account.programId, // Store program ID for later use
           };
         }
         return null;
@@ -557,6 +585,7 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
 
     for (const token of tokenData) {
       const jupiterInfo = jupiterTokenMap.get(token.mint);
+      const isToken2022 = token.programId.equals(TOKEN_2022_PROGRAM_ID);
       if (jupiterInfo) {
         const usdValue: number = token.balance * jupiterInfo.price;
         balances.push({
@@ -569,8 +598,10 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
           usdValue,
           verified: jupiterInfo.verified,
           tags: jupiterInfo.tags,
+          programId: token.programId.toBase58(), // Include program ID in response
+          isToken2022, // Include flag for easy identification
         });
-        console.log(`📦 ${jupiterInfo.symbol}: ${token.balance.toFixed(4)} ($${usdValue.toFixed(2)}) ${jupiterInfo.verified ? '✓' : ''}`);
+        console.log(`📦 ${jupiterInfo.symbol}: ${token.balance.toFixed(4)} ($${usdValue.toFixed(2)}) ${jupiterInfo.verified ? '✓' : ''} [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
       } else {
         const shortMint = `${token.mint.substring(0, 4)}...${token.mint.substring(token.mint.length - 4)}`;
         balances.push({
@@ -583,8 +614,10 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
           usdValue: 0,
           verified: false,
           tags: ['unknown'],
+          programId: token.programId.toBase58(), // Include program ID in response
+          isToken2022, // Include flag for easy identification
         });
-        console.warn(`⚠️ No data found for: ${token.mint}`);
+        console.warn(`⚠️ No data found for: ${token.mint} [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
       }
     }
 
@@ -848,9 +881,14 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
     const isNative = token_mint === 'So11111111111111111111111111111111111111112';
     if (!isNative && tokenInfo) {
       console.log('🔍 Verifying SPL token transfer to TipLink...');
+      // ✅ Detect token program ID (SPL Token vs Token2022)
+      const tokenProgramId = await getTokenProgramId(token_mint);
+      const isToken2022 = tokenProgramId.equals(TOKEN_2022_PROGRAM_ID);
+      console.log(`🔍 Detected token program: ${isToken2022 ? 'Token2022' : 'SPL Token'} for ${tokenInfo.symbol}`);
+      
       const { getAssociatedTokenAddress, getAccount } = await import('@solana/spl-token');
       const mintPubkey = new PublicKey(token_mint);
-      const tiplinkATA = await getAssociatedTokenAddress(mintPubkey, tiplinkPubkey);
+      const tiplinkATA = await getAssociatedTokenAddress(mintPubkey, tiplinkPubkey, false, tokenProgramId);
       
       try {
         // Wait a moment for the transaction to fully settle
@@ -858,7 +896,7 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
         
         const tiplinkTokenAccount = await getAccount(connection, tiplinkATA);
         const tokenBalance = Number(tiplinkTokenAccount.amount) / (10 ** tokenInfo.decimals);
-        console.log(`💰 TipLink ${tokenInfo.symbol} balance after funding: ${tokenBalance} ${tokenInfo.symbol}`);
+        console.log(`💰 TipLink ${tokenInfo.symbol} balance after funding: ${tokenBalance} ${tokenInfo.symbol} [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
         
         if (tokenBalance < amount * 0.99) { // Allow 1% tolerance for rounding
           console.warn(`⚠️ TipLink token balance (${tokenBalance}) is less than expected (${amount}). Transaction may have partially failed.`);
@@ -1593,13 +1631,19 @@ async function processGiftClaim(
 
     // ✅ FIX 3: For SPL tokens, verify TipLink has SOL for transaction fees
     // Check if recipient ATA exists to determine minimum SOL needed
+    // ✅ Detect token program ID (SPL Token vs Token2022)
+    let tokenProgramId = TOKEN_PROGRAM_ID;
     if (!tokenInfo.isNative) {
+      tokenProgramId = await getTokenProgramId(gift.token_mint);
+      const isToken2022 = tokenProgramId.equals(TOKEN_2022_PROGRAM_ID);
+      console.log(`🔍 Detected token program: ${isToken2022 ? 'Token2022' : 'SPL Token'} for ${gift.token_symbol}`);
+      
       const BASE_FEE = 0.000005; // Transaction fee
       const PRIORITY_FEE_BUFFER = 0.0003; // Priority fees during congestion
       
-      // Check if recipient ATA exists
+      // Check if recipient ATA exists (using correct program ID)
       const mintPubkey = new PublicKey(gift.token_mint);
-      const recipientATA = await getAssociatedTokenAddress(mintPubkey, recipientPubkey);
+      const recipientATA = await getAssociatedTokenAddress(mintPubkey, recipientPubkey, false, tokenProgramId);
       const recipientAccountInfo = await connection.getAccountInfo(recipientATA);
       const recipientNeedsATA = !recipientAccountInfo;
       
@@ -1659,15 +1703,16 @@ async function processGiftClaim(
         { commitment: 'confirmed' }
       );
     } else {
-      // SPL Token transfer
+      // SPL Token transfer (supports both SPL Token and Token2022)
       console.log(`💸 Preparing SPL token transfer: ${gift.amount} ${gift.token_symbol} to recipient...`);
       
+      // ✅ Use detected token program ID (from earlier detection)
       const mintPubkey = new PublicKey(gift.token_mint);
-      const tiplinkATA = await getAssociatedTokenAddress(mintPubkey, tipLink.keypair.publicKey);
-      const recipientATA = await getAssociatedTokenAddress(mintPubkey, recipientPubkey);
+      const tiplinkATA = await getAssociatedTokenAddress(mintPubkey, tipLink.keypair.publicKey, false, tokenProgramId);
+      const recipientATA = await getAssociatedTokenAddress(mintPubkey, recipientPubkey, false, tokenProgramId);
 
       // ✅ CRITICAL: Check if TipLink has the SPL tokens before attempting transfer
-      console.log(`🔍 Checking TipLink token account: ${tiplinkATA.toBase58()}`);
+      console.log(`🔍 Checking TipLink token account: ${tiplinkATA.toBase58()} [${tokenProgramId.equals(TOKEN_2022_PROGRAM_ID) ? 'Token2022' : 'SPL Token'}]`);
       let tiplinkTokenAccount;
       let tokenBalanceRaw: bigint;
       try {
@@ -1700,16 +1745,17 @@ async function processGiftClaim(
 
       const instructions = [];
       
-      // Create recipient's associated token account if it doesn't exist
+      // Create recipient's associated token account if it doesn't exist (using correct program ID)
       const recipientAccountInfo = await connection.getAccountInfo(recipientATA);
       if (!recipientAccountInfo) {
-        console.log(`📝 Creating recipient token account: ${recipientATA.toBase58()}`);
+        console.log(`📝 Creating recipient token account: ${recipientATA.toBase58()} [${tokenProgramId.equals(TOKEN_2022_PROGRAM_ID) ? 'Token2022' : 'SPL Token'}]`);
         instructions.push(
           createAssociatedTokenAccountInstruction(
             tipLink.keypair.publicKey,
             recipientATA,
             recipientPubkey,
-            mintPubkey
+            mintPubkey,
+            tokenProgramId
           )
         );
       } else {
@@ -1723,16 +1769,19 @@ async function processGiftClaim(
         tokenAmount: gift.amount,
         transferAmountRaw: transferAmount.toString(),
         tiplinkBalanceRaw: tokenBalanceRaw.toString(),
-        recipientATA: recipientATA.toBase58()
+        recipientATA: recipientATA.toBase58(),
+        programId: tokenProgramId.equals(TOKEN_2022_PROGRAM_ID) ? 'Token2022' : 'SPL Token'
       });
 
-      // Transfer SPL tokens
+      // Transfer SPL tokens (using correct program ID)
       instructions.push(
         createTransferInstruction(
           tiplinkATA,
           recipientATA,
           tipLink.keypair.publicKey,
-          transferAmount
+          transferAmount,
+          [],
+          tokenProgramId
         )
       );
 

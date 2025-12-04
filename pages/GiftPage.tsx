@@ -102,6 +102,25 @@ const GiftPage: React.FC = () => {
         recipientNeedsATA: boolean;
     } | null>(null);
     
+    // ✅ Helper function to detect token program ID (SPL Token vs Token2022)
+    const getTokenProgramId = async (mintAddress: string): Promise<PublicKey> => {
+        try {
+            const splToken = await import('@solana/spl-token');
+            const { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } = splToken;
+            const mintPubkey = new PublicKey(mintAddress);
+            const mintInfo = await connection.getAccountInfo(mintPubkey);
+            if (mintInfo?.owner.equals(TOKEN_2022_PROGRAM_ID)) {
+                return TOKEN_2022_PROGRAM_ID;
+            }
+            return TOKEN_PROGRAM_ID;
+        } catch (error) {
+            // Default to TOKEN_PROGRAM_ID if detection fails
+            console.warn(`⚠️ Could not detect token program for ${mintAddress}, defaulting to TOKEN_PROGRAM_ID:`, error);
+            const splToken = await import('@solana/spl-token');
+            return splToken.TOKEN_PROGRAM_ID;
+        }
+    };
+    
     // Helper function to check if recipient ATA exists
     const checkRecipientATA = async (
         recipientWallet: string,
@@ -110,16 +129,18 @@ const GiftPage: React.FC = () => {
         try {
             console.log(`🔍 checkRecipientATA: Checking wallet ${recipientWallet} for token ${tokenMint}`);
             const splToken = await import('@solana/spl-token');
-            const { getAssociatedTokenAddress, getAccount, TOKEN_PROGRAM_ID } = splToken;
+            const { getAssociatedTokenAddress, getAccount } = splToken;
+            // ✅ Detect token program ID
+            const tokenProgramId = await getTokenProgramId(tokenMint);
             const recipientPubkey = new PublicKey(recipientWallet);
             const mintPubkey = new PublicKey(tokenMint);
             const recipientATA = await getAssociatedTokenAddress(
                 mintPubkey,
                 recipientPubkey,
                 true,
-                TOKEN_PROGRAM_ID
+                tokenProgramId
             );
-            console.log(`🔍 checkRecipientATA: ATA address: ${recipientATA.toBase58()}`);
+            console.log(`🔍 checkRecipientATA: ATA address: ${recipientATA.toBase58()} [${tokenProgramId.equals(splToken.TOKEN_2022_PROGRAM_ID) ? 'Token2022' : 'SPL Token'}]`);
             await getAccount(connection, recipientATA);
             console.log(`✅ checkRecipientATA: ATA exists for ${recipientWallet}`);
             return true; // ATA exists
@@ -130,6 +151,40 @@ const GiftPage: React.FC = () => {
             }
             // For other errors, assume ATA doesn't exist (safer to charge the fee)
             console.warn('❌ checkRecipientATA: Error checking recipient ATA:', error);
+            return false;
+        }
+    };
+    
+    // ✅ Helper function to check if sender ATA exists
+    const checkSenderATA = async (
+        senderWallet: string,
+        tokenMint: string
+    ): Promise<boolean> => {
+        try {
+            console.log(`🔍 checkSenderATA: Checking wallet ${senderWallet} for token ${tokenMint}`);
+            const splToken = await import('@solana/spl-token');
+            const { getAssociatedTokenAddress, getAccount } = splToken;
+            // ✅ Detect token program ID
+            const tokenProgramId = await getTokenProgramId(tokenMint);
+            const senderPubkey = new PublicKey(senderWallet);
+            const mintPubkey = new PublicKey(tokenMint);
+            const senderATA = await getAssociatedTokenAddress(
+                mintPubkey,
+                senderPubkey,
+                false,
+                tokenProgramId
+            );
+            console.log(`🔍 checkSenderATA: ATA address: ${senderATA.toBase58()} [${tokenProgramId.equals(splToken.TOKEN_2022_PROGRAM_ID) ? 'Token2022' : 'SPL Token'}]`);
+            await getAccount(connection, senderATA);
+            console.log(`✅ checkSenderATA: ATA exists for ${senderWallet}`);
+            return true; // ATA exists
+        } catch (error: any) {
+            if (error.name === 'TokenAccountNotFoundError') {
+                console.log(`❌ checkSenderATA: ATA does not exist for ${senderWallet}`);
+                return false; // ATA doesn't exist
+            }
+            // For other errors, assume ATA doesn't exist (safer to charge the fee)
+            console.warn('❌ checkSenderATA: Error checking sender ATA:', error);
             return false;
         }
     };
@@ -1030,26 +1085,55 @@ const GiftPage: React.FC = () => {
                 // Estimate required SOL based on actual transaction
                 const BASE_FEE = 0.000005; // Base transaction fee (~5,000 lamports)
                 const RENT_PER_ATA = 0.00203928; // Rent exemption for token account (~2,039,280 lamports)
+                const BUFFER_PERCENT = 0.01; // 1% buffer
                 let estimatedRequiredSol = BASE_FEE;
                 
+                // ✅ Detect token program ID
+                const tokenProgramId = await getTokenProgramId(currentToken.mint);
+                const isToken2022 = tokenProgramId.equals((await import('@solana/spl-token')).TOKEN_2022_PROGRAM_ID);
+                console.log(`🔍 Detected token program: ${isToken2022 ? 'Token2022' : 'SPL Token'} for ${currentToken.symbol}`);
+                
                 const splToken = await import('@solana/spl-token');
-                const { getAssociatedTokenAddress, getAccount, TOKEN_PROGRAM_ID } = splToken;
+                const { getAssociatedTokenAddress, getAccount } = splToken;
                 const senderPubkey = new PublicKey(embeddedWallet.address);
                 const tipLinkPubkey = new PublicKey(tiplink_public_key);
                 const mintPubkey = new PublicKey(currentToken.mint);
+                
+                // ✅ Check if sender ATA exists
+                let senderNeedsATA = false;
+                const senderATA = await getAssociatedTokenAddress(
+                    mintPubkey,
+                    senderPubkey,
+                    false,
+                    tokenProgramId
+                );
+                try {
+                    await getAccount(connection, senderATA);
+                    console.log('✅ Sender ATA already exists');
+                } catch (error: any) {
+                    if (error.name === 'TokenAccountNotFoundError') {
+                        senderNeedsATA = true;
+                        estimatedRequiredSol += RENT_PER_ATA;
+                        console.log('📝 Sender ATA needs to be created (+0.00203928 SOL)');
+                    } else {
+                        throw error;
+                    }
+                }
                 
                 // Check TipLink ATA
                 const tipLinkATA = await getAssociatedTokenAddress(
                     mintPubkey,
                     tipLinkPubkey,
                     true,
-                    TOKEN_PROGRAM_ID
+                    tokenProgramId
                 );
+                let tipLinkNeedsATA = false;
                 try {
                     await getAccount(connection, tipLinkATA);
                     console.log('✅ TipLink ATA already exists');
                 } catch (error: any) {
                     if (error.name === 'TokenAccountNotFoundError') {
+                        tipLinkNeedsATA = true;
                         estimatedRequiredSol += RENT_PER_ATA;
                         console.log('📝 TipLink ATA needs to be created (+0.00203928 SOL)');
                     } else {
@@ -1064,7 +1148,7 @@ const GiftPage: React.FC = () => {
                         mintPubkey,
                         feeWalletPubkey,
                         true,
-                        TOKEN_PROGRAM_ID
+                        tokenProgramId
                     );
                     try {
                         await getAccount(connection, feeWalletATA);
@@ -1080,10 +1164,13 @@ const GiftPage: React.FC = () => {
                 }
                 
                 // ✅ FIX: Add SOL reserve for TipLink (needed for claim transaction fees + ATA creation)
-                // Reuse existing BASE_FEE and RENT_PER_ATA variables from above
-                const TIPLINK_SOL_RESERVE = RENT_PER_ATA + BASE_FEE + 0.0001; // Add buffer
+                // Include sender ATA cost + recipient ATA cost (if needed) + 1% buffer
+                const SENDER_ATA_COST = senderNeedsATA ? RENT_PER_ATA : 0;
+                const RECIPIENT_ATA_COST = recipientNeedsATA ? RENT_PER_ATA : 0;
+                const TOTAL_ATA_COST = SENDER_ATA_COST + RECIPIENT_ATA_COST;
+                const TIPLINK_SOL_RESERVE = (TOTAL_ATA_COST * (1 + BUFFER_PERCENT)) + BASE_FEE + 0.0003; // 1% buffer on ATA costs + base fee + priority buffer
                 estimatedRequiredSol += TIPLINK_SOL_RESERVE;
-                console.log(`💎 Adding TipLink SOL reserve: ${TIPLINK_SOL_RESERVE} SOL (for claim transaction fees and potential ATA creation)`);
+                console.log(`💎 Adding TipLink SOL reserve: ${TIPLINK_SOL_RESERVE.toFixed(6)} SOL (sender ATA: ${SENDER_ATA_COST}, recipient ATA: ${RECIPIENT_ATA_COST}, 1% buffer: ${(TOTAL_ATA_COST * BUFFER_PERCENT).toFixed(6)}, base fee: ${BASE_FEE}, priority buffer: 0.0003)`);
                 
                 // Add 5% buffer for safety (reduced from 10% to be less strict)
                 estimatedRequiredSol *= 1.05;
@@ -1155,9 +1242,13 @@ const GiftPage: React.FC = () => {
                     getAssociatedTokenAddress,
                     createTransferInstruction,
                     createAssociatedTokenAccountInstruction,
-                    TOKEN_PROGRAM_ID,
                     getAccount
                 } = splToken;
+                
+                // ✅ Detect token program ID (SPL Token vs Token2022)
+                const tokenProgramId = await getTokenProgramId(currentToken.mint);
+                const isToken2022 = tokenProgramId.equals(splToken.TOKEN_2022_PROGRAM_ID);
+                console.log(`🔍 Using token program: ${isToken2022 ? 'Token2022' : 'SPL Token'} for ${currentToken.symbol}`);
                 
                 const mintPubkey = new PublicKey(currentToken.mint);
                 const decimals = currentToken.decimals || 9;
@@ -1174,19 +1265,19 @@ const GiftPage: React.FC = () => {
                 }
                 console.log(`  Total: ${numericAmount} ${currentToken.symbol} (${giftAmountRaw} raw units)`);
                 
-                // Get associated token addresses (ATAs)
+                // Get associated token addresses (ATAs) - using correct program ID
                 const senderATA = await getAssociatedTokenAddress(
                     mintPubkey,
                     senderPubkey,
                     false, // allowOwnerOffCurve
-                    TOKEN_PROGRAM_ID
+                    tokenProgramId
                 );
                 
                 const tipLinkATA = await getAssociatedTokenAddress(
                     mintPubkey,
                     tipLinkPubkey,
                     true, // allowOwnerOffCurve (TipLink might not have ATA yet)
-                    TOKEN_PROGRAM_ID
+                    tokenProgramId
                 );
                 
                 // Check if sender ATA exists and has balance
@@ -1206,20 +1297,20 @@ const GiftPage: React.FC = () => {
                     throw error;
                 }
                 
-                // Check if TipLink ATA exists, create if not
+                // Check if TipLink ATA exists, create if not (using correct program ID)
                 try {
                     await getAccount(connection, tipLinkATA);
-                    console.log(`✅ TipLink ATA exists: ${tipLinkATA.toBase58()}`);
+                    console.log(`✅ TipLink ATA exists: ${tipLinkATA.toBase58()} [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
                 } catch (error: any) {
                     if (error.name === 'TokenAccountNotFoundError') {
-                        console.log(`📝 Creating TipLink ATA: ${tipLinkATA.toBase58()}`);
+                        console.log(`📝 Creating TipLink ATA: ${tipLinkATA.toBase58()} [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
                         transaction.add(
                             createAssociatedTokenAccountInstruction(
                                 senderPubkey, // payer
                                 tipLinkATA, // ata
                                 tipLinkPubkey, // owner
                                 mintPubkey, // mint
-                                TOKEN_PROGRAM_ID
+                                tokenProgramId
                             )
                         );
                     } else {
@@ -1227,7 +1318,7 @@ const GiftPage: React.FC = () => {
                     }
                 }
                 
-                // Add gift amount transfer to TipLink
+                // Add gift amount transfer to TipLink (using correct program ID)
                 transaction.add(
                     createTransferInstruction(
                         senderATA, // source
@@ -1235,7 +1326,7 @@ const GiftPage: React.FC = () => {
                         senderPubkey, // owner
                         BigInt(giftAmountRaw), // amount
                         [], // multiSigners
-                        TOKEN_PROGRAM_ID
+                        tokenProgramId
                     )
                 );
                 
@@ -1243,13 +1334,26 @@ const GiftPage: React.FC = () => {
                 
                 // ATA fee and TipLink reserve are handled separately in SOL (below)
                 
-                // ✅ FIX: Send exact SOL reserve needed (transaction fees + ATA creation if needed)
+                // ✅ FIX: Send exact SOL reserve needed (sender ATA + recipient ATA + 1% buffer + transaction fees)
                 const BASE_FEE = 0.000005; // Transaction fee
                 const PRIORITY_FEE_BUFFER = 0.0003; // Priority fees during congestion
-                const TIPLINK_SOL_RESERVE = (recipientNeedsATA ? ataFeeInSOL : 0) + BASE_FEE + PRIORITY_FEE_BUFFER;
+                const RENT_PER_ATA = 0.00203928; // Rent exemption for token account
+                const BUFFER_PERCENT = 0.01; // 1% buffer
+                
+                // Check if sender ATA exists (we already checked earlier, but need to recalculate here)
+                const senderNeedsATA = !(await checkSenderATA(embeddedWallet.address, currentToken.mint));
+                const SENDER_ATA_COST = senderNeedsATA ? RENT_PER_ATA : 0;
+                const RECIPIENT_ATA_COST = recipientNeedsATA ? RENT_PER_ATA : 0;
+                const TOTAL_ATA_COST = SENDER_ATA_COST + RECIPIENT_ATA_COST;
+                const TIPLINK_SOL_RESERVE = (TOTAL_ATA_COST * (1 + BUFFER_PERCENT)) + BASE_FEE + PRIORITY_FEE_BUFFER;
                 
                 const tiplinkSolReserveLamports = Math.round(TIPLINK_SOL_RESERVE * LAMPORTS_PER_SOL);
-                console.log(`💎 Adding SOL reserve to TipLink: ${TIPLINK_SOL_RESERVE} SOL (${tiplinkSolReserveLamports} lamports) - ATA needed: ${recipientNeedsATA}, Base fee: ${BASE_FEE}, Priority buffer: ${PRIORITY_FEE_BUFFER}`);
+                console.log(`💎 Adding SOL reserve to TipLink: ${TIPLINK_SOL_RESERVE.toFixed(6)} SOL (${tiplinkSolReserveLamports} lamports)`);
+                console.log(`   - Sender ATA cost: ${SENDER_ATA_COST.toFixed(6)} SOL (needed: ${senderNeedsATA})`);
+                console.log(`   - Recipient ATA cost: ${RECIPIENT_ATA_COST.toFixed(6)} SOL (needed: ${recipientNeedsATA})`);
+                console.log(`   - 1% buffer on ATA costs: ${(TOTAL_ATA_COST * BUFFER_PERCENT).toFixed(6)} SOL`);
+                console.log(`   - Base fee: ${BASE_FEE} SOL`);
+                console.log(`   - Priority buffer: ${PRIORITY_FEE_BUFFER} SOL`);
                 transaction.add(
                     SystemProgram.transfer({
                         fromPubkey: senderPubkey,
