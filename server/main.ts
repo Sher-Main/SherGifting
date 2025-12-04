@@ -598,8 +598,7 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
           usdValue,
           verified: jupiterInfo.verified,
           tags: jupiterInfo.tags,
-          // Note: programId and isToken2022 are included but not in TypeScript interface
-          // They're added dynamically for frontend use
+          programId: isToken2022 ? 'token2022' : 'spl',
         } as any);
         console.log(`📦 ${jupiterInfo.symbol}: ${token.balance.toFixed(4)} ($${usdValue.toFixed(2)}) ${jupiterInfo.verified ? '✓' : ''} [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
       } else {
@@ -614,8 +613,7 @@ app.get('/api/wallet/balances/:address', async (req, res) => {
           usdValue: 0,
           verified: false,
           tags: ['unknown'],
-          // Note: programId and isToken2022 are included but not in TypeScript interface
-          // They're added dynamically for frontend use
+          programId: isToken2022 ? 'token2022' : 'spl',
         } as any);
         console.warn(`⚠️ No data found for: ${token.mint} [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
       }

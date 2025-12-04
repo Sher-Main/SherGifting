@@ -42,6 +42,7 @@ export interface TokenBalance extends Token {
   logoURI?: string;
   verified?: boolean;      // Jupiter verification status
   tags?: string[];         // Token tags from Jupiter
+  programId?: string;      // Token program ID ('spl' or 'token2022')
 }
 
 export enum GiftStatus {
