@@ -225,10 +225,11 @@ export class GiftRefundService {
         const senderATA = await getAssociatedTokenAddress(mintPubkey, new PublicKey(gift.sender_wallet), false, tokenProgramId);
 
         // Check if TipLink has the SPL tokens
-        console.log(`🔍 Checking TipLink token account: ${tiplinkATA.toBase58()}`);
+        console.log(`🔍 Checking TipLink token account: ${tiplinkATA.toBase58()} [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
         let tiplinkTokenAccount;
         try {
-          tiplinkTokenAccount = await getAccount(this.connection, tiplinkATA);
+          // ✅ FIX: Pass tokenProgramId to getAccount for Token2022 compatibility
+          tiplinkTokenAccount = await getAccount(this.connection, tiplinkATA, 'confirmed', tokenProgramId);
           const tokenBalance = Number(tiplinkTokenAccount.amount) / (10 ** gift.token_decimals);
           console.log(`💰 TipLink ${gift.token_symbol} balance: ${tokenBalance} ${gift.token_symbol}`);
 

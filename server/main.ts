@@ -892,7 +892,8 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
         // Wait a moment for the transaction to fully settle
         await new Promise(resolve => setTimeout(resolve, 1000));
         
-        const tiplinkTokenAccount = await getAccount(connection, tiplinkATA);
+        // ✅ FIX: Pass tokenProgramId to getAccount for Token2022 compatibility
+        const tiplinkTokenAccount = await getAccount(connection, tiplinkATA, 'confirmed', tokenProgramId);
         const tokenBalance = Number(tiplinkTokenAccount.amount) / (10 ** tokenInfo.decimals);
         console.log(`💰 TipLink ${tokenInfo.symbol} balance after funding: ${tokenBalance} ${tokenInfo.symbol} [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
         
@@ -1717,7 +1718,8 @@ async function processGiftClaim(
       let tiplinkTokenAccount;
       let tokenBalanceRaw: bigint;
       try {
-        tiplinkTokenAccount = await getAccount(connection, tiplinkATA);
+        // ✅ FIX: Pass tokenProgramId to getAccount for Token2022 compatibility
+        tiplinkTokenAccount = await getAccount(connection, tiplinkATA, 'confirmed', tokenProgramId);
         
         // ✅ FIX 2: Use BigInt for precise comparison to avoid floating point errors
         tokenBalanceRaw = tiplinkTokenAccount.amount; // Already a BigInt
