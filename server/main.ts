@@ -1799,34 +1799,38 @@ async function processGiftClaim(
         )
       );
 
-      // ✅ SWEEP REMAINING SOL: Transfer all remaining SOL from TipLink to receiver
-      // After closing the ATA, TipLink will have: original balance + rent reclaimed (~0.002 SOL) - transaction fees
-      // We'll sweep everything except a small reserve for the final transaction fee
+      // ✅ DYNAMIC SOL SWEEP: Transfer only what's ACTUALLY available in TipLink
+      // IMPORTANT: closeAccount sends rent directly to recipient (not back to TipLink)
+      // So we only sweep the extra sponsorship SOL that was funded to the TipLink
+      // The recipient gets: tokens + ATA rent (from closeAccount) + sponsorship SOL (from sweep)
       const tiplinkBalanceBefore = await connection.getBalance(tipLink.keypair.publicKey);
-      const RENT_RECLAIMED_FROM_ATA = 2039280; // ~0.00203928 SOL (rent exemption for token account)
-      const ESTIMATED_TX_FEES = 20000; // Reserve ~0.00002 SOL for transaction fees (multiple instructions)
-      const FEE_RESERVE = ESTIMATED_TX_FEES;
       
-      // Estimate final balance: current balance + rent from ATA - estimated fees
-      const estimatedFinalBalance = tiplinkBalanceBefore + RENT_RECLAIMED_FROM_ATA - ESTIMATED_TX_FEES;
-      const sweepAmount = estimatedFinalBalance > FEE_RESERVE 
-        ? estimatedFinalBalance - FEE_RESERVE 
+      // Reserve enough for transaction fee (conservative estimate: 10,000 lamports = 0.00001 SOL)
+      const TX_FEE_RESERVE = 10000;
+      
+      // DYNAMIC sweep: only sweep what's actually in the TipLink minus fee reserve
+      // This prevents "insufficient lamports" errors regardless of how much was funded
+      const sweepAmount = tiplinkBalanceBefore > TX_FEE_RESERVE 
+        ? tiplinkBalanceBefore - TX_FEE_RESERVE 
         : 0;
       
+      console.log(`💰 SOL Sweep calculation:`);
+      console.log(`   - TipLink current balance: ${(tiplinkBalanceBefore / LAMPORTS_PER_SOL).toFixed(6)} SOL (${tiplinkBalanceBefore} lamports)`);
+      console.log(`   - Fee reserve: ${(TX_FEE_RESERVE / LAMPORTS_PER_SOL).toFixed(6)} SOL (${TX_FEE_RESERVE} lamports)`);
+      console.log(`   - Sweep amount: ${(sweepAmount / LAMPORTS_PER_SOL).toFixed(6)} SOL (${sweepAmount} lamports)`);
+      console.log(`   - Recipient also gets ~0.002 SOL rent from closeAccount instruction`);
+      
       if (sweepAmount > 0) {
-        console.log(`💰 Sweeping remaining SOL from TipLink: ${(sweepAmount / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
-        console.log(`   - Current balance: ${(tiplinkBalanceBefore / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
-        console.log(`   - Rent to reclaim: ${(RENT_RECLAIMED_FROM_ATA / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
-        console.log(`   - Estimated fees: ${(ESTIMATED_TX_FEES / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
         instructions.push(
           SystemProgram.transfer({
             fromPubkey: tipLink.keypair.publicKey,
             toPubkey: recipientPubkey,
-            lamports: Math.max(0, Math.floor(sweepAmount)), // Ensure non-negative integer
+            lamports: Math.floor(sweepAmount), // Ensure integer
           })
         );
+        console.log(`✅ Added sweep instruction: ${sweepAmount} lamports to recipient`);
       } else {
-        console.log(`⚠️ No SOL to sweep (balance: ${(tiplinkBalanceBefore / LAMPORTS_PER_SOL).toFixed(6)} SOL)`);
+        console.log(`⚠️ No extra SOL to sweep (balance too low after fee reserve)`);
       }
 
       const transaction = new Transaction().add(...instructions);
