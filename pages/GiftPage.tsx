@@ -253,7 +253,8 @@ const GiftPage: React.FC = () => {
                     const defaultToken = nonZeroTokens.find(t => t.symbol === 'SOL') || nonZeroTokens[0];
                     setSelectedToken(defaultToken);
                     
-                    const tokenBalance = balances.find(b => b.symbol === defaultToken.symbol);
+                    // ✅ FIX: Match by mint address instead of symbol to handle Token2022 tokens correctly
+                    const tokenBalance = balances.find(b => b.address === defaultToken.mint);
                     setUserBalance(tokenBalance?.balance || 0);
                 }
                 
@@ -333,7 +334,9 @@ const GiftPage: React.FC = () => {
     // Update balance when token is selected
     useEffect(() => {
         if (selectedToken && walletBalances.length > 0) {
-            const tokenBalance = walletBalances.find(b => b.symbol === selectedToken.symbol);
+            // ✅ FIX: Match by mint address instead of symbol to handle Token2022 tokens correctly
+            // Multiple tokens can have the same symbol (e.g., USDC on SPL Token and Token2022)
+            const tokenBalance = walletBalances.find(b => b.address === selectedToken.mint);
             setUserBalance(tokenBalance?.balance || 0);
             
             // Validate balance when token changes if amount is entered
@@ -343,7 +346,7 @@ const GiftPage: React.FC = () => {
                     validateBalance(numValue).catch(console.error);
                 }
             }
-            console.log(`💰 Balance for ${selectedToken.symbol}:`, tokenBalance?.balance || 0);
+            console.log(`💰 Balance for ${selectedToken.symbol} (${selectedToken.mint.substring(0, 8)}...):`, tokenBalance?.balance || 0);
         }
         
         // Fetch price when token is selected
