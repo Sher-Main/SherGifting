@@ -1123,10 +1123,26 @@ const GiftPage: React.FC = () => {
                     tokenProgramId
                 );
                 try {
-                    await getAccount(connection, senderATA);
+                    await getAccount(connection, senderATA, 'confirmed', tokenProgramId);
                     console.log('✅ Sender ATA already exists');
                 } catch (error: any) {
-                    if (error.name === 'TokenAccountNotFoundError') {
+                    // If TokenInvalidAccountOwnerError, try the other program ID
+                    if (error.name === 'TokenInvalidAccountOwnerError' || error.message?.includes('Invalid account owner')) {
+                        const alternativeProgramId = tokenProgramId.equals(splToken.TOKEN_2022_PROGRAM_ID) 
+                            ? splToken.TOKEN_PROGRAM_ID 
+                            : splToken.TOKEN_2022_PROGRAM_ID;
+                        try {
+                            await getAccount(connection, senderATA, 'confirmed', alternativeProgramId);
+                            console.log('✅ Sender ATA already exists (with alternative program ID)');
+                        } catch (altError: any) {
+                            if (altError.name === 'TokenAccountNotFoundError') {
+                                senderNeedsATA = true;
+                                console.log('📝 Sender ATA needs to be created (+0.00203928 SOL)');
+                            } else {
+                                throw altError;
+                            }
+                        }
+                    } else if (error.name === 'TokenAccountNotFoundError') {
                         senderNeedsATA = true;
                         console.log('📝 Sender ATA needs to be created (+0.00203928 SOL)');
                     } else {
@@ -1216,8 +1232,8 @@ const GiftPage: React.FC = () => {
                 } = splToken;
                 
                 // ✅ Detect token program ID (SPL Token vs Token2022)
-                const tokenProgramId = await getTokenProgramId(currentToken.mint);
-                const isToken2022 = tokenProgramId.equals(splToken.TOKEN_2022_PROGRAM_ID);
+                let tokenProgramId = await getTokenProgramId(currentToken.mint);
+                let isToken2022 = tokenProgramId.equals(splToken.TOKEN_2022_PROGRAM_ID);
                 console.log(`🔍 Using token program: ${isToken2022 ? 'Token2022' : 'SPL Token'} for ${currentToken.symbol}`);
                 
                 const mintPubkey = new PublicKey(currentToken.mint);
@@ -1243,7 +1259,7 @@ const GiftPage: React.FC = () => {
                     tokenProgramId
                 );
                 
-                const tipLinkATA = await getAssociatedTokenAddress(
+                let tipLinkATA = await getAssociatedTokenAddress(
                     mintPubkey,
                     tipLinkPubkey,
                     true, // allowOwnerOffCurve (TipLink might not have ATA yet)
@@ -1251,25 +1267,62 @@ const GiftPage: React.FC = () => {
                 );
                 
                 // Check if sender ATA exists and has balance
+                // ✅ FIX: Try both program IDs in case ATA was created with different program
+                let senderAccount = null;
+                let actualProgramId = tokenProgramId;
                 try {
-                    const senderAccount = await getAccount(connection, senderATA);
-                    console.log(`✅ Sender ATA exists: ${senderATA.toBase58()}, balance: ${senderAccount.amount.toString()}`);
-                    
-                    // Check if user has enough for gift (no service/card fees)
-                    if (senderAccount.amount < BigInt(giftAmountRaw)) {
-                        const available = Number(senderAccount.amount) / Math.pow(10, decimals);
-                        throw new Error(`Insufficient ${currentToken.symbol} balance. Required: ${numericAmount} ${currentToken.symbol} for gift. Available: ${available.toFixed(6)} ${currentToken.symbol}`);
-                    }
+                    senderAccount = await getAccount(connection, senderATA, 'confirmed', tokenProgramId);
+                    console.log(`✅ Sender ATA exists: ${senderATA.toBase58()}, balance: ${senderAccount.amount.toString()} [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
                 } catch (error: any) {
-                    if (error.name === 'TokenAccountNotFoundError') {
+                    // If TokenInvalidAccountOwnerError, try the other program ID
+                    if (error.name === 'TokenInvalidAccountOwnerError' || error.message?.includes('Invalid account owner')) {
+                        console.log(`⚠️ Sender ATA exists but with different program ID, trying alternative...`);
+                        const alternativeProgramId = tokenProgramId.equals(splToken.TOKEN_2022_PROGRAM_ID) 
+                            ? splToken.TOKEN_PROGRAM_ID 
+                            : splToken.TOKEN_2022_PROGRAM_ID;
+                        try {
+                            senderAccount = await getAccount(connection, senderATA, 'confirmed', alternativeProgramId);
+                            actualProgramId = alternativeProgramId;
+                            const isAltToken2022 = actualProgramId.equals(splToken.TOKEN_2022_PROGRAM_ID);
+                            console.log(`✅ Sender ATA exists with alternative program: ${senderATA.toBase58()}, balance: ${senderAccount.amount.toString()} [${isAltToken2022 ? 'Token2022' : 'SPL Token'}]`);
+                        } catch (altError: any) {
+                            if (altError.name === 'TokenAccountNotFoundError') {
+                                throw new Error(`No ${currentToken.symbol} token account found. Please ensure you have ${currentToken.symbol} in your wallet.`);
+                            }
+                            throw altError;
+                        }
+                    } else if (error.name === 'TokenAccountNotFoundError') {
                         throw new Error(`No ${currentToken.symbol} token account found. Please ensure you have ${currentToken.symbol} in your wallet.`);
+                    } else {
+                        throw error;
                     }
-                    throw error;
+                }
+                
+                // Check if user has enough for gift (no service/card fees)
+                if (senderAccount && senderAccount.amount < BigInt(giftAmountRaw)) {
+                    const available = Number(senderAccount.amount) / Math.pow(10, decimals);
+                    throw new Error(`Insufficient ${currentToken.symbol} balance. Required: ${numericAmount} ${currentToken.symbol} for gift. Available: ${available.toFixed(6)} ${currentToken.symbol}`);
+                }
+                
+                // Update tokenProgramId to use the actual program ID of the sender's ATA
+                if (!actualProgramId.equals(tokenProgramId)) {
+                    const wasToken2022 = isToken2022;
+                    isToken2022 = actualProgramId.equals(splToken.TOKEN_2022_PROGRAM_ID);
+                    console.log(`⚠️ Program ID mismatch detected! Mint uses ${wasToken2022 ? 'Token2022' : 'SPL Token'}, but sender ATA uses ${isToken2022 ? 'Token2022' : 'SPL Token'}. Using sender ATA's program ID.`);
+                    // Recalculate TipLink ATA with correct program ID
+                    tipLinkATA = await getAssociatedTokenAddress(
+                        mintPubkey,
+                        tipLinkPubkey,
+                        true,
+                        actualProgramId
+                    );
+                    // Use the actual program ID for all subsequent operations
+                    tokenProgramId = actualProgramId;
                 }
                 
                 // Check if TipLink ATA exists, create if not (using correct program ID)
                 try {
-                    await getAccount(connection, tipLinkATA);
+                    await getAccount(connection, tipLinkATA, 'confirmed', tokenProgramId);
                     console.log(`✅ TipLink ATA exists: ${tipLinkATA.toBase58()} [${isToken2022 ? 'Token2022' : 'SPL Token'}]`);
                 } catch (error: any) {
                     if (error.name === 'TokenAccountNotFoundError') {
