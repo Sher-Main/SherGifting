@@ -1819,8 +1819,11 @@ async function processGiftClaim(
       // The recipient gets: tokens + ATA rent (from closeAccount) + sponsorship SOL (from sweep)
       const tiplinkBalanceBefore = await connection.getBalance(tipLink.keypair.publicKey);
       
-      // Reserve enough for transaction fee (conservative estimate: 10,000 lamports = 0.00001 SOL)
-      const TX_FEE_RESERVE = 10000;
+      // ✅ FIX: Use EXACT fee (5000 lamports per signature) - NO BUFFER!
+      // Using a buffer leaves "dust" in the account which violates Solana's rent rules:
+      // - Account must have 0 lamports (closed) OR >= rent-exempt minimum (~890,000 lamports)
+      // - Leaving 5,000-10,000 lamports causes "insufficient funds for rent" error
+      const EXACT_TX_FEE = 5000; // 1 signature = 5000 lamports, exact amount, no buffer!
       
       // ✅ FIX: Account for ATA creation cost if we're creating recipient's ATA
       // Token2022 ATAs are larger (~180 bytes) and cost more rent than SPL Token ATAs (~165 bytes)
@@ -1829,20 +1832,21 @@ async function processGiftClaim(
       const ATA_RENT_COST = isToken2022 ? 2200000 : 2039280; // ~0.0022 SOL for Token2022, ~0.002 SOL for SPL
       const ataCreationCost = recipientNeedsATA ? ATA_RENT_COST : 0;
       
-      // DYNAMIC sweep: balance - fee reserve - ATA creation cost (if applicable)
-      // This prevents "insufficient lamports" errors
-      let sweepAmount = tiplinkBalanceBefore - TX_FEE_RESERVE - ataCreationCost;
+      // EXACT sweep: balance - exact fee - ATA creation cost (if applicable)
+      // This ensures TipLink ends with EXACTLY 0 lamports (properly closed)
+      let sweepAmount = tiplinkBalanceBefore - EXACT_TX_FEE - ataCreationCost;
       
       // Ensure non-negative
       if (sweepAmount < 0) {
         sweepAmount = 0;
       }
       
-      console.log(`💰 SOL Sweep calculation:`);
+      console.log(`💰 SOL Sweep calculation (EXACT):`);
       console.log(`   - TipLink current balance: ${(tiplinkBalanceBefore / LAMPORTS_PER_SOL).toFixed(6)} SOL (${tiplinkBalanceBefore} lamports)`);
-      console.log(`   - Fee reserve: ${(TX_FEE_RESERVE / LAMPORTS_PER_SOL).toFixed(6)} SOL (${TX_FEE_RESERVE} lamports)`);
+      console.log(`   - Exact TX fee: ${(EXACT_TX_FEE / LAMPORTS_PER_SOL).toFixed(6)} SOL (${EXACT_TX_FEE} lamports)`);
       console.log(`   - Recipient ATA creation cost: ${(ataCreationCost / LAMPORTS_PER_SOL).toFixed(6)} SOL (${ataCreationCost} lamports) [needs ATA: ${recipientNeedsATA}]`);
       console.log(`   - Sweep amount: ${(sweepAmount / LAMPORTS_PER_SOL).toFixed(6)} SOL (${sweepAmount} lamports)`);
+      console.log(`   - Expected TipLink final balance: 0 lamports (properly closed)`);
       console.log(`   - Recipient also gets ~0.002 SOL rent from closeAccount instruction`);
       
       if (sweepAmount > 0) {
@@ -1855,7 +1859,7 @@ async function processGiftClaim(
         );
         console.log(`✅ Added sweep instruction: ${sweepAmount} lamports to recipient`);
       } else {
-        console.log(`⚠️ No extra SOL to sweep (balance too low after fee reserve and ATA cost)`);
+        console.log(`⚠️ No extra SOL to sweep (balance too low after fee and ATA cost)`);
       }
 
       const transaction = new Transaction().add(...instructions);
