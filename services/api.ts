@@ -231,7 +231,8 @@ export const priceService = {
 };
 
 export const tiplinkService = {
-  create: async (): Promise<{ tiplink_url: string; tiplink_public_key: string }> => {
+  // ✅ SECURITY: TipLink URL is never returned to frontend - only public key and ref ID
+  create: async (): Promise<{ tiplink_ref_id: string; tiplink_public_key: string }> => {
     const response = await apiClient.post('/tiplink/create');
     return response.data;
   },
@@ -244,7 +245,8 @@ export const giftService = {
     amount: number;
     message?: string;
     sender_did: string;
-    tiplink_url: string;
+    // ✅ SECURITY: Use tiplink_ref_id instead of tiplink_url (URL never leaves server)
+    tiplink_ref_id: string;
     tiplink_public_key: string;
     funding_signature: string;
     token_symbol?: string;

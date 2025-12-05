@@ -1106,8 +1106,10 @@ const GiftPage: React.FC = () => {
             console.log('🎁 Step 1: Creating TipLink...');
             
             // Step 1: Create TipLink on backend
-            const { tiplink_url, tiplink_public_key } = await tiplinkService.create();
-            console.log('✅ TipLink created:', tiplink_public_key);
+            // ✅ SECURITY: TipLink URL never leaves the server - we only get the public key and a reference ID
+            const { tiplink_ref_id, tiplink_public_key } = await tiplinkService.create();
+            console.log('✅ TipLink created (secure):', tiplink_public_key);
+            console.log('🔐 TipLink URL stored securely server-side, ref:', tiplink_ref_id);
             
             // Step 2: Fund TipLink from user's Privy wallet
             console.log('💸 Step 2: Funding TipLink from your wallet...');
@@ -1642,7 +1644,9 @@ const GiftPage: React.FC = () => {
                 amount: numericAmount,
                 message: message,
                 sender_did: user.privy_did,
-                tiplink_url,
+                // ✅ SECURITY: Use tiplink_ref_id instead of tiplink_url
+                // The TipLink URL (containing the private key) never leaves the server
+                tiplink_ref_id,
                 tiplink_public_key,
                 funding_signature: signatureString,
                 token_symbol: currentToken.symbol,

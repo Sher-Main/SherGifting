@@ -742,17 +742,57 @@ app.get('/api/tokens/:mint/price', async (req, res) => {
   }
 });
 
+// ✅ SECURITY: In-memory storage for pending TipLinks (encrypted, keyed by reference ID)
+// These are cleaned up after gift creation or after 30 minutes
+const pendingTipLinks = new Map<string, { encryptedUrl: string; publicKey: string; userId: string; createdAt: number }>();
+
+// Clean up expired pending TipLinks every 10 minutes
+setInterval(() => {
+  const thirtyMinutesAgo = Date.now() - 30 * 60 * 1000;
+  for (const [refId, data] of pendingTipLinks.entries()) {
+    if (data.createdAt < thirtyMinutesAgo) {
+      pendingTipLinks.delete(refId);
+      console.log(`🗑️ Cleaned up expired pending TipLink: ${refId}`);
+    }
+  }
+}, 10 * 60 * 1000);
+
 // Create TipLink (Step 1 of gift creation)
+// ✅ SECURITY FIX: Never return the TipLink URL to frontend - only return the public key
+// The private key stays encrypted server-side only
 app.post('/api/tiplink/create', authenticateToken, async (req: AuthRequest, res) => {
   try {
+    const ENCRYPTION_KEY = process.env.TIPLINK_ENCRYPTION_KEY;
+    if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length < 32) {
+      console.error('❌ TIPLINK_ENCRYPTION_KEY not set or too short');
+      return res.status(500).json({ error: 'Server configuration error' });
+    }
+
     const newTipLink = await TipLink.create();
     const tiplinkUrl = newTipLink.url.toString();
     const tiplinkPublicKey = newTipLink.keypair.publicKey.toBase58();
     
-    console.log('✅ TipLink created:', tiplinkPublicKey, 'for user:', req.userId || req.user?.id);
+    // ✅ SECURITY: Encrypt the TipLink URL immediately - NEVER send it to frontend
+    const encryptedUrl = encryptTipLink(tiplinkUrl, ENCRYPTION_KEY);
     
+    // Generate a secure reference ID for this pending TipLink
+    const tiplinkRefId = generateSecureToken(16); // 16 bytes = 32 hex chars
+    
+    // Store encrypted URL server-side with reference ID
+    const userId = req.userId || req.user?.id || 'unknown';
+    pendingTipLinks.set(tiplinkRefId, {
+      encryptedUrl,
+      publicKey: tiplinkPublicKey,
+      userId,
+      createdAt: Date.now()
+    });
+    
+    console.log('✅ TipLink created (encrypted):', tiplinkPublicKey, 'for user:', userId);
+    console.log('🔐 TipLink URL stored securely server-side, ref:', tiplinkRefId);
+    
+    // ✅ SECURITY: Only return public key and reference ID - NEVER the URL
     res.json({
-      tiplink_url: tiplinkUrl,
+      tiplink_ref_id: tiplinkRefId,
       tiplink_public_key: tiplinkPublicKey
     });
   } catch (error: any) {
@@ -764,7 +804,9 @@ app.post('/api/tiplink/create', authenticateToken, async (req: AuthRequest, res)
 
 // Create gift - Frontend has already funded the TipLink, backend creates the gift record
 app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) => {
-  const { sender_did, recipient_email, token_mint, amount, message, tiplink_url, tiplink_public_key, funding_signature, token_symbol, token_decimals, card_type, card_recipient_name, card_price_usd } = req.body;
+  // ✅ SECURITY: Accept tiplink_ref_id instead of tiplink_url
+  // Also support legacy tiplink_url for backward compatibility
+  const { sender_did, recipient_email, token_mint, amount, message, tiplink_ref_id, tiplink_url: legacyTiplinkUrl, tiplink_public_key, funding_signature, token_symbol, token_decimals, card_type, card_recipient_name, card_price_usd } = req.body;
 
   console.log('🎁 Creating gift record:', { sender_did, recipient_email, token_mint, amount, token_symbol, token_decimals });
 
@@ -773,7 +815,8 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
     return res.status(403).json({ error: 'Unauthorized: Sender ID mismatch' });
   }
 
-  if (!recipient_email || !token_mint || !amount || !sender_did || !tiplink_url || !tiplink_public_key || !funding_signature) {
+  // ✅ SECURITY: Require either tiplink_ref_id (new secure flow) or tiplink_url (legacy)
+  if (!recipient_email || !token_mint || !amount || !sender_did || (!tiplink_ref_id && !legacyTiplinkUrl) || !tiplink_public_key || !funding_signature) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
@@ -1030,7 +1073,7 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       // Continue without USD value
     }
 
-    // Generate secure claim token and encrypt TipLink URL
+    // Generate secure claim token
     const claimToken = generateSecureToken(32); // 32 bytes = 64 hex characters
     const ENCRYPTION_KEY = process.env.TIPLINK_ENCRYPTION_KEY;
     
@@ -1039,13 +1082,49 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       return res.status(500).json({ error: 'Server configuration error: encryption key not set' });
     }
 
+    // ✅ SECURITY: Get encrypted TipLink URL from server-side storage using ref ID
+    // This ensures the TipLink URL never touches the frontend
     let encryptedTipLink: string;
-    try {
-      encryptedTipLink = encryptTipLink(tiplink_url, ENCRYPTION_KEY);
-      console.log('✅ TipLink URL encrypted successfully');
-    } catch (encryptError) {
-      console.error('❌ Error encrypting TipLink URL:', encryptError);
-      return res.status(500).json({ error: 'Failed to encrypt TipLink URL' });
+    
+    if (tiplink_ref_id) {
+      // New secure flow: look up encrypted URL by reference ID
+      const pendingTipLink = pendingTipLinks.get(tiplink_ref_id);
+      if (!pendingTipLink) {
+        console.error('❌ Invalid or expired TipLink reference ID:', tiplink_ref_id);
+        return res.status(400).json({ error: 'Invalid or expired TipLink reference. Please try creating the gift again.' });
+      }
+      
+      // Verify the public key matches
+      if (pendingTipLink.publicKey !== tiplink_public_key) {
+        console.error('❌ TipLink public key mismatch');
+        return res.status(400).json({ error: 'TipLink verification failed' });
+      }
+      
+      // Verify the user matches
+      const userId = req.userId || req.user?.id;
+      if (pendingTipLink.userId !== userId) {
+        console.error('❌ TipLink user mismatch');
+        return res.status(403).json({ error: 'Unauthorized: TipLink was created by a different user' });
+      }
+      
+      encryptedTipLink = pendingTipLink.encryptedUrl;
+      console.log('✅ Retrieved encrypted TipLink URL from secure storage');
+      
+      // Clean up the pending TipLink entry (one-time use)
+      pendingTipLinks.delete(tiplink_ref_id);
+      console.log('🗑️ Removed pending TipLink reference:', tiplink_ref_id);
+    } else if (legacyTiplinkUrl) {
+      // Legacy flow: encrypt the URL from the request (backward compatibility)
+      console.log('⚠️ Using legacy TipLink URL flow (less secure)');
+      try {
+        encryptedTipLink = encryptTipLink(legacyTiplinkUrl, ENCRYPTION_KEY);
+        console.log('✅ TipLink URL encrypted successfully (legacy)');
+      } catch (encryptError) {
+        console.error('❌ Error encrypting TipLink URL:', encryptError);
+        return res.status(500).json({ error: 'Failed to encrypt TipLink URL' });
+      }
+    } else {
+      return res.status(400).json({ error: 'Missing TipLink reference or URL' });
     }
 
     // Card URL generation moved earlier (before credit consumption)
@@ -1066,7 +1145,9 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       usd_value: usdValue,
       message: message || '',
       status: GiftStatus.SENT,
-      tiplink_url, // Keep for backward compatibility
+      // ✅ SECURITY: Never store plain text TipLink URL for new gifts
+      // Only encrypted version is stored. Set to empty for new gifts using secure flow.
+      tiplink_url: legacyTiplinkUrl || '', // Only populated for legacy flow (backward compatibility)
       tiplink_public_key,
       transaction_signature: funding_signature,
       created_at: new Date().toISOString(),
@@ -1206,7 +1287,8 @@ app.get('/api/gifts/history', authenticateToken, async (req: AuthRequest, res) =
       usd_value: gift.usd_value ? parseFloat(gift.usd_value) : null,
       message: gift.message || '',
       status: gift.status,
-      tiplink_url: gift.tiplink_url,
+      // ✅ SECURITY: Never expose TipLink URL to frontend - only public key
+      tiplink_url: '', // Always empty for security
       tiplink_public_key: gift.tiplink_public_key,
       transaction_signature: gift.transaction_signature,
       created_at: gift.created_at,
