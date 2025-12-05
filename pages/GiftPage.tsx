@@ -929,15 +929,43 @@ const GiftPage: React.FC = () => {
             feesToCollectInSOL = ataFeeInSOL;
             console.log(`✅ Will collect ATA fee in SOL: ${feesToCollectInSOL.toFixed(6)} SOL`);
             
-            // Verify user has enough SOL for ATA fee + TipLink reserve
+            // ✅ FIX: Calculate COMPLETE SOL requirement including ALL costs
+            // This includes: sender ATA (if needed) + TipLink sponsorship + transaction fees
             const solBalance = await getSolBalance();
             const BASE_FEE = 0.000005;
             const PRIORITY_FEE_BUFFER = 0.0003;
-            const TIPLINK_SOL_RESERVE = (recipientNeedsATA ? ataFeeInSOL : 0) + BASE_FEE + PRIORITY_FEE_BUFFER;
-            const totalSOLNeeded = feesToCollectInSOL + TIPLINK_SOL_RESERVE;
+            
+            // Check if sender needs ATA (we'll check this properly in handleConfirmSend, but estimate here)
+            // For now, assume sender might need ATA to be safe
+            const RENT_PER_ATA = 0.00203928;
+            const SENDER_ATA_COST_ESTIMATE = RENT_PER_ATA; // Conservative estimate
+            
+            // Detect token type for TipLink reserve
+            let tokenProgramId;
+            let isToken2022 = false;
+            try {
+                tokenProgramId = await getTokenProgramId(selectedToken.mint);
+                const splToken = await import('@solana/spl-token');
+                isToken2022 = tokenProgramId.equals(splToken.TOKEN_2022_PROGRAM_ID);
+            } catch (e) {
+                // Default to SPL Token if detection fails
+                isToken2022 = false;
+            }
+            
+            const SPL_TOKEN_SPONSOR_AMOUNT = 0.003;
+            const TOKEN2022_SPONSOR_AMOUNT = 0.005;
+            const TIPLINK_SOL_RESERVE = isToken2022 ? TOKEN2022_SPONSOR_AMOUNT : SPL_TOKEN_SPONSOR_AMOUNT;
+            
+            // Complete calculation: sender ATA + TipLink reserve + transaction fees
+            const totalSOLNeeded = SENDER_ATA_COST_ESTIMATE + TIPLINK_SOL_RESERVE + BASE_FEE + PRIORITY_FEE_BUFFER;
+            
+            // Get SOL price for USD display
+            const solPrice = await priceService.getTokenPrice('So11111111111111111111111111111111111111112');
+            const totalSOLNeededUSD = solPrice && solPrice > 0 ? totalSOLNeeded * solPrice : null;
             
             if (solBalance < totalSOLNeeded) {
-                setError(`Insufficient SOL balance. You need ${totalSOLNeeded.toFixed(6)} SOL for ATA creation fee and TipLink transaction fees. You have ${solBalance.toFixed(6)} SOL available.`);
+                const usdText = totalSOLNeededUSD ? ` (~$${totalSOLNeededUSD.toFixed(2)})` : '';
+                setError(`Insufficient SOL balance. You need ${totalSOLNeeded.toFixed(6)} SOL${usdText} to pay for transaction fees, account creation, and TipLink reserve. You have ${solBalance.toFixed(6)} SOL available.`);
                 return;
             }
         }
@@ -1033,15 +1061,42 @@ const GiftPage: React.FC = () => {
             feesToCollectInToken = 0;
             feesToCollectInSOL = ataFeeInSOL;
             
-            // Verify user has enough SOL for ATA fee + TipLink reserve
+            // ✅ FIX: Calculate COMPLETE SOL requirement including ALL costs
+            // This includes: sender ATA (if needed) + TipLink sponsorship + transaction fees
             const solBalance = await getSolBalance();
             const BASE_FEE = 0.000005;
             const PRIORITY_FEE_BUFFER = 0.0003;
-            const TIPLINK_SOL_RESERVE = (recipientNeedsATA ? ataFeeInSOL : 0) + BASE_FEE + PRIORITY_FEE_BUFFER;
-            const totalSOLNeeded = feesToCollectInSOL + TIPLINK_SOL_RESERVE;
+            
+            // Check if sender needs ATA (we'll check this properly later, but estimate here)
+            const RENT_PER_ATA = 0.00203928;
+            const SENDER_ATA_COST_ESTIMATE = RENT_PER_ATA; // Conservative estimate
+            
+            // Detect token type for TipLink reserve
+            let tokenProgramId;
+            let isToken2022 = false;
+            try {
+                tokenProgramId = await getTokenProgramId(currentToken.mint);
+                const splToken = await import('@solana/spl-token');
+                isToken2022 = tokenProgramId.equals(splToken.TOKEN_2022_PROGRAM_ID);
+            } catch (e) {
+                // Default to SPL Token if detection fails
+                isToken2022 = false;
+            }
+            
+            const SPL_TOKEN_SPONSOR_AMOUNT = 0.003;
+            const TOKEN2022_SPONSOR_AMOUNT = 0.005;
+            const TIPLINK_SOL_RESERVE = isToken2022 ? TOKEN2022_SPONSOR_AMOUNT : SPL_TOKEN_SPONSOR_AMOUNT;
+            
+            // Complete calculation: sender ATA + TipLink reserve + transaction fees
+            const totalSOLNeeded = SENDER_ATA_COST_ESTIMATE + TIPLINK_SOL_RESERVE + BASE_FEE + PRIORITY_FEE_BUFFER;
+            
+            // Get SOL price for USD display
+            const solPrice = await priceService.getTokenPrice('So11111111111111111111111111111111111111112');
+            const totalSOLNeededUSD = solPrice && solPrice > 0 ? totalSOLNeeded * solPrice : null;
             
             if (solBalance < totalSOLNeeded) {
-                throw new Error(`Insufficient SOL balance. You need ${totalSOLNeeded.toFixed(6)} SOL for ATA creation fee and TipLink transaction fees. You have ${solBalance.toFixed(6)} SOL available.`);
+                const usdText = totalSOLNeededUSD ? ` (~$${totalSOLNeededUSD.toFixed(2)})` : '';
+                throw new Error(`Insufficient SOL balance. You need ${totalSOLNeeded.toFixed(6)} SOL${usdText} to pay for transaction fees, account creation, and TipLink reserve. You have ${solBalance.toFixed(6)} SOL available.`);
             }
             
             console.log(`✅ Will collect ATA fee in SOL: ${feesToCollectInSOL.toFixed(6)} SOL`);
@@ -1169,9 +1224,15 @@ const GiftPage: React.FC = () => {
                 });
                 
                 if (solBalance < estimatedRequiredSol) {
+                    // Get SOL price for USD display
+                    const solPrice = await priceService.getTokenPrice('So11111111111111111111111111111111111111112');
+                    const estimatedRequiredSolUSD = solPrice && solPrice > 0 ? estimatedRequiredSol * solPrice : null;
+                    
                     // Round up to 4 decimal places for user-friendly message
                     const requiredRounded = Math.ceil(estimatedRequiredSol * 10000) / 10000;
-                    throw new Error(`Insufficient SOL for transaction fees. You need approximately ${requiredRounded.toFixed(4)} SOL to pay for transaction fees, rent, and TipLink reserve. You have ${solBalance.toFixed(4)} SOL available. Please add more SOL to your wallet.`);
+                    const usdText = estimatedRequiredSolUSD ? ` (~$${estimatedRequiredSolUSD.toFixed(2)})` : '';
+                    
+                    throw new Error(`Insufficient SOL for transaction fees. You need ${requiredRounded.toFixed(4)} SOL${usdText} to pay for transaction fees, account creation, and TipLink reserve. You have ${solBalance.toFixed(4)} SOL available. Please add more SOL to your wallet.`);
                 }
             }
 
