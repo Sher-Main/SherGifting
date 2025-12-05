@@ -1114,8 +1114,11 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
       // Continue without token name
     }
     
-    // Send email notification to recipient with secure claim token
-    const claimUrl = `/claim?token=${claimToken}`;
+    // ✅ SECURITY FIX: Use hash fragment instead of query parameter
+    // Hash fragments (#token=...) are NEVER sent to the server, keeping the claim token
+    // secure from server logs, analytics, and browser history
+    // This follows TipLink's security best practices
+    const claimUrl = `/claim#token=${claimToken}`;
     const fullClaimUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}${claimUrl}`;
     
     console.log('📧 Sending email notification to recipient with secure claim token...');

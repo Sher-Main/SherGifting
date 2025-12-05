@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePrivy } from '@privy-io/react-auth';
 import { giftService } from '../services/api';
@@ -7,9 +7,26 @@ import { GiftInfo } from '../types';
 import Spinner from '../components/Spinner';
 import { ProgressLoader } from '../components/ProgressLoader';
 
+// ✅ SECURITY FIX: Extract token from hash fragment instead of query parameter
+// Hash fragments (#token=...) are NEVER sent to the server, keeping the claim token
+// secure from server logs, analytics, and browser history
+function getTokenFromUrl(): string | null {
+    // First try hash fragment (secure, new format)
+    const hash = window.location.hash;
+    if (hash) {
+        const hashParams = new URLSearchParams(hash.substring(1));
+        const token = hashParams.get('token');
+        if (token) return token;
+    }
+    
+    // Fallback to query parameter (backward compatibility for old links)
+    // Note: This is less secure but needed for existing gift links
+    const urlParams = new URLSearchParams(window.location.search);
+    return urlParams.get('token');
+}
+
 const ClaimPage: React.FC = () => {
-    const [searchParams] = useSearchParams();
-    const claimToken = searchParams.get('token');
+    const claimToken = getTokenFromUrl();
     const { user, refreshUser, isLoading: authLoading, loadingStage } = useAuth();
     const { ready, authenticated, login, user: privyUser } = usePrivy();
     const navigate = useNavigate();
