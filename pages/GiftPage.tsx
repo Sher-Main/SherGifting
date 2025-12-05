@@ -1226,7 +1226,7 @@ const GiftPage: React.FC = () => {
                 const splToken = await import('@solana/spl-token');
                 const {
                     getAssociatedTokenAddress,
-                    createTransferInstruction,
+                    createTransferCheckedInstruction,
                     createAssociatedTokenAccountInstruction,
                     getAccount
                 } = splToken;
@@ -1342,16 +1342,21 @@ const GiftPage: React.FC = () => {
                 }
                 
                 // Add gift amount transfer to TipLink (using correct program ID)
+                // ✅ FIX: Use createTransferCheckedInstruction for Token2022 compatibility
+                // Token2022 requires checked transfers with mint and decimals validation
                 transaction.add(
-                    createTransferInstruction(
+                    createTransferCheckedInstruction(
                         senderATA, // source
+                        mintPubkey, // mint (required for checked transfer)
                         tipLinkATA, // destination
                         senderPubkey, // owner
                         BigInt(giftAmountRaw), // amount
+                        decimals, // decimals (required for checked transfer)
                         [], // multiSigners
                         tokenProgramId
                     )
                 );
+                console.log(`✅ Added transfer instruction (checked) for ${numericAmount} ${currentToken.symbol}`);
                 
                 // Service and card fees removed - no fee transfer needed
                 

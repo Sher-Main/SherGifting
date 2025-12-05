@@ -1,5 +1,5 @@
 import { Connection, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAccount } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAccount } from '@solana/spl-token';
 import { TipLink } from '@tiplink/api';
 import { decryptTipLink } from '../utils/encryption';
 import { pool } from '../database';
@@ -291,6 +291,7 @@ export class GiftRefundService {
         // Calculate transfer amount in token's smallest unit
         const availableBalance = Number(tiplinkTokenAccount.amount);
         const transferAmount = BigInt(Math.min(availableBalance, Math.floor(gift.amount * (10 ** gift.token_decimals))));
+        const tokenDecimals = gift.token_decimals;
 
         console.log(`📊 Transfer details:`, {
           tokenSymbol: gift.token_symbol,
@@ -298,20 +299,25 @@ export class GiftRefundService {
           transferAmountRaw: transferAmount.toString(),
           tiplinkBalance: availableBalance.toString(),
           senderATA: senderATA.toBase58(),
-          programId: isToken2022 ? 'Token2022' : 'SPL Token'
+          programId: isToken2022 ? 'Token2022' : 'SPL Token',
+          decimals: tokenDecimals
         });
 
         // Transfer SPL tokens (using correct program ID)
+        // ✅ FIX: Use createTransferCheckedInstruction for Token2022 compatibility
         instructions.push(
-          createTransferInstruction(
-            tiplinkATA,
-            senderATA,
-            tipLinkPublicKey,
-            transferAmount,
-            [],
+          createTransferCheckedInstruction(
+            tiplinkATA, // source
+            mintPubkey, // mint (required for checked transfer)
+            senderATA, // destination
+            tipLinkPublicKey, // owner
+            transferAmount, // amount
+            tokenDecimals, // decimals (required for checked transfer)
+            [], // multiSigners
             tokenProgramId
           )
         );
+        console.log(`✅ Added refund transfer instruction (checked) for ${gift.amount} ${gift.token_symbol}`);
 
         const transaction = new Transaction().add(...instructions);
 

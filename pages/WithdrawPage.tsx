@@ -319,7 +319,7 @@ const WithdrawPage: React.FC = () => {
         const splToken = await import('@solana/spl-token');
         const {
           getAssociatedTokenAddress,
-          createTransferInstruction,
+          createTransferCheckedInstruction,
           createAssociatedTokenAccountInstruction,
           TOKEN_PROGRAM_ID,
           TOKEN_2022_PROGRAM_ID,
@@ -421,13 +421,16 @@ const WithdrawPage: React.FC = () => {
         }
         
         // Add withdrawal amount transfer (using correct program ID)
+        // ✅ FIX: Use createTransferCheckedInstruction for Token2022 compatibility
         transaction.add(
-          createTransferInstruction(
-            senderATA,
-            recipientATA,
-            senderPubkey,
-            BigInt(withdrawalAmountRaw),
-            [],
+          createTransferCheckedInstruction(
+            senderATA, // source
+            mintPubkey, // mint (required for checked transfer)
+            recipientATA, // destination
+            senderPubkey, // owner
+            BigInt(withdrawalAmountRaw), // amount
+            decimals, // decimals (required for checked transfer)
+            [], // multiSigners
             tokenProgramId
           )
         );
@@ -473,13 +476,16 @@ const WithdrawPage: React.FC = () => {
             );
           }
           
+          // ✅ FIX: Use createTransferCheckedInstruction for Token2022 compatibility
           transaction.add(
-            createTransferInstruction(
-              senderATA,
-              feeWalletATA,
-              senderPubkey,
-              BigInt(feeAmountRaw),
-              [],
+            createTransferCheckedInstruction(
+              senderATA, // source
+              mintPubkey, // mint (required for checked transfer)
+              feeWalletATA, // destination
+              senderPubkey, // owner
+              BigInt(feeAmountRaw), // amount
+              decimals, // decimals (required for checked transfer)
+              [], // multiSigners
               tokenProgramId
             )
           );

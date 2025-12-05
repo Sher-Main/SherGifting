@@ -3,7 +3,7 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { TipLink } from '@tiplink/api';
 import { Connection, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, createCloseAccountInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAccount } from '@solana/spl-token';
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferCheckedInstruction, createCloseAccountInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAccount, getMint } from '@solana/spl-token';
 import 'dotenv/config';
 import { authenticateToken, AuthRequest } from './authMiddleware';
 import { sendGiftNotification } from './emailService';
@@ -1765,26 +1765,35 @@ async function processGiftClaim(
 
       // ✅ FIX 2: Use the same calculation method as balance check (with BigInt)
       const transferAmount = BigInt(Math.floor(gift.amount * (10 ** gift.token_decimals)));
+      const tokenDecimals = gift.token_decimals;
+      // Note: mintPubkey is already declared earlier in this block
+      
       console.log(`📊 Transfer details:`, {
         tokenSymbol: gift.token_symbol,
         tokenAmount: gift.amount,
         transferAmountRaw: transferAmount.toString(),
         tiplinkBalanceRaw: tokenBalanceRaw.toString(),
         recipientATA: recipientATA.toBase58(),
-        programId: tokenProgramId.equals(TOKEN_2022_PROGRAM_ID) ? 'Token2022' : 'SPL Token'
+        programId: tokenProgramId.equals(TOKEN_2022_PROGRAM_ID) ? 'Token2022' : 'SPL Token',
+        decimals: tokenDecimals
       });
 
       // Transfer SPL tokens (using correct program ID)
+      // ✅ FIX: Use createTransferCheckedInstruction for Token2022 compatibility
+      // Token2022 requires checked transfers with mint and decimals validation
       instructions.push(
-        createTransferInstruction(
-          tiplinkATA,
-          recipientATA,
-          tipLink.keypair.publicKey,
-          transferAmount,
-          [],
+        createTransferCheckedInstruction(
+          tiplinkATA, // source
+          mintPubkey, // mint (required for checked transfer)
+          recipientATA, // destination
+          tipLink.keypair.publicKey, // owner
+          transferAmount, // amount
+          tokenDecimals, // decimals (required for checked transfer)
+          [], // multiSigners
           tokenProgramId
         )
       );
+      console.log(`✅ Added transfer instruction (checked) for ${gift.amount} ${gift.token_symbol}`);
 
       // ✅ RENT RECYCLING: Close TipLink ATA to reclaim rent (~0.002 SOL)
       // This reclaims the rent exemption that was locked in the TipLink's ATA
