@@ -2,7 +2,7 @@ import React, { useState, useEffect, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePrivy } from '@privy-io/react-auth';
-import { useSignAndSendTransaction, useWallets } from '@privy-io/react-auth/solana';
+import { useSignAndSendTransaction, useWallets, useFundWallet } from '@privy-io/react-auth/solana';
 import { tokenService, giftService, tiplinkService, heliusService, feeService, priceService, usernameService, bundleService } from '../services/api';
 import { getApiUrl } from '../services/apiConfig';
 import { Token, TokenBalance, ResolveRecipientResponse, Bundle, BundleCalculation } from '../types';
@@ -12,7 +12,7 @@ import { ArrowLeftIcon } from '../components/icons';
 import { OnrampCreditPopup } from '../components/OnrampCreditPopup';
 import { CARD_UPSELL_PRICE } from '../lib/cardTemplates';
 import QRCode from 'qrcode';
-import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
+import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, VersionedTransaction } from '@solana/web3.js';
 import { createAssociatedTokenAccountInstruction, createTransferCheckedInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
 import { connection } from '../services/solana';
 import bs58 from 'bs58';
@@ -25,9 +25,10 @@ const CardUpsellSection = React.lazy(() =>
 
 const GiftPage: React.FC = () => {
     const { user, refreshUser, isLoading: authLoading } = useAuth();
-    const { ready, authenticated, user: privyUser } = usePrivy();
+    const { ready, authenticated, user: privyUser, getAccessToken } = usePrivy();
     const { signAndSendTransaction } = useSignAndSendTransaction();
     const { wallets, ready: walletsReady } = useWallets();
+    const { fundWallet } = useFundWallet();
     const navigate = useNavigate();
     const [tokens, setTokens] = useState<Token[]>([]);
     const [selectedToken, setSelectedToken] = useState<Token | null>(null);
@@ -75,6 +76,9 @@ const GiftPage: React.FC = () => {
     const [giftMode, setGiftMode] = useState<'bundle' | 'custom'>('bundle'); // Default to bundle
     const [selectedBundle, setSelectedBundle] = useState<Bundle | null>(null);
     const [bundleCalculation, setBundleCalculation] = useState<BundleCalculation | null>(null);
+    const [bundleGiftId, setBundleGiftId] = useState<string | null>(null);
+    const [onrampAmount, setOnrampAmount] = useState<number>(0);
+    const [isOnramping, setIsOnramping] = useState(false);
     
     // Onramp credit state
     const [onrampCredit, setOnrampCredit] = useState<any | null>(null);
@@ -881,6 +885,7 @@ const GiftPage: React.FC = () => {
         if (!confirmDetails || !selectedBundle || !bundleCalculation) return;
         
         setIsSending(true);
+        setIsOnramping(true);
         setError(null);
         setSuccessMessage(null);
 
@@ -893,182 +898,398 @@ const GiftPage: React.FC = () => {
                 throw new Error('Wallets are not ready yet. Please wait a moment and try again.');
             }
 
+            // Get wallet address
+            const walletAddress = wallets?.[0]?.address || privyUser?.wallet?.address || user?.wallet_address;
+            if (!walletAddress) {
+                throw new Error('No wallet address found. Please ensure your wallet is connected.');
+            }
+
+            // Step 1: Initiate bundle gift and get onramp amount
+            const isCardFree = selectedCard && onrampCredit && onrampCredit.isActive && onrampCredit.cardAddsFreeRemaining > 0;
+            const cardPriceUsd = selectedCard ? (isCardFree ? 0 : 1.00) : 0;
+
+            const initiateResponse = await bundleService.initiateBundleGift({
+                bundleId: selectedBundle.id,
+                recipientEmail: recipientEmailValue,
+                customMessage: message || undefined,
+                includeCard: !!selectedCard,
+            });
+
+            setBundleGiftId(initiateResponse.giftId);
+            setOnrampAmount(initiateResponse.onrampAmount);
+
+            // Step 2: Open Privy onramp popup
+            console.log('🚀 Opening Privy funding flow for bundle gift...');
+            await fundWallet({
+                address: walletAddress,
+            });
+
+            console.log('✅ Funding modal opened - starting polling for transaction...');
+
+            // Step 3: Start polling for SOL arrival (every 30s, 20 attempts = 10 minutes)
+            const pollInterval = 30000; // 30 seconds
+            const maxAttempts = 20;
+            let attempts = 0;
+
+            const pollForBalance = async () => {
+                attempts++;
+                console.log(`🔄 Polling attempt ${attempts}/${maxAttempts}...`);
+
+                try {
+                    // Check balance via backend endpoint
+                    const response = await fetch(getApiUrl(`wallet/balances/${walletAddress}`));
+                    if (response.ok) {
+                        const balances = await response.json();
+                        const solBalance = balances.find((b: any) => b.symbol === 'SOL');
+                        const currentBalance = solBalance?.balance || 0;
+
+                        // Get SOL price to calculate expected SOL amount
+                        const solPriceResponse = await fetch(
+                            'https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112'
+                        );
+                        const solPriceData = await solPriceResponse.json();
+                        const solPrice = solPriceData.data?.['So11111111111111111111111111111111111111112']?.price || 0;
+
+                        if (solPrice > 0) {
+                            const expectedSol = initiateResponse.onrampAmount / solPrice;
+
+                            console.log(
+                                `📊 Current balance: ${currentBalance.toFixed(6)} SOL (expecting ${expectedSol.toFixed(6)} SOL)`
+                            );
+
+                            // Check if balance increased significantly (95% threshold)
+                            if (currentBalance >= expectedSol * 0.95) {
+                                console.log('✅ SOL detected! Triggering swaps...');
+                                setIsOnramping(false);
+
+                                // Trigger swap execution
+                                await bundleService.executeSwaps(initiateResponse.giftId);
+
+                                // Sign and send swaps, then fund TipLink
+                                await signAndSendSwaps(initiateResponse.giftId);
+                                await fundTipLink(initiateResponse.giftId);
+
+                                // Start polling for completion
+                                pollForStatus(initiateResponse.giftId);
+                                return; // Stop balance polling
+                            }
+                        }
+                    }
+
+                    // Check gift status as well
+                    const statusResponse = await bundleService.pollBundleStatus(initiateResponse.giftId);
+                    if (statusResponse.onrampStatus === 'completed') {
+                        setIsOnramping(false);
+                        await bundleService.executeSwaps(initiateResponse.giftId);
+                        await signAndSendSwaps(initiateResponse.giftId);
+                        await fundTipLink(initiateResponse.giftId);
+                        pollForStatus(initiateResponse.giftId);
+                        return;
+                    }
+
+                    if (statusResponse.status === 'SENT') {
+                        // Gift completed
+                        setGiftDetails({
+                            claim_url: statusResponse.message,
+                            amount: bundleCalculation.totalUsdValue.toFixed(2),
+                            token: selectedBundle.name,
+                            usdValue: bundleCalculation.totalUsdValue,
+                            recipient: recipientEmailValue,
+                            signature: '',
+                            qrCode: '',
+                        });
+                        setShowSuccessModal(true);
+                        setShowConfirmModal(false);
+                        setIsSending(false);
+                        return;
+                    }
+
+                    // Continue polling if not done
+                    if (attempts < maxAttempts) {
+                        setTimeout(pollForBalance, pollInterval);
+                    } else {
+                        setError('Payment timeout. Please contact support if payment was completed.');
+                        setIsOnramping(false);
+                        setIsSending(false);
+                    }
+                } catch (error) {
+                    console.error('Polling error:', error);
+                    if (attempts < maxAttempts) {
+                        setTimeout(pollForBalance, pollInterval);
+                    } else {
+                        setError('Failed to detect payment. Please contact support.');
+                        setIsOnramping(false);
+                        setIsSending(false);
+                    }
+                }
+            };
+
+            // Start polling after a short delay
+            setTimeout(pollForBalance, 5000);
+
+        } catch (error: any) {
+            console.error('Error initiating bundle gift:', error);
+            setShowConfirmModal(false);
+            setIsOnramping(false);
+            const errorMessage = error.message || error.toString() || 'Failed to initiate bundle gift';
+            setError(errorMessage);
+            setIsSending(false);
+        }
+    };
+
+    const signAndSendSwaps = async (giftId: string) => {
+        try {
+            // Get pending swap transactions
+            const swapsResponse = await bundleService.getPendingSwaps(giftId);
+            
+            if (!swapsResponse.success || swapsResponse.swaps.length === 0) {
+                console.log('No pending swaps to sign');
+                return;
+            }
+
             // Find embedded Privy wallet
             const embeddedWallet = wallets.find(
                 (w) => w.standardWallet?.name === 'Privy'
             );
 
             if (!embeddedWallet) {
-                throw new Error('No Privy embedded wallet found. Please ensure your wallet is connected.');
+                throw new Error('No Privy embedded wallet found');
             }
 
-            console.log('✅ Found embedded Privy wallet:', embeddedWallet.address);
+            // Sign and send each swap transaction
+            for (const swap of swapsResponse.swaps) {
+                try {
+                    // Deserialize transaction
+                    const swapTransactionBuf = Buffer.from(swap.transaction, 'base64');
 
-            // Create TipLink
-            const { tiplink_ref_id, tiplink_public_key } = await tiplinkService.create();
-            const tiplinkPubkey = new PublicKey(tiplink_public_key);
+                    // Sign and send
+                    const result = await signAndSendTransaction({
+                        transaction: swapTransactionBuf,
+                        wallet: embeddedWallet,
+                        chain: 'solana:mainnet',
+                    });
 
-            // Fund TipLink with all tokens
+                    // Get signature string
+                    const signature = result.signature as string | Uint8Array;
+                    const signatureString = typeof signature === 'string' 
+                        ? signature 
+                        : bs58.encode(signature);
+
+                    // Confirm swap with backend
+                    await bundleService.confirmSwap(giftId, swap.id, signatureString);
+                    
+                    console.log(`✅ Swap signed and sent: ${signatureString}`);
+                } catch (error: any) {
+                    console.error(`❌ Failed to sign swap ${swap.id}:`, error);
+                    throw error;
+                }
+            }
+        } catch (error: any) {
+            console.error('Error signing swaps:', error);
+            throw error;
+        }
+    };
+
+    const fundTipLink = async (giftId: string) => {
+        try {
+            // Get TipLink details and transfer instructions
+            const tiplinkResponse = await bundleService.getTipLinkDetails(giftId);
+            
+            if (!tiplinkResponse.success) {
+                throw new Error('Failed to get TipLink details');
+            }
+
+            const { tiplinkUrl, tiplinkPublicKey, transfers } = tiplinkResponse;
+            const tiplinkPubkey = new PublicKey(tiplinkPublicKey);
+
+            // Find embedded Privy wallet
+            const embeddedWallet = wallets.find(
+                (w) => w.standardWallet?.name === 'Privy'
+            );
+
+            if (!embeddedWallet) {
+                throw new Error('No Privy embedded wallet found');
+            }
+
+            const userPubkey = new PublicKey(embeddedWallet.address);
             const fundingSignatures: string[] = [];
 
-            for (const token of bundleCalculation.tokens) {
+            // Get SOL price for USD to SOL conversion
+            const solPrice = await priceService.getTokenPrice('So11111111111111111111111111111111111111112');
+
+            // Fund TipLink with each token
+            for (const transfer of transfers) {
                 try {
-                    if (token.symbol === 'SOL') {
+                    if (transfer.mint === 'So11111111111111111111111111111111111111112') {
+                        // SOL transfer
+                        const solAmount = solPrice > 0 ? transfer.amount / solPrice : transfer.amount;
+                        
                         const transaction = new Transaction().add(
                             SystemProgram.transfer({
-                                fromPubkey: new PublicKey(embeddedWallet.address),
+                                fromPubkey: userPubkey,
                                 toPubkey: tiplinkPubkey,
-                                lamports: Math.floor(token.tokenAmount * LAMPORTS_PER_SOL),
+                                lamports: Math.floor(solAmount * LAMPORTS_PER_SOL),
                             })
                         );
-                        
-                        // Get recent blockhash
+
                         const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
                         transaction.recentBlockhash = blockhash;
-                        transaction.feePayer = new PublicKey(embeddedWallet.address);
+                        transaction.feePayer = userPubkey;
                         if (lastValidBlockHeight) {
                             transaction.lastValidBlockHeight = lastValidBlockHeight;
                         }
-                        
-                        // Serialize transaction
+
                         const serializedTransaction = transaction.serialize({
                             requireAllSignatures: false,
                             verifySignatures: false,
                         });
-                        
+
                         const result = await signAndSendTransaction({
                             transaction: serializedTransaction,
                             wallet: embeddedWallet,
                             chain: 'solana:mainnet',
                         });
-                        
+
                         const signature = result.signature as string | Uint8Array;
                         const signatureString = typeof signature === 'string' 
                             ? signature 
                             : bs58.encode(signature);
-                        
+
                         fundingSignatures.push(signatureString);
-                        console.log(`✅ Funded ${token.tokenAmount} SOL: ${signatureString}`);
+                        console.log(`✅ Funded ${solAmount.toFixed(6)} SOL: ${signatureString}`);
                     } else {
                         // SPL token transfer
-                        // Detect token program
-                        const tokenProgramId = await getTokenProgramId(token.mint);
-                        
-                        const mintPubkey = new PublicKey(token.mint);
-                        const senderPubkey = new PublicKey(embeddedWallet.address);
-                        const senderATA = await getAssociatedTokenAddress(mintPubkey, senderPubkey, false, tokenProgramId);
-                        const tiplinkATA = await getAssociatedTokenAddress(mintPubkey, tiplinkPubkey, true, tokenProgramId);
-                        
-                        // Get token decimals from wallet balances or use default
-                        const tokenBalance = walletBalances.find(b => b.address === token.mint);
+                        const tokenBalance = walletBalances.find(b => b.address === transfer.mint);
                         const decimals = tokenBalance?.decimals || 9;
-                        const amountRaw = BigInt(Math.floor(token.tokenAmount * 10 ** decimals));
-                        
+                        const amountRaw = BigInt(Math.floor(transfer.amount * 10 ** decimals));
+
+                        const mintPubkey = new PublicKey(transfer.mint);
+                        const senderATA = await getAssociatedTokenAddress(mintPubkey, userPubkey, false, TOKEN_PROGRAM_ID);
+                        const tiplinkATA = await getAssociatedTokenAddress(mintPubkey, tiplinkPubkey, true, TOKEN_PROGRAM_ID);
+
                         const transaction = new Transaction();
-                        
+
                         // Check if TipLink ATA exists
                         const tiplinkAccountInfo = await connection.getAccountInfo(tiplinkATA);
                         if (!tiplinkAccountInfo) {
                             transaction.add(
                                 createAssociatedTokenAccountInstruction(
-                                    senderPubkey,
+                                    userPubkey,
                                     tiplinkATA,
                                     tiplinkPubkey,
                                     mintPubkey,
-                                    tokenProgramId
+                                    TOKEN_PROGRAM_ID
                                 )
                             );
                         }
-                        
+
                         transaction.add(
                             createTransferCheckedInstruction(
                                 senderATA,
                                 mintPubkey,
                                 tiplinkATA,
-                                senderPubkey,
+                                userPubkey,
                                 amountRaw,
                                 decimals,
                                 [],
-                                tokenProgramId
+                                TOKEN_PROGRAM_ID
                             )
                         );
-                        
-                        // Get recent blockhash
+
                         const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
                         transaction.recentBlockhash = blockhash;
-                        transaction.feePayer = senderPubkey;
+                        transaction.feePayer = userPubkey;
                         if (lastValidBlockHeight) {
                             transaction.lastValidBlockHeight = lastValidBlockHeight;
                         }
-                        
-                        // Serialize transaction
+
                         const serializedTransaction = transaction.serialize({
                             requireAllSignatures: false,
                             verifySignatures: false,
                         });
-                        
+
                         const result = await signAndSendTransaction({
                             transaction: serializedTransaction,
                             wallet: embeddedWallet,
                             chain: 'solana:mainnet',
                         });
-                        
+
                         const signature = result.signature as string | Uint8Array;
                         const signatureString = typeof signature === 'string' 
                             ? signature 
                             : bs58.encode(signature);
-                        
+
                         fundingSignatures.push(signatureString);
-                        console.log(`✅ Funded ${token.tokenAmount} ${token.symbol}: ${signatureString}`);
+                        console.log(`✅ Funded ${transfer.amount.toFixed(6)} ${transfer.symbol}: ${signatureString}`);
                     }
                 } catch (error: any) {
-                    console.error(`❌ Error funding ${token.symbol}:`, error);
-                    throw new Error(`Failed to fund ${token.symbol}: ${error.message}`);
+                    console.error(`❌ Error funding ${transfer.symbol}:`, error);
+                    throw error;
                 }
             }
 
-            // Calculate card price: 0 if free (has active credit), otherwise 1.00
-            const isCardFree = selectedCard && onrampCredit && onrampCredit.isActive && onrampCredit.cardAddsFreeRemaining > 0;
-            const cardPriceUsd = selectedCard ? (isCardFree ? 0 : 1.00) : undefined;
-            
-            // Ensure recipient name is set for card
-            const cardRecipientName = selectedCard 
-                ? (recipientName || recipientEmailValue.split('@')[0] || 'Friend')
-                : null;
+            // Complete the gift (this will verify funding and send email)
+            await bundleService.completeBundleGift(giftId);
 
-            // Create bundle gift
-            const result = await bundleService.createBundleGift({
-                recipientEmail: recipientEmailValue,
-                bundleId: selectedBundle.id,
-                customMessage: message || undefined,
-                includeCard: !!selectedCard,
-                sender_did: user.privy_did,
-                tiplink_ref_id,
-                tiplink_public_key,
-                funding_signatures,
-                card_type: selectedCard || null,
-                card_recipient_name: cardRecipientName,
-                card_price_usd: cardPriceUsd,
-            });
-
-            setGiftDetails({
-                claim_url: result.claim_url,
-                amount: bundleCalculation.totalUsdValue.toFixed(2),
-                token: selectedBundle.name,
-                usdValue: bundleCalculation.totalUsdValue,
-                recipient: recipientEmailValue,
-                signature: result.signatures.join(', '),
-                qrCode: '',
-            });
-
-            setShowSuccessModal(true);
-            setShowConfirmModal(false);
+            console.log('✅ TipLink funded and gift completed');
         } catch (error: any) {
-            console.error('Error sending bundle gift:', error);
-            setError(error.message || 'Failed to send bundle gift');
-        } finally {
-            setIsSending(false);
+            console.error('Error funding TipLink:', error);
+            throw error;
         }
+    };
+
+    const pollForStatus = async (giftId: string) => {
+        const pollInterval = 5000; // 5 seconds for status polling
+        const maxAttempts = 60; // 5 minutes max
+        let attempts = 0;
+
+        const poll = async () => {
+            attempts++;
+
+            try {
+                const status = await bundleService.pollBundleStatus(giftId);
+
+                if (status.status === 'SENT') {
+                    // Gift completed
+                    setGiftDetails({
+                        claim_url: status.message,
+                        amount: bundleCalculation?.totalUsdValue.toFixed(2) || '0',
+                        token: selectedBundle?.name || 'Bundle',
+                        usdValue: bundleCalculation?.totalUsdValue || 0,
+                        recipient: confirmDetails?.recipientEmail || '',
+                        signature: '',
+                        qrCode: '',
+                    });
+                    setShowSuccessModal(true);
+                    setShowConfirmModal(false);
+                    setIsSending(false);
+                    return;
+                }
+
+                if (status.swapStatus === 'failed') {
+                    setError('Swap failed. Please contact support.');
+                    setIsSending(false);
+                    return;
+                }
+
+                if (attempts < maxAttempts) {
+                    setTimeout(poll, pollInterval);
+                } else {
+                    setError('Processing timeout. Please contact support.');
+                    setIsSending(false);
+                }
+            } catch (error) {
+                console.error('Status polling error:', error);
+                if (attempts < maxAttempts) {
+                    setTimeout(poll, pollInterval);
+                } else {
+                    setError('Failed to check status. Please contact support.');
+                    setIsSending(false);
+                }
+            }
+        };
+
+        poll();
     };
 
     const handleSendGift = async (e: React.FormEvent) => {
@@ -2740,10 +2961,14 @@ const GiftPage: React.FC = () => {
                             <button
                                 type="button"
                                 onClick={handleSendBundleGift}
-                                disabled={isSending || !selectedBundle || !bundleCalculation || !trimmedRecipient}
+                                disabled={isSending || isOnramping || !selectedBundle || !bundleCalculation || !trimmedRecipient}
                                 className="w-full bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white font-bold py-4 px-6 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
                             >
-                                {isSending ? 'Sending Bundle Gift...' : `Send ${selectedBundle?.name || 'Bundle'}`}
+                                {isOnramping 
+                                    ? 'Waiting for Payment...' 
+                                    : isSending 
+                                        ? 'Processing Gift...' 
+                                        : `Send ${selectedBundle?.name || 'Bundle'}`}
                             </button>
                         </>
                     )}

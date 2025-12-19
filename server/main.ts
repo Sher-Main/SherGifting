@@ -2346,6 +2346,9 @@ if (KEEP_ALIVE_URL && process.env.NODE_ENV === 'production') {
   startKeepAlivePing(KEEP_ALIVE_URL, 5 * 60 * 1000);
 }
 
+// Make connection available globally for routes (no sponsor wallet needed - user signs all transactions)
+(global as any).solanaConnection = connection;
+
 // Initialize background jobs
 console.log('🚀 Initializing background jobs...');
 startGiftExpiryJob();

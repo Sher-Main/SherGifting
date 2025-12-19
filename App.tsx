@@ -12,6 +12,7 @@ const HomePage = React.lazy(() => import('./pages/HomePage'));
 const LoginPage = React.lazy(() => import('./pages/LoginPage'));
 const AddFundsPage = React.lazy(() => import('./pages/AddFundsPage'));
 const GiftPage = React.lazy(() => import('./pages/GiftPage'));
+const BundleGiftPage = React.lazy(() => import('./pages/BundleGiftPage'));
 const WithdrawPage = React.lazy(() => import('./pages/WithdrawPage'));
 const HistoryPage = React.lazy(() => import('./pages/HistoryPage'));
 const ClaimPage = React.lazy(() => import('./pages/ClaimPage'));
@@ -88,6 +89,7 @@ const AppContent: React.FC = () => {
             <Route path="/" element={user ? <HomePage /> : <Navigate to="/login" />} />
             <Route path="/add-funds" element={user ? <AddFundsPage /> : <Navigate to="/login" />} />
             <Route path="/gift" element={user ? <GiftPage /> : <Navigate to="/login" />} />
+            <Route path="/bundle-gift" element={user ? <BundleGiftPage /> : <Navigate to="/login" />} />
             <Route path="/withdraw" element={user ? <WithdrawPage /> : <Navigate to="/login" />} />
             <Route path="/history" element={user ? <HistoryPage /> : <Navigate to="/login" />} />
             <Route path="/claim" element={<ClaimPage />} />

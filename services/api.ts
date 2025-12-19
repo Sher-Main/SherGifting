@@ -388,4 +388,90 @@ export const bundleService = {
     invalidateCache(getGiftHistoryCacheKey());
     return response.data;
   },
+
+  initiateBundleGift: async (data: {
+    bundleId: string;
+    recipientEmail: string;
+    customMessage?: string;
+    includeCard?: boolean;
+  }): Promise<{
+    success: boolean;
+    giftId: string;
+    onrampAmount: number;
+    breakdown: {
+      baseAmount: number;
+      serviceFee: number;
+      cardFee: number;
+      ataBuffer: number;
+      slippageBuffer: number;
+      total: number;
+    };
+  }> => {
+    const response = await apiClient.post('/bundles/initiate', data);
+    return response.data;
+  },
+
+  pollBundleStatus: async (giftId: string): Promise<{
+    success: boolean;
+    onrampStatus: string;
+    swapStatus: string;
+    status: string;
+    message: string;
+  }> => {
+    const response = await apiClient.get(`/bundles/poll/${giftId}`);
+    return response.data;
+  },
+
+  executeSwaps: async (giftId: string): Promise<{
+    success: boolean;
+    message: string;
+  }> => {
+    const response = await apiClient.post('/bundles/execute-swaps', { giftId });
+    return response.data;
+  },
+
+  getPendingSwaps: async (giftId: string): Promise<{
+    success: boolean;
+    swaps: Array<{
+      id: string;
+      inputMint: string;
+      outputMint: string;
+      inputAmount: number;
+      outputAmount: number;
+      transaction: string; // Base64 encoded transaction
+    }>;
+  }> => {
+    const response = await apiClient.get(`/bundles/${giftId}/swaps`);
+    return response.data;
+  },
+
+  confirmSwap: async (giftId: string, swapId: string, signature: string): Promise<{
+    success: boolean;
+  }> => {
+    const response = await apiClient.post(`/bundles/${giftId}/swaps/${swapId}/confirm`, { signature });
+    return response.data;
+  },
+
+  getTipLinkDetails: async (giftId: string): Promise<{
+    success: boolean;
+    tiplinkUrl: string;
+    tiplinkPublicKey: string;
+    transfers: Array<{
+      mint: string;
+      symbol: string;
+      amount: number;
+      percentage: number;
+    }>;
+  }> => {
+    const response = await apiClient.get(`/bundles/${giftId}/tiplink`);
+    return response.data;
+  },
+
+  completeBundleGift: async (giftId: string): Promise<{
+    success: boolean;
+    message: string;
+  }> => {
+    const response = await apiClient.post(`/bundles/${giftId}/complete`);
+    return response.data;
+  },
 };
