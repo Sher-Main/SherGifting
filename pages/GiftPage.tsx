@@ -843,43 +843,119 @@ const GiftPage: React.FC = () => {
             return;
         }
 
+        // Calculate card price: 0 if free (has active credit), otherwise 1.00
+        const isCardFree = selectedCard && onrampCredit && onrampCredit.isActive && onrampCredit.cardAddsFreeRemaining > 0;
+        const cardPriceUsd = selectedCard ? (isCardFree ? 0 : 1.00) : 0;
+        
+        // Calculate total price preview
+        const totalUsdValue = bundleCalculation.totalUsdValue;
+        const totalWithCard = totalUsdValue + cardPriceUsd;
+        
+        // Show confirmation modal first (similar to custom gifts)
+        setConfirmDetails({
+            recipientLabel: recipientDisplayLabel || recipientEmailValue,
+            recipientEmail: recipientEmailValue,
+            amount: totalUsdValue, // Bundle total
+            fee: 0, // No service fee
+            total: totalWithCard, // Bundle + card
+            token: selectedBundle.name,
+            tokenName: selectedBundle.name,
+            usdValue: totalUsdValue,
+            usdFee: 0,
+            usdTotal: totalWithCard,
+            remainingBalance: 0, // Will calculate from wallet
+            remainingBalanceUsd: null,
+            message: message || '',
+            cardFee: cardPriceUsd,
+            cardFeeUsd: cardPriceUsd,
+            hasCard: !!selectedCard,
+            ataFee: 0, // No ATA fee for bundles (handled per token)
+            ataFeeUsd: 0,
+            recipientNeedsATA: false,
+        });
+        setShowConfirmModal(true);
+        return;
+    };
+
+    const handleConfirmBundleSend = async () => {
+        if (!confirmDetails || !selectedBundle || !bundleCalculation) return;
+        
         setIsSending(true);
         setError(null);
+        setSuccessMessage(null);
+
+        const recipientEmailValue = confirmDetails.recipientEmail;
+        const message = confirmDetails.message;
 
         try {
+            // Check if wallets are ready
+            if (!walletsReady) {
+                throw new Error('Wallets are not ready yet. Please wait a moment and try again.');
+            }
+
+            // Find embedded Privy wallet
+            const embeddedWallet = wallets.find(
+                (w) => w.standardWallet?.name === 'Privy'
+            );
+
+            if (!embeddedWallet) {
+                throw new Error('No Privy embedded wallet found. Please ensure your wallet is connected.');
+            }
+
+            console.log('✅ Found embedded Privy wallet:', embeddedWallet.address);
+
             // Create TipLink
             const { tiplink_ref_id, tiplink_public_key } = await tiplinkService.create();
             const tiplinkPubkey = new PublicKey(tiplink_public_key);
 
             // Fund TipLink with all tokens
             const fundingSignatures: string[] = [];
-            const wallet = wallets.find(w => !w.address.startsWith('0x')) || privyUser?.wallet;
-            
-            if (!wallet) {
-                throw new Error('Wallet not found');
-            }
 
             for (const token of bundleCalculation.tokens) {
                 try {
                     if (token.symbol === 'SOL') {
                         const transaction = new Transaction().add(
                             SystemProgram.transfer({
-                                fromPubkey: new PublicKey(wallet.address),
+                                fromPubkey: new PublicKey(embeddedWallet.address),
                                 toPubkey: tiplinkPubkey,
                                 lamports: Math.floor(token.tokenAmount * LAMPORTS_PER_SOL),
                             })
                         );
-                        const signature = await signAndSendTransaction(transaction);
-                        fundingSignatures.push(signature);
-                        console.log(`✅ Funded ${token.tokenAmount} SOL: ${signature}`);
+                        
+                        // Get recent blockhash
+                        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
+                        transaction.recentBlockhash = blockhash;
+                        transaction.feePayer = new PublicKey(embeddedWallet.address);
+                        if (lastValidBlockHeight) {
+                            transaction.lastValidBlockHeight = lastValidBlockHeight;
+                        }
+                        
+                        // Serialize transaction
+                        const serializedTransaction = transaction.serialize({
+                            requireAllSignatures: false,
+                            verifySignatures: false,
+                        });
+                        
+                        const result = await signAndSendTransaction({
+                            transaction: serializedTransaction,
+                            wallet: embeddedWallet,
+                            chain: 'solana:mainnet',
+                        });
+                        
+                        const signature = result.signature as string | Uint8Array;
+                        const signatureString = typeof signature === 'string' 
+                            ? signature 
+                            : bs58.encode(signature);
+                        
+                        fundingSignatures.push(signatureString);
+                        console.log(`✅ Funded ${token.tokenAmount} SOL: ${signatureString}`);
                     } else {
                         // SPL token transfer
                         // Detect token program
                         const tokenProgramId = await getTokenProgramId(token.mint);
-                        const isToken2022 = tokenProgramId.equals(TOKEN_2022_PROGRAM_ID);
                         
                         const mintPubkey = new PublicKey(token.mint);
-                        const senderPubkey = new PublicKey(wallet.address);
+                        const senderPubkey = new PublicKey(embeddedWallet.address);
                         const senderATA = await getAssociatedTokenAddress(mintPubkey, senderPubkey, false, tokenProgramId);
                         const tiplinkATA = await getAssociatedTokenAddress(mintPubkey, tiplinkPubkey, true, tokenProgramId);
                         
@@ -917,15 +993,48 @@ const GiftPage: React.FC = () => {
                             )
                         );
                         
-                        const signature = await signAndSendTransaction(transaction);
-                        fundingSignatures.push(signature);
-                        console.log(`✅ Funded ${token.tokenAmount} ${token.symbol}: ${signature}`);
+                        // Get recent blockhash
+                        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
+                        transaction.recentBlockhash = blockhash;
+                        transaction.feePayer = senderPubkey;
+                        if (lastValidBlockHeight) {
+                            transaction.lastValidBlockHeight = lastValidBlockHeight;
+                        }
+                        
+                        // Serialize transaction
+                        const serializedTransaction = transaction.serialize({
+                            requireAllSignatures: false,
+                            verifySignatures: false,
+                        });
+                        
+                        const result = await signAndSendTransaction({
+                            transaction: serializedTransaction,
+                            wallet: embeddedWallet,
+                            chain: 'solana:mainnet',
+                        });
+                        
+                        const signature = result.signature as string | Uint8Array;
+                        const signatureString = typeof signature === 'string' 
+                            ? signature 
+                            : bs58.encode(signature);
+                        
+                        fundingSignatures.push(signatureString);
+                        console.log(`✅ Funded ${token.tokenAmount} ${token.symbol}: ${signatureString}`);
                     }
                 } catch (error: any) {
                     console.error(`❌ Error funding ${token.symbol}:`, error);
                     throw new Error(`Failed to fund ${token.symbol}: ${error.message}`);
                 }
             }
+
+            // Calculate card price: 0 if free (has active credit), otherwise 1.00
+            const isCardFree = selectedCard && onrampCredit && onrampCredit.isActive && onrampCredit.cardAddsFreeRemaining > 0;
+            const cardPriceUsd = selectedCard ? (isCardFree ? 0 : 1.00) : undefined;
+            
+            // Ensure recipient name is set for card
+            const cardRecipientName = selectedCard 
+                ? (recipientName || recipientEmailValue.split('@')[0] || 'Friend')
+                : null;
 
             // Create bundle gift
             const result = await bundleService.createBundleGift({
@@ -938,8 +1047,8 @@ const GiftPage: React.FC = () => {
                 tiplink_public_key,
                 funding_signatures,
                 card_type: selectedCard || null,
-                card_recipient_name: recipientName || null,
-                card_price_usd: selectedCard ? CARD_UPSELL_PRICE : undefined,
+                card_recipient_name: cardRecipientName,
+                card_price_usd: cardPriceUsd,
             });
 
             setGiftDetails({
@@ -953,6 +1062,7 @@ const GiftPage: React.FC = () => {
             });
 
             setShowSuccessModal(true);
+            setShowConfirmModal(false);
         } catch (error: any) {
             console.error('Error sending bundle gift:', error);
             setError(error.message || 'Failed to send bundle gift');
@@ -1191,6 +1301,11 @@ const GiftPage: React.FC = () => {
 
     const handleConfirmSend = async () => {
         if (!confirmDetails) return;
+        
+        // Route to bundle handler if in bundle mode
+        if (giftMode === 'bundle') {
+            return handleConfirmBundleSend();
+        }
         
         setIsSending(true);
         setError(null);
@@ -1926,29 +2041,55 @@ const GiftPage: React.FC = () => {
                         
                         <div className="space-y-4 mb-6">
                             <div className="bg-slate-900/50 rounded-lg p-4 space-y-3">
-                                {/* What I am sending - Token */}
+                                {/* What I am sending - Token or Bundle */}
                                 <div className="pb-3 border-b border-slate-700">
                                     <p className="text-slate-400 text-xs mb-1">What I am sending</p>
-                                    <p className="text-white font-medium">{confirmDetails.token} - {confirmDetails.tokenName}</p>
+                                    {giftMode === 'bundle' && bundleCalculation ? (
+                                        <div>
+                                            <p className="text-white font-medium">{confirmDetails.token}</p>
+                                            <div className="mt-2 space-y-1">
+                                                {bundleCalculation.tokens.map((token, idx) => (
+                                                    <div key={idx} className="flex justify-between text-xs">
+                                                        <span className="text-slate-400">{token.symbol}</span>
+                                                        <span className="text-slate-300">{token.percentage}% (${token.usdValue.toFixed(2)})</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <p className="text-white font-medium">{confirmDetails.token} - {confirmDetails.tokenName}</p>
+                                    )}
                                 </div>
                                 
                                 {/* Amount being sent - USD value */}
                                 <div className="pb-3 border-b border-slate-700">
                                     <p className="text-slate-400 text-xs mb-1">Amount being sent</p>
                                     {confirmDetails.usdValue !== null ? (
-                                        <p className="text-white font-bold text-xl">${confirmDetails.usdValue.toFixed(3)} USD</p>
+                                        <p className="text-white font-bold text-xl">${confirmDetails.usdValue.toFixed(2)} USD</p>
                                     ) : (
                                         <p className="text-white font-bold text-xl">{confirmDetails.amount.toFixed(6)} {confirmDetails.token}</p>
                                     )}
-                                    {confirmDetails.usdValue !== null && (
+                                    {confirmDetails.usdValue !== null && giftMode !== 'bundle' && (
                                         <p className="text-slate-400 text-xs mt-1">{confirmDetails.amount.toFixed(6)} {confirmDetails.token}</p>
                                     )}
                                 </div>
                                 
+                                {/* Card Fee - Show for bundles */}
+                                {giftMode === 'bundle' && confirmDetails.hasCard && (
+                                    <div className="pb-3 border-b border-slate-700">
+                                        <p className="text-slate-400 text-xs mb-1">Greeting Card</p>
+                                        {confirmDetails.cardFee === 0 ? (
+                                            <p className="text-green-400 font-medium">FREE ✨</p>
+                                        ) : (
+                                            <p className="text-slate-300 font-medium">${confirmDetails.cardFee.toFixed(2)}</p>
+                                        )}
+                                    </div>
+                                )}
+                                
                                 {/* Service Fee and Card Fee removed - both are now FREE for everyone */}
                                 
                                 {/* First-Time Ownership Fee (ATA creation) - only for SPL tokens if recipient needs it */}
-                                {confirmDetails.recipientNeedsATA && confirmDetails.ataFee > 0 && (
+                                {giftMode !== 'bundle' && confirmDetails.recipientNeedsATA && confirmDetails.ataFee > 0 && (
                                     <div className="pb-3 border-b border-slate-700">
                                         <div className="flex items-center gap-2 mb-1">
                                             <p className="text-slate-400 text-xs">First-Time Ownership Fee</p>
@@ -1969,6 +2110,16 @@ const GiftPage: React.FC = () => {
                                     </div>
                                 )}
                                 
+                                {/* Total */}
+                                <div className="pb-3 border-t border-slate-700 pt-3">
+                                    <div className="flex justify-between items-center">
+                                        <p className="text-slate-400 text-sm font-medium">Total:</p>
+                                        <p className="text-white font-bold text-lg">
+                                            ${confirmDetails.usdTotal !== null ? confirmDetails.usdTotal.toFixed(2) : 'N/A'} USD
+                                        </p>
+                                    </div>
+                                </div>
+                                
                                 {/* To whom */}
                                 <div className="pb-3 border-b border-slate-700">
                                     <p className="text-slate-400 text-xs mb-1">To whom</p>
@@ -1976,17 +2127,19 @@ const GiftPage: React.FC = () => {
                                 </div>
                                 
                                 {/* Wallet balance - What's left */}
-                                <div>
-                                    <p className="text-slate-400 text-xs mb-1">What's left in your wallet</p>
-                                    {confirmDetails.remainingBalanceUsd !== null ? (
-                                        <>
-                                            <p className="text-white font-medium">${confirmDetails.remainingBalanceUsd.toFixed(3)} USD</p>
-                                            <p className="text-slate-400 text-xs mt-1">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
-                                        </>
-                                    ) : (
-                                        <p className="text-white font-medium">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
-                                    )}
-                                </div>
+                                {giftMode !== 'bundle' && (
+                                    <div>
+                                        <p className="text-slate-400 text-xs mb-1">What's left in your wallet</p>
+                                        {confirmDetails.remainingBalanceUsd !== null ? (
+                                            <>
+                                                <p className="text-white font-medium">${confirmDetails.remainingBalanceUsd.toFixed(3)} USD</p>
+                                                <p className="text-slate-400 text-xs mt-1">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
+                                            </>
+                                        ) : (
+                                            <p className="text-white font-medium">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                             
                             {confirmDetails.message && (
@@ -2579,7 +2732,7 @@ const GiftPage: React.FC = () => {
                                     selectedCard={selectedCard}
                                     onCardSelect={setSelectedCard}
                                     recipientName={recipientName}
-                                    onRecipientNameChange={setRecipientName}
+                                    onrampCredit={onrampCredit}
                                 />
                             </Suspense>
 
