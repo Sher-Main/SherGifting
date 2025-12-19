@@ -3,15 +3,17 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePrivy } from '@privy-io/react-auth';
 import { useSignAndSendTransaction, useWallets } from '@privy-io/react-auth/solana';
-import { tokenService, giftService, tiplinkService, heliusService, feeService, priceService, usernameService } from '../services/api';
+import { tokenService, giftService, tiplinkService, heliusService, feeService, priceService, usernameService, bundleService } from '../services/api';
 import { getApiUrl } from '../services/apiConfig';
-import { Token, TokenBalance, ResolveRecipientResponse } from '../types';
+import { Token, TokenBalance, ResolveRecipientResponse, Bundle, BundleCalculation } from '../types';
+import { BundleSelector } from '../components/BundleSelector';
 import Spinner from '../components/Spinner';
 import { ArrowLeftIcon } from '../components/icons';
 import { OnrampCreditPopup } from '../components/OnrampCreditPopup';
 import { CARD_UPSELL_PRICE } from '../lib/cardTemplates';
 import QRCode from 'qrcode';
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
+import { createAssociatedTokenAccountInstruction, createTransferCheckedInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
 import { connection } from '../services/solana';
 import bs58 from 'bs58';
 
@@ -68,6 +70,11 @@ const GiftPage: React.FC = () => {
     // Card upsell state
     const [selectedCard, setSelectedCard] = useState<string | null>(null);
     const [recipientName, setRecipientName] = useState<string>('');
+    
+    // Bundle mode state
+    const [giftMode, setGiftMode] = useState<'bundle' | 'custom'>('bundle'); // Default to bundle
+    const [selectedBundle, setSelectedBundle] = useState<Bundle | null>(null);
+    const [bundleCalculation, setBundleCalculation] = useState<BundleCalculation | null>(null);
     
     // Onramp credit state
     const [onrampCredit, setOnrampCredit] = useState<any | null>(null);
@@ -785,7 +792,180 @@ const GiftPage: React.FC = () => {
         setAmountMode(newMode);
     };
 
+    // Handle bundle selection
+    const handleBundleSelect = async (bundle: Bundle) => {
+        setSelectedBundle(bundle);
+        try {
+            const calc = await bundleService.calculateBundle(bundle.id);
+            setBundleCalculation(calc);
+        } catch (error: any) {
+            setError(`Failed to calculate bundle: ${error.message}`);
+        }
+    };
+
+    // Handle bundle gift creation
+    const handleSendBundleGift = async (e: React.FormEvent) => {
+        e.preventDefault();
+        
+        if (!user || !ready || !authenticated || !user.wallet_address) {
+            setError("Please log in and ensure your wallet is connected.");
+            return;
+        }
+
+        if (!selectedBundle || !bundleCalculation) {
+            setError("Please select a bundle.");
+            return;
+        }
+
+        if (!trimmedRecipient) {
+            setError("Please enter recipient email or username.");
+            return;
+        }
+
+        // Resolve username if needed
+        if (isUsernameRecipient) {
+            if (resolvingRecipient) {
+                setError("Resolving username, please wait a moment.");
+                return;
+            }
+            if (!resolvedRecipientEmail) {
+                setError(recipientError || "Unable to resolve username.");
+                return;
+            }
+        } else if (!trimmedRecipient.includes('@')) {
+            setError("Please enter a valid email address.");
+            return;
+        }
+
+        const recipientEmailValue = resolvedRecipientEmail;
+        if (!recipientEmailValue) {
+            setError("Recipient could not be determined. Please try again.");
+            return;
+        }
+
+        setIsSending(true);
+        setError(null);
+
+        try {
+            // Create TipLink
+            const { tiplink_ref_id, tiplink_public_key } = await tiplinkService.create();
+            const tiplinkPubkey = new PublicKey(tiplink_public_key);
+
+            // Fund TipLink with all tokens
+            const fundingSignatures: string[] = [];
+            const wallet = wallets.find(w => !w.address.startsWith('0x')) || privyUser?.wallet;
+            
+            if (!wallet) {
+                throw new Error('Wallet not found');
+            }
+
+            for (const token of bundleCalculation.tokens) {
+                try {
+                    if (token.symbol === 'SOL') {
+                        const transaction = new Transaction().add(
+                            SystemProgram.transfer({
+                                fromPubkey: new PublicKey(wallet.address),
+                                toPubkey: tiplinkPubkey,
+                                lamports: Math.floor(token.tokenAmount * LAMPORTS_PER_SOL),
+                            })
+                        );
+                        const signature = await signAndSendTransaction(transaction);
+                        fundingSignatures.push(signature);
+                        console.log(`✅ Funded ${token.tokenAmount} SOL: ${signature}`);
+                    } else {
+                        // SPL token transfer
+                        // Detect token program
+                        const tokenProgramId = await getTokenProgramId(token.mint);
+                        const isToken2022 = tokenProgramId.equals(TOKEN_2022_PROGRAM_ID);
+                        
+                        const mintPubkey = new PublicKey(token.mint);
+                        const senderPubkey = new PublicKey(wallet.address);
+                        const senderATA = await getAssociatedTokenAddress(mintPubkey, senderPubkey, false, tokenProgramId);
+                        const tiplinkATA = await getAssociatedTokenAddress(mintPubkey, tiplinkPubkey, true, tokenProgramId);
+                        
+                        // Get token decimals from wallet balances or use default
+                        const tokenBalance = walletBalances.find(b => b.address === token.mint);
+                        const decimals = tokenBalance?.decimals || 9;
+                        const amountRaw = BigInt(Math.floor(token.tokenAmount * 10 ** decimals));
+                        
+                        const transaction = new Transaction();
+                        
+                        // Check if TipLink ATA exists
+                        const tiplinkAccountInfo = await connection.getAccountInfo(tiplinkATA);
+                        if (!tiplinkAccountInfo) {
+                            transaction.add(
+                                createAssociatedTokenAccountInstruction(
+                                    senderPubkey,
+                                    tiplinkATA,
+                                    tiplinkPubkey,
+                                    mintPubkey,
+                                    tokenProgramId
+                                )
+                            );
+                        }
+                        
+                        transaction.add(
+                            createTransferCheckedInstruction(
+                                senderATA,
+                                mintPubkey,
+                                tiplinkATA,
+                                senderPubkey,
+                                amountRaw,
+                                decimals,
+                                [],
+                                tokenProgramId
+                            )
+                        );
+                        
+                        const signature = await signAndSendTransaction(transaction);
+                        fundingSignatures.push(signature);
+                        console.log(`✅ Funded ${token.tokenAmount} ${token.symbol}: ${signature}`);
+                    }
+                } catch (error: any) {
+                    console.error(`❌ Error funding ${token.symbol}:`, error);
+                    throw new Error(`Failed to fund ${token.symbol}: ${error.message}`);
+                }
+            }
+
+            // Create bundle gift
+            const result = await bundleService.createBundleGift({
+                recipientEmail: recipientEmailValue,
+                bundleId: selectedBundle.id,
+                customMessage: message || undefined,
+                includeCard: !!selectedCard,
+                sender_did: user.privy_did,
+                tiplink_ref_id,
+                tiplink_public_key,
+                funding_signatures,
+                card_type: selectedCard || null,
+                card_recipient_name: recipientName || null,
+                card_price_usd: selectedCard ? CARD_UPSELL_PRICE : undefined,
+            });
+
+            setGiftDetails({
+                claim_url: result.claim_url,
+                amount: bundleCalculation.totalUsdValue.toFixed(2),
+                token: selectedBundle.name,
+                usdValue: bundleCalculation.totalUsdValue,
+                recipient: recipientEmailValue,
+                signature: result.signatures.join(', '),
+                qrCode: '',
+            });
+
+            setShowSuccessModal(true);
+        } catch (error: any) {
+            console.error('Error sending bundle gift:', error);
+            setError(error.message || 'Failed to send bundle gift');
+        } finally {
+            setIsSending(false);
+        }
+    };
+
     const handleSendGift = async (e: React.FormEvent) => {
+        // Route to bundle handler if in bundle mode
+        if (giftMode === 'bundle') {
+            return handleSendBundleGift(e);
+        }
         e.preventDefault();
         
         if (!user) {
@@ -1955,7 +2135,71 @@ const GiftPage: React.FC = () => {
                             )}
                         </div>
 
+                        {/* Mode Toggle */}
+                        <div className="mb-6">
+                            <div className="flex gap-4 mb-4">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setGiftMode('bundle');
+                                        setSelectedBundle(null);
+                                        setBundleCalculation(null);
+                                    }}
+                                    className={`px-4 py-2 rounded-lg font-semibold transition-all duration-200 ${
+                                        giftMode === 'bundle'
+                                            ? 'bg-gradient-to-r from-sky-500 to-cyan-400 text-white shadow-lg shadow-sky-500/30'
+                                            : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                                    }`}
+                                >
+                                    Use Preset Bundle
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setGiftMode('custom');
+                                        setSelectedBundle(null);
+                                        setBundleCalculation(null);
+                                    }}
+                                    className={`px-4 py-2 rounded-lg font-semibold transition-all duration-200 ${
+                                        giftMode === 'custom'
+                                            ? 'bg-gradient-to-r from-sky-500 to-cyan-400 text-white shadow-lg shadow-sky-500/30'
+                                            : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                                    }`}
+                                >
+                                    Create Your Own Gift
+                                </button>
+                            </div>
+                        </div>
+
+                        {giftMode === 'bundle' ? (
+                            <div className="space-y-6">
+                                <BundleSelector
+                                    onBundleSelect={handleBundleSelect}
+                                    selectedBundleId={selectedBundle?.id || null}
+                                />
+                                
+                                {selectedBundle && bundleCalculation && (
+                                    <div className="bg-slate-800 border-2 border-slate-700 rounded-lg p-6">
+                                        <h3 className="text-lg font-bold text-white mb-4">Bundle Summary</h3>
+                                        <p className="text-slate-300 mb-2">
+                                            <strong className="text-white">{selectedBundle.name}</strong> - <span className="bg-gradient-to-r from-sky-500 to-cyan-400 bg-clip-text text-transparent font-bold">${bundleCalculation.totalUsdValue.toFixed(2)}</span>
+                                        </p>
+                                        <div className="space-y-2 mb-4 bg-slate-900/50 rounded-lg p-3">
+                                            {bundleCalculation.tokens.map((token, idx) => (
+                                                <div key={idx} className="flex justify-between text-sm">
+                                                    <span className="text-slate-300 font-medium">{token.symbol}</span>
+                                                    <span className="text-slate-400">{token.percentage}% <span className="text-slate-500">(${token.usdValue.toFixed(2)})</span></span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        ) : null}
+
                         <form onSubmit={handleSendGift} className="space-y-6">
+                    {giftMode === 'custom' ? (
+                        <>
                     {/* Token Selector */}
                     <div>
                         <label htmlFor="token" className="block text-sm font-medium text-slate-300 mb-2">
@@ -2273,6 +2517,83 @@ const GiftPage: React.FC = () => {
                             '🎁 Send Gift'
                         )}
                     </button>
+                        </>
+                    ) : null}
+
+                    {/* Shared fields for both modes */}
+                    {giftMode === 'bundle' && (
+                        <>
+                            {/* Recipient (Email or Username) */}
+                            <div>
+                                <label htmlFor="recipientIdentifier" className="block text-sm font-medium text-slate-300 mb-2">
+                                    Recipient Email / @Username
+                                </label>
+                                <input
+                                    type="text"
+                                    id="recipientIdentifier"
+                                    value={recipientInput}
+                                    onChange={(e) => setRecipientInput(e.target.value)}
+                                    required
+                                    placeholder="recipient@example.com or @username"
+                                    className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
+                                />
+                                <div className="mt-2 text-sm">
+                                    {recipientError && (
+                                        <p className="text-rose-400">{recipientError}</p>
+                                    )}
+                                    {isUsernameRecipient ? (
+                                        <>
+                                            {resolvingRecipient && (
+                                                <p className="text-slate-400">Resolving username...</p>
+                                            )}
+                                            {!resolvingRecipient && resolvedRecipient && (
+                                                <p className="text-emerald-300">✓ Username linked to {resolvedRecipient.email}</p>
+                                            )}
+                                        </>
+                                    ) : (
+                                        trimmedRecipient && (
+                                            <p className="text-slate-400">Gift will be sent to {trimmedRecipient}</p>
+                                        )
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Message */}
+                            <div>
+                                <label htmlFor="message" className="block text-sm font-medium text-slate-300 mb-2">
+                                    Message (Optional)
+                                </label>
+                                <textarea
+                                    id="message"
+                                    value={message}
+                                    onChange={(e) => setMessage(e.target.value)}
+                                    rows={3}
+                                    placeholder="Add a personal message..."
+                                    className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition resize-none"
+                                />
+                            </div>
+
+                            {/* Card Upsell for Bundle */}
+                            <Suspense fallback={<CardUpsellFallback />}>
+                                <CardUpsellSection
+                                    selectedCard={selectedCard}
+                                    onCardSelect={setSelectedCard}
+                                    recipientName={recipientName}
+                                    onRecipientNameChange={setRecipientName}
+                                />
+                            </Suspense>
+
+                            {/* Submit Button for Bundle */}
+                            <button
+                                type="button"
+                                onClick={handleSendBundleGift}
+                                disabled={isSending || !selectedBundle || !bundleCalculation || !trimmedRecipient}
+                                className="w-full bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white font-bold py-4 px-6 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+                            >
+                                {isSending ? 'Sending Bundle Gift...' : `Send ${selectedBundle?.name || 'Bundle'}`}
+                            </button>
+                        </>
+                    )}
                         </form>
                     </>
                 )}

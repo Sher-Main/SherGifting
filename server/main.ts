@@ -25,8 +25,12 @@ import { handleCardAdd } from './lib/onramp';
 import userRoutes from './routes/user';
 import onrampRoutes from './routes/onramp';
 import cronRoutes from './routes/cron';
+import bundleRoutes from './routes/bundles';
 import { startGiftExpiryJob } from './jobs/giftExpiryJob';
 import { startCreditCleanupJob } from './jobs/creditCleanupJob';
+import { BundleService } from './services/bundleService';
+import { setConnection, transferSOLToTipLink, transferSPLTokenToTipLink } from './services/solana';
+import { sendBundleGiftEmail } from './emailService';
 
 
 // --- Types (duplicated from frontend for simplicity) ---
@@ -180,6 +184,7 @@ app.use(cors({
 app.use('/api/user', userRoutes);
 app.use('/api', onrampRoutes);
 app.use('/api/cron', cronRoutes);
+app.use('/api/bundles', bundleRoutes);
 
 // --- ENV VARS & MOCKS ---
 const PORT = process.env.PORT || 3001;
@@ -227,6 +232,8 @@ const connection = new Connection(RPC_URL, {
   try {
     const version = await connection.getVersion();
     console.log('✅ Successfully connected to Solana Mainnet. Version:', version['solana-core']);
+    // Initialize solana service with connection
+    setConnection(connection);
   } catch (error: any) {
     console.error('❌ Failed to connect to Solana RPC:', error?.message || error);
     console.error('🔧 Please check your HELIUS_API_KEY in server/.env file');
@@ -1255,7 +1262,194 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
   }
 });
 
+// Create bundle gift endpoint - Frontend funds TipLink, backend creates record
+app.post('/api/gifts/bundle', authenticateToken, async (req: AuthRequest, res) => {
+  const client = await pool!.connect();
+  try {
+    const { 
+      sender_did, 
+      recipientEmail, 
+      customMessage, 
+      includeCard, 
+      bundleId, 
+      tiplink_ref_id,
+      tiplink_public_key,
+      funding_signatures, // Array of transaction signatures for all tokens
+      card_type, 
+      card_recipient_name, 
+      card_price_usd 
+    } = req.body;
+    
+    const userId = req.userId || req.user?.id;
 
+    if (!userId || userId !== sender_did) {
+      return res.status(403).json({ success: false, error: 'Unauthorized: Sender ID mismatch' });
+    }
+    if (!bundleId) {
+      return res.status(400).json({ success: false, error: 'bundleId required' });
+    }
+    if (!recipientEmail) {
+      return res.status(400).json({ success: false, error: 'recipientEmail required' });
+    }
+    if (!tiplink_ref_id || !tiplink_public_key || !funding_signatures || !Array.isArray(funding_signatures)) {
+      return res.status(400).json({ success: false, error: 'Missing required fields: tiplink_ref_id, tiplink_public_key, funding_signatures' });
+    }
+
+    const bundleService = new BundleService();
+    const calc = await bundleService.calculateBundleTokenAmounts(bundleId);
+
+    // Verify funding transactions
+    console.log('🔍 Verifying bundle funding transactions...');
+    for (const signature of funding_signatures) {
+      const tx = await connection.getTransaction(signature, {
+        maxSupportedTransactionVersion: 0,
+        commitment: 'confirmed'
+      });
+      if (!tx || !tx.meta || tx.meta.err) {
+        return res.status(400).json({ success: false, error: `Funding transaction ${signature} failed or not confirmed` });
+      }
+    }
+    console.log('✅ All funding transactions verified');
+
+    const giftId = `gift_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const cardFeeUsd = includeCard ? (card_price_usd || 1.00) : 0;
+    const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(); // 48 hours
+
+    // Get sender info
+    const sender = await getUserByPrivyDid(userId);
+    if (!sender) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    // Get encrypted TipLink URL from pending storage
+    const ENCRYPTION_KEY = process.env.TIPLINK_ENCRYPTION_KEY;
+    if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length < 32) {
+      console.error('❌ TIPLINK_ENCRYPTION_KEY not set or too short');
+      return res.status(500).json({ success: false, error: 'Server configuration error' });
+    }
+
+    const pendingTipLink = pendingTipLinks.get(tiplink_ref_id);
+    if (!pendingTipLink) {
+      return res.status(400).json({ success: false, error: 'Invalid or expired TipLink reference' });
+    }
+    if (pendingTipLink.publicKey !== tiplink_public_key) {
+      return res.status(400).json({ success: false, error: 'TipLink public key mismatch' });
+    }
+    if (pendingTipLink.userId !== userId) {
+      return res.status(403).json({ success: false, error: 'Unauthorized: TipLink was created by a different user' });
+    }
+
+    const encryptedTipLinkUrl = pendingTipLink.encryptedUrl;
+    const tiplinkUrl = decryptTipLink(encryptedTipLinkUrl, ENCRYPTION_KEY);
+    
+    // Load TipLink to get keypair for encryption
+    const tiplink = await TipLink.fromUrl(new URL(tiplinkUrl));
+    const encryptedKeypair = encryptTipLink(JSON.stringify(Array.from(tiplink.keypair.secretKey)), ENCRYPTION_KEY);
+
+    // Clean up pending TipLink
+    pendingTipLinks.delete(tiplink_ref_id);
+
+    // Handle card generation if needed
+    let cardCloudinaryUrl: string | null = null;
+    let cardGenerationSucceeded = false;
+    const hasCard = !!includeCard && !!card_type;
+    const effectiveRecipientName = card_recipient_name || (hasCard ? 'Friend' : null);
+
+    if (hasCard) {
+      try {
+        cardCloudinaryUrl = generatePersonalizedCardUrl(card_type, effectiveRecipientName);
+        if (cardCloudinaryUrl && cardCloudinaryUrl.trim() !== '') {
+          cardGenerationSucceeded = true;
+        }
+      } catch (cardError: any) {
+        console.error('❌ Error generating card URL:', cardError);
+        cardCloudinaryUrl = null;
+        cardGenerationSucceeded = false;
+      }
+    }
+
+    // Consume card credit if card generation succeeded
+    let cardResult = null;
+    if (hasCard && cardGenerationSucceeded) {
+      try {
+        cardResult = await handleCardAdd(userId);
+      } catch (creditError) {
+        console.error('⚠️ Error consuming credit:', creditError);
+      }
+    }
+
+    // Create gift record
+    const claimToken = generateSecureToken(32);
+
+    await insertGift({
+      id: giftId,
+      sender_did: userId,
+      sender_email: sender.email,
+      recipient_email: recipientEmail,
+      token_mint: calc.tokens[0]?.mint || 'So11111111111111111111111111111111111111112', // Use first token mint for compatibility
+      token_symbol: calc.tokens.map(t => t.symbol).join('+'), // Combined symbol
+      token_decimals: 9, // Default, not used for bundles
+      amount: calc.totalUsdValue, // Store total USD value
+      usd_value: calc.totalUsdValue,
+      message: customMessage || '',
+      status: 'SENT',
+      tiplink_url: '', // Empty for security
+      tiplink_public_key: tiplink_public_key,
+      transaction_signature: funding_signatures.join(','), // Store all signatures
+      created_at: new Date().toISOString(),
+      claim_token: claimToken,
+      tiplink_url_encrypted: encryptedTipLinkUrl,
+      expires_at: expiresAt,
+      has_greeting_card: hasCard && cardGenerationSucceeded,
+      card_type: (hasCard && cardGenerationSucceeded) ? card_type : null,
+      card_cloudinary_url: cardCloudinaryUrl,
+      card_recipient_name: (hasCard && cardGenerationSucceeded) ? effectiveRecipientName : null,
+      card_price_usd: (hasCard && cardGenerationSucceeded) ? (cardResult?.isFree ? 0.00 : cardFeeUsd) : null,
+      bundle_id: bundleId,
+    });
+
+    // Create gift_bundle_links record
+    await client.query(
+      `INSERT INTO gift_bundle_links (
+        gift_id, bundle_id, tiplink_url, tiplink_keypair_encrypted
+      ) VALUES ($1, $2, $3, $4)`,
+      [giftId, bundleId, encryptedTipLinkUrl, encryptedKeypair]
+    );
+
+    // Send email
+    const claimUrl = `/claim#token=${claimToken}`;
+    const fullClaimUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}${claimUrl}`;
+
+    await sendBundleGiftEmail({
+      recipientEmail,
+      senderEmail: sender.email,
+      bundleName: calc.bundleName,
+      totalUsdValue: calc.totalUsdValue,
+      customMessage: customMessage || undefined,
+      includeCard: hasCard && cardGenerationSucceeded,
+      tokens: calc.tokens,
+      tiplinkUrl: fullClaimUrl,
+      giftId,
+      cardImageUrl: cardCloudinaryUrl || undefined,
+    });
+
+    res.json({ 
+      success: true, 
+      giftId,
+      claim_url: claimUrl,
+      tiplink_public_key: tiplink_public_key,
+      signatures: funding_signatures,
+      cardWasFree: cardResult?.isFree || false,
+      creditsRemaining: cardResult?.creditsRemaining || 0,
+      freeAddsRemaining: cardResult?.cardAddsFreeRemaining || 0,
+    });
+  } catch (e: any) {
+    console.error('Error sending bundle gift', e);
+    res.status(500).json({ success: false, error: 'Failed to send bundle gift', details: e?.message });
+  } finally {
+    client.release();
+  }
+});
 
 app.get('/api/gifts/history', authenticateToken, async (req: AuthRequest, res) => {
   const sender_did = req.userId || req.user?.id;

@@ -97,3 +97,39 @@ export interface GiftInfo {
   locked_until?: string | null; // Timestamp when lock expires
   minutes_remaining?: number | null; // Minutes remaining until unlock
 }
+
+export interface BundleToken {
+  id: string;
+  bundleId: string;
+  tokenMint: string;
+  tokenSymbol: string;
+  percentage: number;
+  displayOrder: number;
+}
+
+export interface Bundle {
+  id: string;
+  name: string;
+  description: string;
+  totalUsdValue: number;
+  displayOrder: number;
+  isActive: boolean;
+  badgeText?: string | null;
+  badgeColor?: string | null;
+  tokens: BundleToken[];
+}
+
+export interface BundleTokenAmount {
+  symbol: string;
+  mint: string;
+  percentage: number;
+  usdValue: number;
+  tokenAmount: number;
+  currentPrice: number;
+}
+
+export interface BundleCalculation {
+  bundleName: string;
+  totalUsdValue: number;
+  tokens: BundleTokenAmount[];
+}

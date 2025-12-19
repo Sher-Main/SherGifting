@@ -482,14 +482,15 @@ export async function insertGift(gift: {
   card_cloudinary_url?: string | null;
   card_recipient_name?: string | null;
   card_price_usd?: number;
+  bundle_id?: string | null;
 }): Promise<void> {
   await query(
     `INSERT INTO gifts (
       id, sender_did, sender_email, recipient_email, token_mint, token_symbol, 
       token_decimals, amount, usd_value, message, status, tiplink_url, tiplink_public_key, 
       transaction_signature, created_at, claim_token, tiplink_url_encrypted, expires_at,
-      has_greeting_card, card_type, card_cloudinary_url, card_recipient_name, card_price_usd
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+      has_greeting_card, card_type, card_cloudinary_url, card_recipient_name, card_price_usd, bundle_id
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
     [
       gift.id,
       gift.sender_did,
@@ -514,6 +515,7 @@ export async function insertGift(gift: {
       gift.card_cloudinary_url ?? null,
       gift.card_recipient_name ?? null,
       gift.card_price_usd ?? null,
+      gift.bundle_id ?? null,
     ]
   );
 }

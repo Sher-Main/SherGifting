@@ -495,3 +495,239 @@ Thank you for using Sher!
     };
   }
 }
+
+interface BundleTokenAmount {
+  symbol: string;
+  mint: string;
+  percentage: number;
+  usdValue: number;
+  tokenAmount: number;
+  currentPrice: number;
+}
+
+interface BundleGiftEmailParams {
+  recipientEmail: string;
+  senderEmail: string;
+  bundleName: string;
+  totalUsdValue: number;
+  customMessage?: string;
+  includeCard?: boolean;
+  tokens: BundleTokenAmount[];
+  tiplinkUrl: string;
+  giftId: string;
+  cardImageUrl?: string | null;
+}
+
+export async function sendBundleGiftEmail(params: BundleGiftEmailParams): Promise<{ success: boolean; error?: string; emailId?: string }> {
+  if (!resend) {
+    console.log('📧 Email not sent: Resend API key not configured');
+    return { success: false, error: 'Email service not configured' };
+  }
+
+  if (!FROM_EMAIL) {
+    console.log('📧 Email not sent: FROM_EMAIL not configured');
+    return { success: false, error: 'FROM_EMAIL not set in environment variables' };
+  }
+
+  const { recipientEmail, senderEmail, bundleName, totalUsdValue, customMessage, includeCard, tokens, tiplinkUrl, giftId, cardImageUrl } = params;
+
+  if (!senderEmail || !recipientEmail) {
+    return { success: false, error: 'Missing sender or recipient email' };
+  }
+
+  try {
+    const senderDisplay = senderEmail.split('@')[0];
+
+    // Build token breakdown table
+    const tokenRows = tokens.map(token => `
+      <tr>
+        <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;">
+          <strong>${token.symbol}</strong>
+        </td>
+        <td style="padding: 8px; border-bottom: 1px solid #e5e7eb; text-align: right;">
+          $${token.usdValue.toFixed(2)}
+        </td>
+        <td style="padding: 8px; border-bottom: 1px solid #e5e7eb; text-align: right;">
+          ${token.tokenAmount.toFixed(6)}
+        </td>
+        <td style="padding: 8px; border-bottom: 1px solid #e5e7eb; text-align: right;">
+          ${token.percentage}%
+        </td>
+      </tr>
+    `).join('');
+
+    const htmlContent = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>You received a ${bundleName} crypto gift!</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
+  <table role="presentation" style="width: 100%; border-collapse: collapse;">
+    <tr>
+      <td align="center" style="padding: 40px 0;">
+        <table role="presentation" style="width: 600px; max-width: 100%; border-collapse: collapse; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+          ${cardImageUrl ? `
+          <!-- Greeting Card Image -->
+          <tr>
+            <td style="padding: 0;">
+              <img 
+                src="${cardImageUrl}" 
+                alt="Greeting Card" 
+                width="600" 
+                style="display: block; width: 100%; height: auto; border: 0; max-width: 600px;"
+              />
+            </td>
+          </tr>
+          ` : ''}
+          
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%); padding: 40px 30px; text-align: center;">
+              <h1 style="margin: 0; color: #ffffff; font-size: 32px; font-weight: bold;">🎁 You Received a Bundle Gift!</h1>
+            </td>
+          </tr>
+          
+          <!-- Content -->
+          <tr>
+            <td style="padding: 40px 30px;">
+              <p style="margin: 0 0 20px; color: #374151; font-size: 16px; line-height: 1.5;">
+                Hello!
+              </p>
+              
+              <p style="margin: 0 0 20px; color: #374151; font-size: 16px; line-height: 1.5;">
+                <strong style="color: #8B5CF6; font-size: 18px;">${senderDisplay}</strong> 
+                <span style="color: #6b7280;">has sent you the <strong>${bundleName}</strong> crypto gift!</span>
+              </p>
+              
+              <!-- Bundle Info Box -->
+              <div style="background: linear-gradient(135deg, #f3e8ff 0%, #e9d5ff 100%); border: 2px solid #8B5CF6; border-radius: 12px; padding: 24px; margin: 30px 0; text-align: center;">
+                <h2 style="margin: 0 0 10px; color: #6B21A8; font-size: 24px;">${bundleName}</h2>
+                <p style="margin: 0 0 16px; color: #7C3AED; font-size: 14px;">Total Value</p>
+                <div style="font-size: 36px; font-weight: bold; color: #6B21A8; margin: 0;">
+                  $${totalUsdValue.toFixed(2)}
+                </div>
+              </div>
+
+              <!-- Token Breakdown Table -->
+              <div style="margin: 30px 0;">
+                <h3 style="margin: 0 0 16px; color: #374151; font-size: 18px;">What's Inside:</h3>
+                <table style="width: 100%; border-collapse: collapse; background-color: #f9fafb; border-radius: 8px; overflow: hidden;">
+                  <thead>
+                    <tr style="background-color: #8B5CF6;">
+                      <th style="padding: 12px; text-align: left; color: #ffffff; font-weight: 600;">Token</th>
+                      <th style="padding: 12px; text-align: right; color: #ffffff; font-weight: 600;">USD Value</th>
+                      <th style="padding: 12px; text-align: right; color: #ffffff; font-weight: 600;">Amount</th>
+                      <th style="padding: 12px; text-align: right; color: #ffffff; font-weight: 600;">%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${tokenRows}
+                  </tbody>
+                </table>
+              </div>
+              
+              ${customMessage ? `
+              <div style="background-color: #f9fafb; border-left: 4px solid #8B5CF6; padding: 16px; margin: 24px 0; border-radius: 4px;">
+                <p style="margin: 0; color: #374151; font-style: italic;">"${customMessage}"</p>
+              </div>
+              ` : ''}
+              
+              <!-- CTA Button -->
+              <center style="margin: 40px 0;">
+                <a href="${tiplinkUrl}" style="display: inline-block; background: linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%); color: #ffffff; text-decoration: none; padding: 16px 32px; border-radius: 8px; font-weight: bold; font-size: 16px; box-shadow: 0 4px 6px rgba(139, 92, 246, 0.3);">
+                  Claim Your Gift
+                </a>
+              </center>
+              
+              <!-- Expiry Warning -->
+              <p style="margin: 24px 0 0; color: #6b7280; font-size: 14px; text-align: center;">
+                ⏰ This link expires in 48 hours
+              </p>
+              
+              <div style="margin-top: 40px; padding-top: 24px; border-top: 1px solid #e5e7eb;">
+                <p style="margin: 0; color: #6b7280; font-size: 14px; line-height: 1.6;">
+                  This gift contains multiple cryptocurrencies in a single TipLink wallet. When you claim it, you'll receive all tokens at once.
+                </p>
+              </div>
+            </td>
+          </tr>
+          
+          <!-- Footer -->
+          <tr>
+            <td style="background-color: #f9fafb; padding: 24px 30px; text-align: center; border-top: 1px solid #e5e7eb;">
+              <p style="margin: 0; color: #6b7280; font-size: 12px;">
+                Gift ID: ${giftId}
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    `;
+
+    const plainTextContent = `
+You Received a Bundle Gift!
+
+Hello!
+
+${senderDisplay} has sent you the ${bundleName} crypto gift!
+
+Total Value: $${totalUsdValue.toFixed(2)}
+
+What's Inside:
+${tokens.map(t => `- ${t.symbol}: $${t.usdValue.toFixed(2)} (${t.tokenAmount.toFixed(6)} ${t.symbol}, ${t.percentage}%)`).join('\n')}
+
+${customMessage ? `\nMessage: "${customMessage}"\n` : ''}
+
+Claim your gift: ${tiplinkUrl}
+
+⏰ This link expires in 48 hours
+
+Gift ID: ${giftId}
+    `.trim();
+
+    const { data, error } = await resend.emails.send({
+      from: FROM_EMAIL,
+      to: recipientEmail,
+      subject: `${senderDisplay} sent you the ${bundleName} crypto gift!`,
+      html: htmlContent,
+      text: plainTextContent,
+    });
+
+    if (error) {
+      console.error('❌ Resend API error:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to send bundle gift email' 
+      };
+    }
+
+    if (!data) {
+      console.error('❌ No data returned from Resend');
+      return { 
+        success: false, 
+        error: 'No response data from email service' 
+      };
+    }
+
+    console.log(`✅ Bundle gift email sent to ${recipientEmail}, email ID: ${data.id}`);
+
+    return { 
+      success: true, 
+      emailId: data.id 
+    };
+
+  } catch (error: any) {
+    console.error('❌ Exception in sendBundleGiftEmail:', error);
+    return { 
+      success: false, 
+      error: error?.message || 'Failed to send bundle gift email' 
+    };
+  }
+}

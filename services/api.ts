@@ -8,6 +8,8 @@ import {
   UsernameCheckResponse,
   SetUsernameResponse,
   ResolveRecipientResponse,
+  Bundle,
+  BundleCalculation,
 } from '../types';
 
 // Use environment variable for backend URL in production, fallback to /api for local dev
@@ -335,6 +337,55 @@ export const withdrawalService = {
     token_decimals?: number;
   }): Promise<{ success: boolean; withdrawal_id: string }> => {
     const response = await apiClient.post('/withdrawals/create', withdrawalData);
+    return response.data;
+  },
+};
+
+export const bundleService = {
+  getBundles: async (): Promise<Bundle[]> => {
+    const response = await apiClient.get('/bundles');
+    if (response.data.success) {
+      return response.data.bundles;
+    }
+    throw new Error('Failed to fetch bundles');
+  },
+
+  calculateBundle: async (bundleId: string): Promise<BundleCalculation> => {
+    const response = await apiClient.get(`/bundles/${bundleId}/calculate`);
+    if (response.data.success) {
+      return {
+        bundleName: response.data.bundleName,
+        totalUsdValue: response.data.totalUsdValue,
+        tokens: response.data.tokens,
+      };
+    }
+    throw new Error('Failed to calculate bundle');
+  },
+
+  createBundleGift: async (giftData: {
+    recipientEmail: string;
+    bundleId: string;
+    customMessage?: string;
+    includeCard?: boolean;
+    sender_did: string;
+    tiplink_ref_id: string;
+    tiplink_public_key: string;
+    funding_signatures: string[];
+    card_type?: string | null;
+    card_recipient_name?: string | null;
+    card_price_usd?: number;
+  }): Promise<{ 
+    success: boolean;
+    giftId: string;
+    claim_url: string;
+    tiplink_public_key: string;
+    signatures: string[];
+    cardWasFree: boolean;
+    creditsRemaining: number;
+    freeAddsRemaining: number;
+  }> => {
+    const response = await apiClient.post('/gifts/bundle', giftData);
+    invalidateCache(getGiftHistoryCacheKey());
     return response.data;
   },
 };
