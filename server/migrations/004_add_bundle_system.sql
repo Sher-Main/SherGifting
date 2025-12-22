@@ -88,34 +88,13 @@ SELECT id, '3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh', 'wBTC', 50.00, 2
 FROM gift_bundles WHERE name = 'Curiosity Pack'
 ON CONFLICT DO NOTHING;
 
--- Builder Pack: $50 (40% SOL / 30% USDC / 30% wETH)
-INSERT INTO gift_bundles (name, description, total_usd_value, display_order)
-VALUES (
-  'Builder Pack',
-  'A balanced portfolio to start building wealth',
-  50.00,
-  3
-)
-ON CONFLICT DO NOTHING;
-
-INSERT INTO bundle_tokens (bundle_id, token_mint, token_symbol, percentage, display_order)
-SELECT id, 'So11111111111111111111111111111111111111112', 'SOL', 40.00, 1
-FROM gift_bundles WHERE name = 'Builder Pack'
-UNION ALL
-SELECT id, 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', 'USDC', 30.00, 2
-FROM gift_bundles WHERE name = 'Builder Pack'
-UNION ALL
-SELECT id, '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs', 'wETH', 30.00, 3
-FROM gift_bundles WHERE name = 'Builder Pack'
-ON CONFLICT DO NOTHING;
-
 -- Whale Pack: $100 (25% SOL / 25% wBTC / 25% wETH / 25% USDC)
 INSERT INTO gift_bundles (name, description, total_usd_value, display_order, badge_text, badge_color)
 VALUES (
   'Whale Pack',
   'Maximum diversification for serious gifting',
   100.00,
-  4,
+  3,
   'PREMIUM',
   '#8B5CF6'
 )
@@ -134,4 +113,11 @@ UNION ALL
 SELECT id, 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', 'USDC', 25.00, 4
 FROM gift_bundles WHERE name = 'Whale Pack'
 ON CONFLICT DO NOTHING;
+
+-- Cleanup: Remove Builder Pack if it exists (migration to 3 bundles)
+DELETE FROM bundle_tokens WHERE bundle_id IN (SELECT id FROM gift_bundles WHERE name = 'Builder Pack');
+DELETE FROM gift_bundles WHERE name = 'Builder Pack';
+
+-- Update Whale Pack display_order to 3 if it was previously 4
+UPDATE gift_bundles SET display_order = 3 WHERE name = 'Whale Pack' AND display_order = 4;
 

@@ -67,13 +67,13 @@ export const BundleSelector: React.FC<Props> = ({ onBundleSelect, selectedBundle
         <p className="text-slate-400">Curated packs that feel thoughtful out of the box.</p>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full">
         {bundles.map((bundle) => {
           const isSelected = selectedBundleId === bundle.id;
           return (
             <article
               key={bundle.id}
-              className={`relative bg-slate-800 border-2 rounded-lg p-6 cursor-pointer transition-all duration-200 ${
+              className={`relative bg-slate-800 border-2 rounded-lg p-6 cursor-pointer transition-all duration-200 flex flex-col h-full ${
                 isSelected
                   ? 'border-sky-500 shadow-lg shadow-sky-500/20 scale-105'
                   : 'border-slate-700 hover:border-slate-600 hover:shadow-md'
