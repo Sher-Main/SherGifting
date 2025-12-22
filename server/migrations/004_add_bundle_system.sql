@@ -59,7 +59,7 @@ VALUES (
   10.00,
   1,
   'POPULAR',
-  '#22C55E'
+  '#F59E0B'
 )
 ON CONFLICT DO NOTHING;
 
@@ -68,10 +68,10 @@ SELECT id, 'So11111111111111111111111111111111111111112', 'SOL', 100.00, 1
 FROM gift_bundles WHERE name = 'Starter Pack'
 ON CONFLICT DO NOTHING;
 
--- Curiosity Pack: $25 (50% SOL / 50% wBTC)
+-- Value Pack: $25 (50% SOL / 50% wBTC)
 INSERT INTO gift_bundles (name, description, total_usd_value, display_order, badge_text, badge_color)
 VALUES (
-  'Curiosity Pack',
+  'Value Pack',
   'Experience the two giants of crypto',
   25.00,
   2,
@@ -82,10 +82,10 @@ ON CONFLICT DO NOTHING;
 
 INSERT INTO bundle_tokens (bundle_id, token_mint, token_symbol, percentage, display_order)
 SELECT id, 'So11111111111111111111111111111111111111112', 'SOL', 50.00, 1
-FROM gift_bundles WHERE name = 'Curiosity Pack'
+FROM gift_bundles WHERE name = 'Value Pack'
 UNION ALL
 SELECT id, '3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh', 'wBTC', 50.00, 2
-FROM gift_bundles WHERE name = 'Curiosity Pack'
+FROM gift_bundles WHERE name = 'Value Pack'
 ON CONFLICT DO NOTHING;
 
 -- Whale Pack: $100 (25% SOL / 25% wBTC / 25% wETH / 25% USDC)
@@ -120,4 +120,7 @@ DELETE FROM gift_bundles WHERE name = 'Builder Pack';
 
 -- Update Whale Pack display_order to 3 if it was previously 4
 UPDATE gift_bundles SET display_order = 3 WHERE name = 'Whale Pack' AND display_order = 4;
+
+-- Update Curiosity Pack to Value Pack
+UPDATE gift_bundles SET name = 'Value Pack' WHERE name = 'Curiosity Pack';
 

@@ -70,16 +70,25 @@ export const BundleSelector: React.FC<Props> = ({ onBundleSelect, selectedBundle
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full">
         {bundles.map((bundle) => {
           const isSelected = selectedBundleId === bundle.id;
+          const isValuePack = bundle.name === 'Value Pack';
           return (
-            <article
-              key={bundle.id}
-              className={`relative bg-slate-800 border-2 rounded-lg p-6 cursor-pointer transition-all duration-200 flex flex-col h-full ${
-                isSelected
-                  ? 'border-sky-500 shadow-lg shadow-sky-500/20 scale-105'
-                  : 'border-slate-700 hover:border-slate-600 hover:shadow-md'
-              }`}
-              onClick={() => onBundleSelect(bundle)}
-            >
+            <div key={bundle.id} className="relative">
+              {isValuePack && (
+                <div className="absolute -top-4 left-1/2 transform -translate-x-1/2 z-10 flex items-center gap-1 bg-green-500 text-white px-3 py-1 rounded-full text-xs font-semibold shadow-lg">
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+                  </svg>
+                  <span>Recommended</span>
+                </div>
+              )}
+              <article
+                className={`relative bg-slate-800 border-2 rounded-lg p-6 cursor-pointer transition-all duration-200 flex flex-col h-full ${
+                  isSelected
+                    ? 'border-sky-500 shadow-lg shadow-sky-500/20 scale-105'
+                    : 'border-slate-700 hover:border-slate-600 hover:shadow-md'
+                } ${isValuePack ? 'mt-4' : ''}`}
+                onClick={() => onBundleSelect(bundle)}
+              >
               {bundle.badgeText && (
                 <span
                   className="absolute top-3 right-3 px-2 py-1 text-xs font-semibold text-white rounded-full"
@@ -116,6 +125,7 @@ export const BundleSelector: React.FC<Props> = ({ onBundleSelect, selectedBundle
                 {isSelected ? 'Selected' : 'Choose Bundle'}
               </button>
             </article>
+            </div>
           );
         })}
       </div>
