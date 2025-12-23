@@ -2,9 +2,9 @@ import axios from 'axios';
 import { Connection, PublicKey, VersionedTransaction, Keypair } from '@solana/web3.js';
 import { sendAndConfirmTransaction } from '@solana/web3.js';
 
-const JUPITER_QUOTE_API = 'https://quote-api.jup.ag/v6';
-const JUPITER_SWAP_API = 'https://quote-api.jup.ag/v6';
-const JUPITER_PRICE_API = 'https://api.jup.ag/price/v2';
+const JUPITER_QUOTE_API = 'https://lite-api.jup.ag/swap/v1';
+const JUPITER_SWAP_API = 'https://lite-api.jup.ag/swap/v1';
+const JUPITER_PRICE_API = 'https://lite-api.jup.ag/price/v3';
 
 export interface JupiterQuote {
   inputMint: string;
@@ -92,8 +92,11 @@ export class JupiterService {
         params: { ids: mint },
       });
 
-      const priceData = response.data.data?.[mint];
-      return priceData?.price || 0;
+      // v3 API response structure: response.data[mint] contains object with usdPrice field
+      const priceData = response.data.data?.[mint] || response.data[mint];
+      // Jupiter v3 API uses 'usdPrice' field, not 'price'
+      const price = priceData?.usdPrice || priceData?.price || 0;
+      return price;
     } catch (error: any) {
       console.error('Jupiter price error:', error.response?.data || error.message);
       return 0;

@@ -92,6 +92,7 @@ const AppContent: React.FC = () => {
             <Route path="/bundle-gift" element={user ? <BundleGiftPage /> : <Navigate to="/login" />} />
             <Route path="/withdraw" element={user ? <WithdrawPage /> : <Navigate to="/login" />} />
             <Route path="/history" element={user ? <HistoryPage /> : <Navigate to="/login" />} />
+            <Route path="/claim/:giftId" element={<ClaimPage />} />
             <Route path="/claim" element={<ClaimPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>

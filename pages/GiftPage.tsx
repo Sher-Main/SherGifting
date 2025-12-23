@@ -7,6 +7,7 @@ import { tokenService, giftService, tiplinkService, heliusService, feeService, p
 import { getApiUrl } from '../services/apiConfig';
 import { Token, TokenBalance, ResolveRecipientResponse, Bundle, BundleCalculation } from '../types';
 import { BundleSelector } from '../components/BundleSelector';
+import { BundlePreviewModal } from '../components/BundlePreviewModal';
 import Spinner from '../components/Spinner';
 import { ArrowLeftIcon } from '../components/icons';
 import { OnrampCreditPopup } from '../components/OnrampCreditPopup';
@@ -102,6 +103,7 @@ const GiftPage: React.FC = () => {
     
     // Confirmation modal state
     const [showConfirmModal, setShowConfirmModal] = useState(false);
+    const [showBundlePreview, setShowBundlePreview] = useState(false);
     const [confirmDetails, setConfirmDetails] = useState<{
         recipientLabel: string;
         recipientEmail: string;
@@ -866,42 +868,82 @@ const GiftPage: React.FC = () => {
         const totalUsdValue = bundleCalculation.totalUsdValue;
         const totalWithCard = totalUsdValue + cardPriceUsd;
         
-        // Show confirmation modal first (similar to custom gifts)
-        setConfirmDetails({
-            recipientLabel: recipientDisplayLabel || recipientEmailValue,
-            recipientEmail: recipientEmailValue,
-            amount: totalUsdValue, // Bundle total
-            fee: 0, // No service fee
-            total: totalWithCard, // Bundle + card
-            token: selectedBundle.name,
-            tokenName: selectedBundle.name,
-            usdValue: totalUsdValue,
-            usdFee: 0,
-            usdTotal: totalWithCard,
-            remainingBalance: 0, // Will calculate from wallet
-            remainingBalanceUsd: null,
-            message: message || '',
-            cardFee: cardPriceUsd,
-            cardFeeUsd: cardPriceUsd,
-            hasCard: !!selectedCard,
-            ataFee: 0, // No ATA fee for bundles (handled per token)
-            ataFeeUsd: 0,
-            recipientNeedsATA: false,
-        });
-        setShowConfirmModal(true);
+        // Show bundle preview modal with payment options
+        setShowBundlePreview(true);
         return;
     };
 
-    const handleConfirmBundleSend = async () => {
-        if (!confirmDetails || !selectedBundle || !bundleCalculation) return;
+    const handleBundlePayment = async (paymentMethod: 'wallet' | 'moonpay') => {
+        if (!selectedBundle || !bundleCalculation) return;
+        
+        setShowBundlePreview(false);
+        setError(null);
+        setSuccessMessage(null);
+
+        const recipientEmailValue = resolvedRecipientEmail;
+        const messageValue = message;
+
+        if (paymentMethod === 'moonpay') {
+            // MoonPay/onramp payment flow - open Privy onramp popup
+            // handleBundleOnramp manages its own state (setIsSending, setIsOnramping)
+            try {
+                await handleBundleOnramp(recipientEmailValue, messageValue);
+            } catch (error: any) {
+                console.error('Error processing bundle payment:', error);
+                setError(error.message || 'Failed to process payment');
+            }
+            return; // Exit early - handleBundleOnramp manages its own state
+        }
+
+        // Wallet payment flow
+        setIsSending(true);
+        try {
+            const walletAddress = wallets?.[0]?.address || privyUser?.wallet?.address || user?.wallet_address;
+            if (!walletAddress) {
+                throw new Error('No wallet address found');
+            }
+
+            const isCardFree = selectedCard && onrampCredit && onrampCredit.isActive && onrampCredit.cardAddsFreeRemaining > 0;
+            const cardPriceUsd = selectedCard ? (isCardFree ? 0 : 1.00) : 0;
+
+            const response = await bundleService.createWalletPayment({
+                bundleId: selectedBundle.id,
+                recipientEmail: recipientEmailValue,
+                customMessage: messageValue || undefined,
+                includeCard: !!selectedCard,
+                walletAddress,
+            });
+
+            setBundleGiftId(response.giftId);
+
+            if (response.needsSwaps) {
+                // User needs to sign swap transactions
+                await signAndSendSwaps(response.giftId);
+            }
+
+            // Fund TipLinks and complete
+            await fundTipLink(response.giftId);
+            await bundleService.completeBundleGift(response.giftId);
+
+            setSuccessMessage('Bundle gift sent successfully!');
+            setTimeout(() => {
+                navigate('/history');
+            }, 2000);
+        } catch (error: any) {
+            console.error('Error processing bundle payment:', error);
+            setError(error.message || 'Failed to process payment');
+        } finally {
+            setIsSending(false);
+        }
+    };
+
+    const handleBundleOnramp = async (recipientEmailValue: string, messageValue: string) => {
+        if (!selectedBundle || !bundleCalculation) return;
         
         setIsSending(true);
         setIsOnramping(true);
         setError(null);
         setSuccessMessage(null);
-
-        const recipientEmailValue = confirmDetails.recipientEmail;
-        const message = confirmDetails.message;
 
         try {
             // Check if wallets are ready
@@ -922,7 +964,7 @@ const GiftPage: React.FC = () => {
             const initiateResponse = await bundleService.initiateBundleGift({
                 bundleId: selectedBundle.id,
                 recipientEmail: recipientEmailValue,
-                customMessage: message || undefined,
+                customMessage: messageValue || undefined,
                 includeCard: !!selectedCard,
             });
 
@@ -931,8 +973,14 @@ const GiftPage: React.FC = () => {
 
             // Step 2: Open Privy onramp popup
             console.log('🚀 Opening Privy funding flow for bundle gift...');
+            console.log('💰 Onramp amount:', initiateResponse.onrampAmount);
+            
+            // Open Privy onramp popup - Privy will handle the onramp flow
+            // Note: Privy's fundWallet may not support pre-filling amount, but the popup will open
             await fundWallet({
                 address: walletAddress,
+                // If Privy supports amount parameter in the future, we can add it here
+                // amount: initiateResponse.onrampAmount,
             });
 
             console.log('✅ Funding modal opened - starting polling for transaction...');
@@ -1040,12 +1088,17 @@ const GiftPage: React.FC = () => {
 
         } catch (error: any) {
             console.error('Error initiating bundle gift:', error);
-            setShowConfirmModal(false);
             setIsOnramping(false);
             const errorMessage = error.message || error.toString() || 'Failed to initiate bundle gift';
             setError(errorMessage);
             setIsSending(false);
         }
+    };
+
+    const handleConfirmBundleSend = async () => {
+        if (!confirmDetails || !selectedBundle || !bundleCalculation) return;
+        
+        await handleBundleOnramp(confirmDetails.recipientEmail, confirmDetails.message);
     };
 
     const signAndSendSwaps = async (giftId: string) => {
@@ -2256,6 +2309,20 @@ const GiftPage: React.FC = () => {
     };
     return (
         <div className="animate-fade-in">
+            {/* Bundle Preview Modal */}
+            {showBundlePreview && selectedBundle && bundleCalculation && (
+                <BundlePreviewModal
+                    bundle={selectedBundle}
+                    bundleCalculation={bundleCalculation}
+                    recipientEmail={resolvedRecipientEmail}
+                    recipientLabel={recipientDisplayLabel || resolvedRecipientEmail}
+                    message={message}
+                    includeCard={!!selectedCard}
+                    onConfirm={handleBundlePayment}
+                    onCancel={() => setShowBundlePreview(false)}
+                />
+            )}
+
             {/* Confirmation Modal */}
             {showConfirmModal && confirmDetails && (
                 <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">

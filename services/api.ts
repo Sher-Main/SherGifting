@@ -467,6 +467,22 @@ export const bundleService = {
     return response.data;
   },
 
+  createWalletPayment: async (data: {
+    bundleId: string;
+    recipientEmail: string;
+    customMessage?: string;
+    includeCard: boolean;
+    walletAddress: string;
+  }): Promise<{
+    success: boolean;
+    giftId: string;
+    needsSwaps: boolean;
+    message: string;
+  }> => {
+    const response = await apiClient.post(`/bundles/${data.bundleId}/create-wallet`, data);
+    return response.data;
+  },
+
   completeBundleGift: async (giftId: string): Promise<{
     success: boolean;
     message: string;

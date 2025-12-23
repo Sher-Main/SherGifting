@@ -635,12 +635,15 @@ export async function sendBundleGiftEmail(params: BundleGiftEmailParams): Promis
               </div>
               ` : ''}
               
-              <!-- CTA Button -->
+              <!-- CTA Button - Claim All -->
               <center style="margin: 40px 0;">
-                <a href="${tiplinkUrl}" style="display: inline-block; background: linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%); color: #ffffff; text-decoration: none; padding: 16px 32px; border-radius: 8px; font-weight: bold; font-size: 16px; box-shadow: 0 4px 6px rgba(139, 92, 246, 0.3);">
-                  Claim Your Gift
+                <a href="${process.env.FRONTEND_URL || 'https://yourdomain.com'}/claim/${giftId}" style="display: inline-block; background: linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%); color: #ffffff; text-decoration: none; padding: 16px 32px; border-radius: 8px; font-weight: bold; font-size: 16px; box-shadow: 0 4px 6px rgba(139, 92, 246, 0.3);">
+                  Claim All Tokens
                 </a>
               </center>
+              <p style="margin: 12px 0 0; color: #6b7280; font-size: 14px; text-align: center;">
+                Click once to claim all ${tokens.length} tokens together
+              </p>
               
               <!-- Expiry Warning -->
               <p style="margin: 24px 0 0; color: #6b7280; font-size: 14px; text-align: center;">

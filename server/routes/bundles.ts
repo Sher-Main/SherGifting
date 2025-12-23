@@ -28,6 +28,209 @@ router.get('/:id/calculate', async (req, res) => {
 });
 
 /**
+ * GET /api/bundles/:id/fees
+ * Get detailed fee breakdown for a bundle
+ */
+router.get('/:id/fees', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const includeCard = req.query.includeCard === 'true';
+    const paymentMethod = (req.query.paymentMethod as 'wallet' | 'moonpay') || 'moonpay';
+
+    // Get connection from global (set in main.ts)
+    const connection = (global as any).solanaConnection;
+    if (!connection) {
+      return res.status(500).json({ success: false, error: 'Solana connection not initialized' });
+    }
+
+    const { FeeCalculator } = await import('../services/feeCalculator');
+    const calculator = new FeeCalculator(pool!, connection);
+    const fees = await calculator.calculateBundleFees(id, includeCard, paymentMethod);
+
+    res.json({ success: true, ...fees });
+  } catch (e: any) {
+    console.error('Error calculating fees:', e);
+    res.status(500).json({ success: false, error: e.message || 'Failed to calculate fees' });
+  }
+});
+
+/**
+ * POST /api/bundles/:id/create-wallet
+ * Create gift from wallet payment (user has sufficient balance)
+ */
+router.post('/:id/create-wallet', authenticateToken, async (req: AuthRequest, res) => {
+  const client = await pool!.connect();
+  try {
+    const { id: bundleId } = req.params;
+    const { recipientEmail, customMessage, includeCard, walletAddress } = req.body;
+    const privyUser = req.user;
+    const privyUserId = req.userId || privyUser?.id;
+
+    if (!privyUser || !privyUserId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    if (!bundleId || !recipientEmail || !walletAddress) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+
+    // Get user from database
+    let dbUser = null;
+    let privyDid = privyUserId;
+    if (!privyUserId.startsWith('did:privy:')) {
+      privyDid = `did:privy:${privyUserId}`;
+    }
+    dbUser = await getUserByPrivyDid(privyDid);
+    if (!dbUser && privyDid.startsWith('did:privy:')) {
+      const altPrivyDid = privyDid.replace('did:privy:', '');
+      dbUser = await getUserByPrivyDid(altPrivyDid);
+      if (dbUser) {
+        privyDid = dbUser.privy_did;
+      }
+    }
+    if (!dbUser) {
+      privyDid = privyUserId.startsWith('did:privy:') ? privyUserId : `did:privy:${privyUserId}`;
+    } else {
+      privyDid = dbUser.privy_did;
+    }
+
+    const senderEmail = dbUser?.email || privyUser.email?.address || privyUser.linkedAccounts?.find((acc: any) => acc.type === 'email')?.address || null;
+    if (!senderEmail) {
+      return res.status(400).json({ success: false, error: 'User email not found' });
+    }
+
+    // Get connection
+    const connection = (global as any).solanaConnection;
+    if (!connection) {
+      throw new Error('Solana connection not initialized');
+    }
+
+    const { BundleOrchestrator } = await import('../services/bundleOrchestrator');
+    const orchestrator = new BundleOrchestrator(pool!, connection);
+
+    // Calculate fees
+    const { FeeCalculator } = await import('../services/feeCalculator');
+    const feeCalculator = new FeeCalculator(pool!, connection);
+    const fees = await feeCalculator.calculateBundleFees(bundleId, includeCard, 'wallet');
+
+    // Create gift record
+    const giftId = uuidv4();
+    await client.query(
+      `INSERT INTO gifts (
+        id, sender_did, sender_email, recipient_email, bundle_id,
+        token_mint, token_symbol, token_decimals, amount, usd_value,
+        message, status, tiplink_url, tiplink_public_key, transaction_signature,
+        total_onramp_amount, swap_status, onramp_status, payment_method, fee_breakdown,
+        expires_at, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, NOW())`,
+      [
+        giftId,
+        privyDid,
+        senderEmail,
+        recipientEmail,
+        bundleId,
+        'So11111111111111111111111111111111111111112',
+        'BUNDLE',
+        9,
+        0,
+        fees.baseValue,
+        customMessage || null,
+        'pending_payment',
+        'pending',
+        'pending',
+        'pending',
+        fees.totalCost,
+        'pending',
+        'completed', // Wallet payment doesn't need onramp
+        'wallet',
+        JSON.stringify(fees),
+        new Date(Date.now() + 48 * 60 * 60 * 1000),
+      ]
+    );
+
+    // Check wallet balance and determine if swaps are needed
+    const { PublicKey, LAMPORTS_PER_SOL } = await import('@solana/web3.js');
+    const pubkey = new PublicKey(walletAddress);
+    const solBalance = await connection.getBalance(pubkey) / LAMPORTS_PER_SOL;
+
+    // Get bundle tokens to check what user has
+    const bundleRes = await client.query(
+      `SELECT bt.token_mint, bt.token_symbol, bt.percentage
+       FROM bundle_tokens bt
+       WHERE bt.bundle_id = $1
+       ORDER BY bt.display_order`,
+      [bundleId]
+    );
+
+    const bundleValue = fees.baseValue;
+    const solPrice = await orchestrator['jupiterService'].getTokenPrice('So11111111111111111111111111111111111111112');
+
+    // Check if user has all tokens or needs swaps
+    let needsSwaps = false;
+    for (const token of bundleRes.rows) {
+      if (token.token_mint === 'So11111111111111111111111111111111111111112') continue;
+      
+      try {
+        const { getAccount, getAssociatedTokenAddress } = await import('@solana/spl-token');
+        const mint = new PublicKey(token.token_mint);
+        const ata = await getAssociatedTokenAddress(mint, pubkey);
+        const tokenAccount = await getAccount(connection, ata);
+        const tokenUsdValue = (bundleValue * Number(token.percentage)) / 100;
+        const tokenPrice = await orchestrator['jupiterService'].getTokenPrice(token.token_mint);
+        const requiredAmount = tokenPrice > 0 ? tokenUsdValue / tokenPrice : 0;
+        const { getMint } = await import('@solana/spl-token');
+        const mintInfo = await getMint(connection, mint);
+        const balanceAmount = Number(tokenAccount.amount) / Math.pow(10, mintInfo.decimals);
+        
+        if (balanceAmount < requiredAmount) {
+          needsSwaps = true;
+          break;
+        }
+      } catch {
+        // Token account doesn't exist, needs swap
+        needsSwaps = true;
+        break;
+      }
+    }
+
+    // Execute swaps if needed
+    if (needsSwaps) {
+      await orchestrator.executeSwaps({
+        giftId,
+        bundleId,
+        userWalletAddress: walletAddress,
+        availableSol: solBalance,
+      });
+    } else {
+      // User has all tokens, skip swaps
+      await client.query(
+        `UPDATE gifts SET swap_status = 'completed' WHERE id = $1`,
+        [giftId]
+      );
+    }
+
+    // Create TipLinks for all tokens
+    await orchestrator.createBundleTipLinks({
+      giftId,
+      bundleId,
+      userWalletAddress: walletAddress,
+    });
+
+    res.json({
+      success: true,
+      giftId,
+      needsSwaps,
+      message: needsSwaps ? 'Swaps prepared, please sign transactions' : 'TipLinks created, ready to send',
+    });
+  } catch (error: any) {
+    console.error('Error creating wallet payment gift:', error);
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
  * POST /api/bundles/initiate
  * Create gift record and return onramp amount breakdown
  */
@@ -370,17 +573,17 @@ router.post('/execute-swaps', authenticateToken, async (req: AuthRequest, res) =
         availableSol,
       })
       .then(async () => {
-        // After swaps are prepared, create TipLink
-        const tiplinkUrl = await orchestrator.createBundleTipLink({
+        // After swaps are prepared, create TipLinks (multiple, one per token)
+        const tiplinks = await orchestrator.createBundleTipLinks({
           giftId,
           bundleId: bundle_id,
           userWalletAddress,
         });
 
-        // Update gift with TipLink URL (but status stays pending until user signs)
+        // Update gift status (TipLinks are stored in gift_tiplinks table)
         await client.query(
           `UPDATE gifts SET swap_status = 'pending_signature', tiplink_url = $1 WHERE id = $2`,
-          [tiplinkUrl, giftId]
+          [tiplinks.length > 0 ? tiplinks[0].tiplinkUrl : 'pending', giftId]
         );
       })
       .catch((error) => {
@@ -522,17 +725,19 @@ router.post('/:giftId/complete', authenticateToken, async (req: AuthRequest, res
     const gift = giftRes.rows[0];
     const { bundle_id, recipient_email, custom_message, include_card, sender_email } = gift;
 
-    // Get TipLink URL
-    const linkRes = await client.query(
-      `SELECT tiplink_url FROM gift_bundle_links WHERE gift_id = $1`,
+    // Get TipLinks from gift_tiplinks table
+    const tiplinksRes = await client.query(
+      `SELECT token_mint, token_symbol, tiplink_url, token_amount 
+       FROM gift_tiplinks WHERE gift_id = $1 ORDER BY created_at`,
       [giftId]
     );
 
-    if (!linkRes.rows.length) {
-      return res.status(404).json({ success: false, error: 'TipLink not found' });
+    if (!tiplinksRes.rows.length) {
+      return res.status(404).json({ success: false, error: 'TipLinks not found' });
     }
 
-    const tiplinkUrl = linkRes.rows[0].tiplink_url;
+    // Use first TipLink URL for email (backward compatibility)
+    const tiplinkUrl = tiplinksRes.rows[0].tiplink_url;
 
     // Get bundle details
     const bundleRes = await client.query(

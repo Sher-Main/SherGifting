@@ -269,7 +269,136 @@ export class BundleOrchestrator {
   }
 
   /**
-   * Create TipLink and fund with bundle tokens
+   * Create multiple TipLinks (one per token) and store in gift_tiplinks table
+   */
+  async createBundleTipLinks(params: {
+    giftId: string;
+    bundleId: string;
+    userWalletAddress: string;
+  }): Promise<Array<{ tokenMint: string; tokenSymbol: string; tiplinkUrl: string; amount: number }>> {
+    const client = await this.pool.connect();
+
+    try {
+      // Get bundle configuration
+      const bundleRes = await client.query(
+        `SELECT total_usd_value FROM gift_bundles WHERE id = $1`,
+        [params.bundleId]
+      );
+
+      if (!bundleRes.rows.length) {
+        throw new Error('Bundle not found');
+      }
+
+      const bundleValue = Number(bundleRes.rows[0].total_usd_value);
+
+      const tokensRes = await client.query(
+        `SELECT bt.token_mint, bt.token_symbol, bt.percentage
+         FROM bundle_tokens bt
+         WHERE bt.bundle_id = $1
+         ORDER BY bt.display_order`,
+        [params.bundleId]
+      );
+
+      const userPubkey = new PublicKey(params.userWalletAddress);
+      const tiplinks: Array<{ tokenMint: string; tokenSymbol: string; tiplinkUrl: string; amount: number }> = [];
+
+      // Get swap amounts if swaps were executed
+      const swapAmounts = new Map<string, number>();
+      const swapsRes = await client.query(
+        `SELECT output_mint, output_amount FROM jupiter_swaps 
+         WHERE gift_id = $1 AND status = 'completed'`,
+        [params.giftId]
+      );
+
+      for (const swap of swapsRes.rows) {
+        swapAmounts.set(swap.output_mint, Number(swap.output_amount));
+      }
+
+      // Get SOL balance
+      const solBalance = await this.connection.getBalance(userPubkey);
+      const solBalanceAmount = solBalance / LAMPORTS_PER_SOL;
+
+      // Calculate SOL amount for bundle
+      const solToken = tokensRes.rows.find((t: any) => t.token_mint === SOL_MINT);
+      const solPercentage = solToken ? Number(solToken.percentage) : 0;
+      const solTargetUsd = (bundleValue * solPercentage) / 100;
+      const solPrice = await this.jupiterService.getTokenPrice(SOL_MINT);
+      const solAmount = solPrice > 0 ? Math.min(solTargetUsd / solPrice, solBalanceAmount) : 0;
+
+      const ENCRYPTION_KEY = process.env.TIPLINK_ENCRYPTION_KEY;
+      if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length < 32) {
+        throw new Error('TIPLINK_ENCRYPTION_KEY not set or too short');
+      }
+
+      // Create TipLink for each token
+      for (const token of tokensRes.rows) {
+        try {
+          let tokenAmount = 0;
+
+          if (token.token_mint === SOL_MINT) {
+            tokenAmount = solAmount;
+          } else {
+            tokenAmount = swapAmounts.get(token.token_mint) || 0;
+          }
+
+          if (tokenAmount === 0) {
+            console.warn(`⚠️ No amount available for ${token.token_symbol}, skipping`);
+            continue;
+          }
+
+          // Create TipLink
+          const tiplink = await TipLink.create();
+          const encryptedKeypair = encryptTipLink(
+            JSON.stringify(Array.from(tiplink.keypair.secretKey)),
+            ENCRYPTION_KEY
+          );
+
+          // Store TipLink in gift_tiplinks table
+          await client.query(
+            `INSERT INTO gift_tiplinks (
+              gift_id, token_mint, token_symbol, tiplink_url, 
+              tiplink_keypair_encrypted, token_amount
+            ) VALUES ($1, $2, $3, $4, $5, $6)`,
+            [
+              params.giftId,
+              token.token_mint,
+              token.token_symbol,
+              tiplink.url.toString(),
+              encryptedKeypair,
+              tokenAmount,
+            ]
+          );
+
+          tiplinks.push({
+            tokenMint: token.token_mint,
+            tokenSymbol: token.token_symbol,
+            tiplinkUrl: tiplink.url.toString(),
+            amount: tokenAmount,
+          });
+
+          console.log(`✅ TipLink created for ${token.token_symbol}: ${tiplink.url.toString()}`);
+        } catch (error: any) {
+          console.error(`❌ Failed to create TipLink for ${token.token_symbol}:`, error);
+          throw error;
+        }
+      }
+
+      // Update gift with first TipLink URL for backward compatibility
+      if (tiplinks.length > 0) {
+        await client.query(
+          `UPDATE gifts SET tiplink_url = $1, tiplink_public_key = $2 WHERE id = $3`,
+          [tiplinks[0].tiplinkUrl, 'MULTI_TIPLINK', params.giftId]
+        );
+      }
+
+      return tiplinks;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Create TipLink and fund with bundle tokens (legacy method, kept for backward compatibility)
    */
   async createBundleTipLink(params: {
     giftId: string;

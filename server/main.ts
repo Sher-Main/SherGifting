@@ -482,6 +482,167 @@ app.post('/api/user/sync', authenticateToken, async (req: AuthRequest, res) => {
 });
 
 
+/**
+ * POST /api/wallet/check-balance
+ * Check wallet balance for bundle payment capability
+ */
+app.post('/api/wallet/check-balance', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const { walletAddress, bundleId } = req.body;
+
+    if (!walletAddress || !bundleId) {
+      return res.status(400).json({ success: false, error: 'Missing walletAddress or bundleId' });
+    }
+
+    // Get connection from global
+    const connection = (global as any).solanaConnection;
+    if (!connection) {
+      return res.status(500).json({ success: false, error: 'Solana connection not initialized' });
+    }
+
+    const { PublicKey, LAMPORTS_PER_SOL } = await import('@solana/web3.js');
+    const { getAccount, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } = await import('@solana/spl-token');
+
+    // Fetch bundle configuration
+    if (!pool) {
+      return res.status(500).json({ success: false, error: 'Database not available' });
+    }
+
+    const bundleRes = await pool.query(
+      `SELECT gb.total_usd_value, bt.token_mint, bt.token_symbol, bt.percentage
+       FROM gift_bundles gb
+       JOIN bundle_tokens bt ON bt.bundle_id = gb.id
+       WHERE gb.id = $1
+       ORDER BY bt.display_order`,
+      [bundleId]
+    );
+
+    if (!bundleRes.rows.length) {
+      return res.status(404).json({ success: false, error: 'Bundle not found' });
+    }
+
+    const bundleValue = Number(bundleRes.rows[0].total_usd_value);
+    const tokens = bundleRes.rows;
+
+    // Get SOL price
+    const { JupiterService } = await import('./services/jupiterService');
+    const jupiterService = new JupiterService(connection);
+    const solPrice = await jupiterService.getTokenPrice('So11111111111111111111111111111111111111112');
+    if (solPrice === 0) {
+      return res.status(500).json({ success: false, error: 'Failed to fetch SOL price' });
+    }
+
+    // Check wallet SOL balance
+    const pubkey = new PublicKey(walletAddress);
+    const balance = await connection.getBalance(pubkey);
+    const solBalance = balance / LAMPORTS_PER_SOL;
+
+    // Calculate required amounts per token
+    const tokenBalances: Array<{
+      symbol: string;
+      mint: string;
+      balance: number;
+      required: number;
+      sufficient: boolean;
+    }> = [];
+
+    let hasSufficientTokens = true;
+    let totalRequiredSOL = 0;
+
+    for (const token of tokens) {
+      const tokenUsdValue = (bundleValue * Number(token.percentage)) / 100;
+      const requiredAmount = token.token_mint === 'So11111111111111111111111111111111111111112'
+        ? tokenUsdValue / solPrice // SOL amount
+        : tokenUsdValue / solPrice; // For other tokens, we'll check their balance
+
+      totalRequiredSOL += requiredAmount;
+
+      if (token.token_mint === 'So11111111111111111111111111111111111111112') {
+        // SOL balance already checked
+        tokenBalances.push({
+          symbol: token.token_symbol,
+          mint: token.token_mint,
+          balance: solBalance,
+          required: requiredAmount,
+          sufficient: solBalance >= requiredAmount,
+        });
+        if (solBalance < requiredAmount) {
+          hasSufficientTokens = false;
+        }
+      } else {
+        // Check SPL token balance
+        try {
+          const mint = new PublicKey(token.token_mint);
+          const ata = await getAssociatedTokenAddress(mint, pubkey);
+          const tokenAccount = await getAccount(connection, ata);
+          
+          // Get token price to calculate required amount
+          const tokenPrice = await jupiterService.getTokenPrice(token.token_mint);
+          const requiredTokenAmount = tokenPrice > 0 ? tokenUsdValue / tokenPrice : 0;
+          
+          // Get token decimals
+          const { getMint } = await import('@solana/spl-token');
+          const mintInfo = await getMint(connection, mint);
+          const balanceAmount = Number(tokenAccount.amount) / Math.pow(10, mintInfo.decimals);
+
+          tokenBalances.push({
+            symbol: token.token_symbol,
+            mint: token.token_mint,
+            balance: balanceAmount,
+            required: requiredTokenAmount,
+            sufficient: balanceAmount >= requiredTokenAmount,
+          });
+
+          if (balanceAmount < requiredTokenAmount) {
+            hasSufficientTokens = false;
+          }
+        } catch (error) {
+          // Token account doesn't exist
+          tokenBalances.push({
+            symbol: token.token_symbol,
+            mint: token.token_mint,
+            balance: 0,
+            required: tokenUsdValue / solPrice, // Approximate
+            sufficient: false,
+          });
+          hasSufficientTokens = false;
+        }
+      }
+    }
+
+    // Check if user has sufficient SOL to pay full amount
+    const hasSufficientSOL = solBalance >= totalRequiredSOL * 1.1; // 10% buffer for fees
+
+    // Determine if wallet payment is available
+    // Available if: has all tokens OR has enough SOL to swap
+    const available = hasSufficientTokens || hasSufficientSOL;
+
+    let reason: string | undefined;
+    if (!available) {
+      if (solBalance < totalRequiredSOL * 0.5) {
+        reason = `Not enough funds. Need approximately ${(totalRequiredSOL * 1.1).toFixed(4)} SOL, have ${solBalance.toFixed(4)} SOL`;
+      } else {
+        reason = 'Missing required tokens and insufficient SOL for swaps';
+      }
+    }
+
+    res.json({
+      success: true,
+      available,
+      reason,
+      balance: {
+        solBalance,
+        hasSufficientSOL,
+        hasSufficientTokens,
+        tokenBalances,
+      },
+    });
+  } catch (error: any) {
+    console.error('Error checking wallet balance:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to check balance' });
+  }
+});
+
 app.get('/api/wallet/balances/:address', async (req, res) => {
   try {
     const { address } = req.params;
@@ -1585,7 +1746,10 @@ app.get('/api/gifts/info', giftInfoLimiter, async (req, res) => {
   }
 });
 
-// Legacy endpoint for backward compatibility (deprecated - use /api/gifts/info?token=...)
+/**
+ * GET /api/gifts/:giftId
+ * Get gift details including TipLinks for bundle gifts
+ */
 app.get('/api/gifts/:giftId', async (req, res) => {
   const { giftId } = req.params;
   
@@ -1602,14 +1766,50 @@ app.get('/api/gifts/:giftId', async (req, res) => {
       return res.status(404).json({ error: 'Gift not found' });
     }
 
-    // Return public info only (hide sensitive data)
+    // Check if this is a bundle gift and fetch TipLinks
+    let tiplinks: any[] = [];
+    let bundleName: string | null = null;
+    
+    if (pool && gift.bundle_id) {
+      // Fetch bundle name
+      const bundleRes = await pool.query(
+        `SELECT name FROM gift_bundles WHERE id = $1`,
+        [gift.bundle_id]
+      );
+      bundleName = bundleRes.rows[0]?.name || null;
+
+      // Fetch TipLinks from gift_tiplinks table
+      const tiplinksRes = await pool.query(
+        `SELECT id, token_mint, token_symbol, token_amount, claimed, claimed_at, claimed_by
+         FROM gift_tiplinks
+         WHERE gift_id = $1
+         ORDER BY created_at`,
+        [giftId]
+      );
+      tiplinks = tiplinksRes.rows.map((t: any) => ({
+        id: t.id,
+        tokenMint: t.token_mint,
+        tokenSymbol: t.token_symbol,
+        tokenAmount: Number(t.token_amount),
+        claimed: t.claimed,
+        claimedAt: t.claimed_at,
+        claimedBy: t.claimed_by,
+      }));
+    }
+
+    // Return public info (hide sensitive data)
     res.json({
+      id: gift.id,
       amount: gift.amount,
       token_symbol: gift.token_symbol,
       sender_email: gift.sender_email,
       message: gift.message,
       status: gift.status,
-      created_at: gift.created_at
+      created_at: gift.created_at,
+      bundle_name: bundleName,
+      bundle_id: gift.bundle_id,
+      usd_value: gift.usd_value,
+      tiplinks: tiplinks.length > 0 ? tiplinks : undefined,
     });
   } catch (error: any) {
     console.error('❌ Error fetching gift:', error);
@@ -2214,6 +2414,180 @@ async function processGiftClaim(
     return res.status(500).json({ error: 'Failed to claim gift', details: error?.message });
   }
 }
+
+/**
+ * POST /api/gifts/:giftId/claim-all
+ * Claim all TipLinks for a bundle gift in a single atomic transaction
+ */
+app.post('/api/gifts/:giftId/claim-all', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const { giftId } = req.params;
+    const { recipientWallet } = req.body;
+    const user = req.user;
+
+    if (!user || !recipientWallet) {
+      return res.status(400).json({ success: false, error: 'Missing recipient wallet address' });
+    }
+
+    if (!pool) {
+      return res.status(500).json({ success: false, error: 'Database not available' });
+    }
+
+    // Fetch all TipLinks for this gift
+    const tiplinksRes = await pool.query(
+      `SELECT id, token_mint, token_symbol, tiplink_url, tiplink_keypair_encrypted, token_amount
+       FROM gift_tiplinks
+       WHERE gift_id = $1 AND claimed = false
+       ORDER BY created_at`,
+      [giftId]
+    );
+
+    if (tiplinksRes.rows.length === 0) {
+      return res.status(400).json({ success: false, error: 'No unclaimed TipLinks found for this gift' });
+    }
+
+    const tiplinks = tiplinksRes.rows;
+    const connection = (global as any).solanaConnection;
+    if (!connection) {
+      return res.status(500).json({ success: false, error: 'Solana connection not initialized' });
+    }
+
+    const { PublicKey, Transaction, Keypair, SystemProgram, LAMPORTS_PER_SOL } = await import('@solana/web3.js');
+    const { getAccount, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferCheckedInstruction, getMint } = await import('@solana/spl-token');
+    const { decryptTipLink } = await import('./utils/encryption');
+    const { getTokenProgramId } = await import('./services/solana');
+
+    const recipientPubkey = new PublicKey(recipientWallet);
+    const transaction = new Transaction();
+
+    // Decrypt TipLink keypairs and prepare transfers
+    const ENCRYPTION_KEY = process.env.TIPLINK_ENCRYPTION_KEY;
+    if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length < 32) {
+      return res.status(500).json({ success: false, error: 'Encryption key not configured' });
+    }
+
+    // Get backend wallet for sponsoring ATA creation
+    const BACKEND_WALLET_SECRET_KEY = process.env.BACKEND_WALLET_SECRET_KEY;
+    if (!BACKEND_WALLET_SECRET_KEY) {
+      return res.status(500).json({ success: false, error: 'Backend wallet not configured' });
+    }
+    const backendWallet = Keypair.fromSecretKey(
+      Buffer.from(BACKEND_WALLET_SECRET_KEY, 'base64')
+    );
+
+    // Prepare all transfers in one transaction
+    for (const tiplink of tiplinks) {
+      try {
+        const decryptedKeypair = JSON.parse(decryptTipLink(tiplink.tiplink_keypair_encrypted, ENCRYPTION_KEY));
+        const tiplinkKeypair = Keypair.fromSecretKey(new Uint8Array(decryptedKeypair));
+        const tiplinkPubkey = tiplinkKeypair.publicKey;
+        const mint = new PublicKey(tiplink.token_mint);
+
+        if (tiplink.token_mint === 'So11111111111111111111111111111111111111112') {
+          // SOL transfer
+          const amountLamports = Math.floor(Number(tiplink.token_amount) * LAMPORTS_PER_SOL);
+          transaction.add(
+            SystemProgram.transfer({
+              fromPubkey: tiplinkPubkey,
+              toPubkey: recipientPubkey,
+              lamports: amountLamports,
+            })
+          );
+        } else {
+          // SPL token transfer
+          const tokenProgramId = await getTokenProgramId(tiplink.token_mint, connection);
+          const recipientATA = await getAssociatedTokenAddress(mint, recipientPubkey, false, tokenProgramId);
+          const tiplinkATA = await getAssociatedTokenAddress(mint, tiplinkPubkey, false, tokenProgramId);
+
+          // Check if recipient ATA exists, create if not
+          try {
+            await getAccount(connection, recipientATA);
+          } catch {
+            // ATA doesn't exist, create it (sponsored by backend)
+            transaction.add(
+              createAssociatedTokenAccountInstruction(
+                backendWallet.publicKey,
+                recipientATA,
+                recipientPubkey,
+                mint,
+                tokenProgramId
+              )
+            );
+          }
+
+          // Get token decimals
+          const mintInfo = await getMint(connection, mint);
+          const amountRaw = Math.floor(Number(tiplink.token_amount) * Math.pow(10, mintInfo.decimals));
+
+          // Add transfer instruction
+          transaction.add(
+            createTransferCheckedInstruction(
+              tiplinkATA,
+              mint,
+              recipientATA,
+              tiplinkPubkey,
+              amountRaw,
+              mintInfo.decimals,
+              [],
+              tokenProgramId
+            )
+          );
+        }
+      } catch (error: any) {
+        console.error(`Error preparing transfer for ${tiplink.token_symbol}:`, error);
+        return res.status(500).json({ success: false, error: `Failed to prepare transfer: ${error.message}` });
+      }
+    }
+
+    // Sign and send transaction (TipLink keypairs sign, backend sponsors ATA creation)
+    const recentBlockhash = await connection.getLatestBlockhash();
+    transaction.recentBlockhash = recentBlockhash.blockhash;
+    transaction.feePayer = backendWallet.publicKey;
+
+    // Sign with all TipLink keypairs
+    for (const tiplink of tiplinks) {
+      const decryptedKeypair = JSON.parse(decryptTipLink(tiplink.tiplink_keypair_encrypted, ENCRYPTION_KEY));
+      const tiplinkKeypair = Keypair.fromSecretKey(new Uint8Array(decryptedKeypair));
+      transaction.sign(tiplinkKeypair);
+    }
+
+    // Sign with backend wallet (for ATA creation)
+    transaction.sign(backendWallet);
+
+    // Send transaction
+    const signature = await connection.sendRawTransaction(transaction.serialize(), {
+      skipPreflight: false,
+      maxRetries: 3,
+    });
+
+    // Confirm transaction
+    await connection.confirmTransaction(signature, 'confirmed');
+
+    // Mark all TipLinks as claimed
+    await pool.query(
+      `UPDATE gift_tiplinks
+       SET claimed = true, claimed_at = NOW(), claimed_by = $1
+       WHERE gift_id = $2 AND claimed = false`,
+      [recipientWallet, giftId]
+    );
+
+    // Update gift status
+    await pool.query(
+      `UPDATE gifts SET status = 'CLAIMED', claimed_at = NOW(), claimed_by = $1 WHERE id = $2`,
+      [recipientWallet, giftId]
+    );
+
+    res.json({
+      success: true,
+      signature,
+      claimedCount: tiplinks.length,
+      message: `Successfully claimed ${tiplinks.length} tokens`,
+    });
+  } catch (error: any) {
+    console.error('Error claiming all tokens:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to claim tokens' });
+  }
+});
 
 // Legacy claim endpoint for backward compatibility (deprecated - use /api/gifts/claim with claim_token)
 app.post('/api/gifts/:giftId/claim', async (req, res) => {
