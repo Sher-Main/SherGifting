@@ -30,6 +30,17 @@ const GiftPage: React.FC = () => {
     const { wallets, ready: walletsReady } = useWallets();
     const { fundWallet } = useFundWallet();
     const navigate = useNavigate();
+
+    // Map token symbols to display names
+    const getTokenDisplayName = (symbol: string): string => {
+        const displayNames: Record<string, string> = {
+            'SOL': 'Solana',
+            'wBTC': 'Bitcoin',
+            'wETH': 'Ethereum',
+            'USDC': 'USD Coin',
+        };
+        return displayNames[symbol] || symbol;
+    };
     const [tokens, setTokens] = useState<Token[]>([]);
     const [selectedToken, setSelectedToken] = useState<Token | null>(null);
     const [isLoadingTokens, setIsLoadingTokens] = useState(true);
@@ -2271,14 +2282,14 @@ const GiftPage: React.FC = () => {
                                             <div className="mt-2 space-y-1">
                                                 {bundleCalculation.tokens.map((token, idx) => (
                                                     <div key={idx} className="flex justify-between text-xs">
-                                                        <span className="text-slate-400">{token.symbol}</span>
+                                                        <span className="text-slate-400">{getTokenDisplayName(token.symbol)}</span>
                                                         <span className="text-slate-300">{token.percentage}% (${token.usdValue.toFixed(2)})</span>
                                                     </div>
                                                 ))}
                                             </div>
                                         </div>
                                     ) : (
-                                        <p className="text-white font-medium">{confirmDetails.token} - {confirmDetails.tokenName}</p>
+                                    <p className="text-white font-medium">{confirmDetails.token} - {confirmDetails.tokenName}</p>
                                     )}
                                 </div>
                                 
@@ -2349,17 +2360,17 @@ const GiftPage: React.FC = () => {
                                 
                                 {/* Wallet balance - What's left */}
                                 {giftMode !== 'bundle' && (
-                                    <div>
-                                        <p className="text-slate-400 text-xs mb-1">What's left in your wallet</p>
-                                        {confirmDetails.remainingBalanceUsd !== null ? (
-                                            <>
-                                                <p className="text-white font-medium">${confirmDetails.remainingBalanceUsd.toFixed(3)} USD</p>
-                                                <p className="text-slate-400 text-xs mt-1">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
-                                            </>
-                                        ) : (
-                                            <p className="text-white font-medium">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
-                                        )}
-                                    </div>
+                                <div>
+                                    <p className="text-slate-400 text-xs mb-1">What's left in your wallet</p>
+                                    {confirmDetails.remainingBalanceUsd !== null ? (
+                                        <>
+                                            <p className="text-white font-medium">${confirmDetails.remainingBalanceUsd.toFixed(3)} USD</p>
+                                            <p className="text-slate-400 text-xs mt-1">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
+                                        </>
+                                    ) : (
+                                        <p className="text-white font-medium">{confirmDetails.remainingBalance.toFixed(6)} {confirmDetails.token}</p>
+                                    )}
+                                </div>
                                 )}
                             </div>
                             
@@ -2561,7 +2572,7 @@ const GiftPage: React.FC = () => {
                                         <div className="space-y-2 mb-4 bg-slate-900/50 rounded-lg p-3">
                                             {bundleCalculation.tokens.map((token, idx) => (
                                                 <div key={idx} className="flex justify-between text-sm">
-                                                    <span className="text-slate-300 font-medium">{token.symbol}</span>
+                                                    <span className="text-slate-300 font-medium">{getTokenDisplayName(token.symbol)}</span>
                                                     <span className="text-slate-400">{token.percentage}% <span className="text-slate-500">(${token.usdValue.toFixed(2)})</span></span>
                                                 </div>
                                             ))}

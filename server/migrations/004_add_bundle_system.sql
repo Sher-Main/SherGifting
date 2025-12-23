@@ -51,12 +51,12 @@ CREATE INDEX IF NOT EXISTS idx_gift_bundle_links_gift ON gift_bundle_links(gift_
 CREATE INDEX IF NOT EXISTS idx_gift_bundle_links_bundle ON gift_bundle_links(bundle_id);
 
 -- Seed initial bundles
--- Starter Pack: $10 SOL
+-- Starter Pack: $20 SOL
 INSERT INTO gift_bundles (name, description, total_usd_value, display_order, badge_text, badge_color)
 VALUES (
   'Starter Pack',
   'Perfect for first-time crypto recipients',
-  10.00,
+  20.00,
   1,
   'POPULAR',
   '#F59E0B'
@@ -68,12 +68,12 @@ SELECT id, 'So11111111111111111111111111111111111111112', 'SOL', 100.00, 1
 FROM gift_bundles WHERE name = 'Starter Pack'
 ON CONFLICT DO NOTHING;
 
--- Value Pack: $25 (50% SOL / 50% wBTC)
+-- Value Pack: $50 (50% SOL / 50% wBTC)
 INSERT INTO gift_bundles (name, description, total_usd_value, display_order, badge_text, badge_color)
 VALUES (
   'Value Pack',
   'Experience the two giants of crypto',
-  25.00,
+  50.00,
   2,
   'BEST VALUE',
   '#3B82F6'
@@ -123,4 +123,9 @@ UPDATE gift_bundles SET display_order = 3 WHERE name = 'Whale Pack' AND display_
 
 -- Update Curiosity Pack to Value Pack
 UPDATE gift_bundles SET name = 'Value Pack' WHERE name = 'Curiosity Pack';
+
+-- Update bundle prices
+UPDATE gift_bundles SET total_usd_value = 20.00, updated_at = NOW() WHERE name = 'Starter Pack';
+UPDATE gift_bundles SET total_usd_value = 50.00, updated_at = NOW() WHERE name = 'Value Pack';
+-- Whale Pack stays at $100.00
 

@@ -12,6 +12,17 @@ export const BundleSelector: React.FC<Props> = ({ onBundleSelect, selectedBundle
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Map token symbols to display names
+  const getTokenDisplayName = (symbol: string): string => {
+    const displayNames: Record<string, string> = {
+      'SOL': 'Solana',
+      'wBTC': 'Bitcoin',
+      'wETH': 'Ethereum',
+      'USDC': 'USD Coin',
+    };
+    return displayNames[symbol] || symbol;
+  };
+
   const fetchBundles = async () => {
     try {
       setLoading(true);
@@ -108,7 +119,7 @@ export const BundleSelector: React.FC<Props> = ({ onBundleSelect, selectedBundle
               <div className="space-y-2 mb-4 bg-slate-900/50 rounded-lg p-3">
                 {bundle.tokens.map((t) => (
                   <div key={t.id} className="flex justify-between items-center text-sm">
-                    <span className="font-medium text-slate-300">{t.tokenSymbol}</span>
+                    <span className="font-medium text-slate-300">{getTokenDisplayName(t.tokenSymbol)}</span>
                     <span className="text-slate-400">{t.percentage}%</span>
                   </div>
                 ))}
