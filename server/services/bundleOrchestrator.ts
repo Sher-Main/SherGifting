@@ -34,7 +34,7 @@ export class BundleOrchestrator {
   }
 
   /**
-   * Calculate total onramp amount including buffer for ATAs and slippage
+   * Calculate total onramp amount using dynamic fee calculator
    */
   async calculateOnrampAmount(
     bundleId: string,
@@ -52,35 +52,26 @@ export class BundleOrchestrator {
       }
 
       const baseAmount = Number(bundleRes.rows[0].total_usd_value);
-      const serviceFee = 1.0;
       const cardFee = includeCard ? 1.0 : 0;
 
-      // Count non-SOL tokens (each needs ATA creation ~0.002 SOL)
-      const tokensRes = await client.query(
-        `SELECT COUNT(*) as count FROM bundle_tokens 
-         WHERE bundle_id = $1 AND token_mint != $2`,
-        [bundleId, SOL_MINT]
+      // Use dynamic fee calculator for accurate pricing
+      const { DynamicFeeCalculator } = await import('./dynamicFeeCalculator');
+      const dynamicCalculator = new DynamicFeeCalculator(this.pool);
+      const fees = await dynamicCalculator.calculateDynamicBundleFees(
+        bundleId,
+        baseAmount,
+        includeCard,
+        'moonpay' // Use moonpay to include payment processing fee
       );
 
-      const nonSolTokenCount = Number(tokensRes.rows[0].count);
-      const ataBufferSol = nonSolTokenCount * 0.002; // ~0.002 SOL per ATA
-
-      // Convert SOL to USD (get current SOL price)
-      const solPrice = await this.jupiterService.getTokenPrice(SOL_MINT);
-      const ataBufferUsd = ataBufferSol * solPrice;
-
-      // Add 3% slippage buffer for swaps
-      const slippageBuffer = baseAmount * 0.03;
-
-      const total = baseAmount + serviceFee + cardFee + ataBufferUsd + slippageBuffer;
-
+      // Map to OnrampAmountBreakdown format
       return {
-        baseAmount,
-        serviceFee,
+        baseAmount: fees.baseValueUSD - cardFee, // Base value without card
+        serviceFee: fees.moonpayFeeUSD, // MoonPay fee
         cardFee,
-        ataBuffer: ataBufferUsd,
-        slippageBuffer,
-        total: Math.ceil(total * 100) / 100, // Round up to nearest cent
+        ataBuffer: fees.details.ataCostUSD,
+        slippageBuffer: fees.details.dexFeeUSD + fees.details.swapFeesUSD, // DEX fees + swap priority fees
+        total: fees.totalCostUSD,
       };
     } finally {
       client.release();

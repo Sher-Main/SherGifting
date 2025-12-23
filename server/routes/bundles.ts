@@ -29,7 +29,7 @@ router.get('/:id/calculate', async (req, res) => {
 
 /**
  * GET /api/bundles/:id/fees
- * Get detailed fee breakdown for a bundle
+ * Get detailed fee breakdown for a bundle with real-time pricing
  */
 router.get('/:id/fees', async (req, res) => {
   try {
@@ -37,14 +37,8 @@ router.get('/:id/fees', async (req, res) => {
     const includeCard = req.query.includeCard === 'true';
     const paymentMethod = (req.query.paymentMethod as 'wallet' | 'moonpay') || 'moonpay';
 
-    // Get connection from global (set in main.ts)
-    const connection = (global as any).solanaConnection;
-    if (!connection) {
-      return res.status(500).json({ success: false, error: 'Solana connection not initialized' });
-    }
-
     const { FeeCalculator } = await import('../services/feeCalculator');
-    const calculator = new FeeCalculator(pool!, connection);
+    const calculator = new FeeCalculator(pool!);
     const fees = await calculator.calculateBundleFees(id, includeCard, paymentMethod);
 
     res.json({ success: true, ...fees });
@@ -108,9 +102,9 @@ router.post('/:id/create-wallet', authenticateToken, async (req: AuthRequest, re
     const { BundleOrchestrator } = await import('../services/bundleOrchestrator');
     const orchestrator = new BundleOrchestrator(pool!, connection);
 
-    // Calculate fees
+    // Calculate fees using dynamic pricing
     const { FeeCalculator } = await import('../services/feeCalculator');
-    const feeCalculator = new FeeCalculator(pool!, connection);
+    const feeCalculator = new FeeCalculator(pool!);
     const fees = await feeCalculator.calculateBundleFees(bundleId, includeCard, 'wallet');
 
     // Create gift record
