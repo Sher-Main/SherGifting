@@ -17,6 +17,8 @@ const WithdrawPage = React.lazy(() => import('./pages/WithdrawPage'));
 const HistoryPage = React.lazy(() => import('./pages/HistoryPage'));
 const ClaimPage = React.lazy(() => import('./pages/ClaimPage'));
 const NotFoundPage = React.lazy(() => import('./pages/NotFoundPage'));
+const SendGiftPage = React.lazy(() => import('./pages/SendGiftPage'));
+const ConfirmGiftPage = React.lazy(() => import('./pages/ConfirmGiftPage'));
 
 const App: React.FC = () => {
   // Replace Privy branding with Sher branding in all modals
@@ -86,7 +88,13 @@ const AppContent: React.FC = () => {
         <Suspense fallback={<RouteFallback />}>
           <Routes>
             <Route path="/login" element={user ? <Navigate to="/" /> : <LoginPage />} />
-            <Route path="/" element={user ? <HomePage /> : <Navigate to="/login" />} />
+            {/* Home page is now public - no auth required */}
+            <Route path="/" element={<HomePage />} />
+            {/* New progressive onboarding flow - no auth required */}
+            <Route path="/send" element={<SendGiftPage />} />
+            {/* Confirmation page - auth required */}
+            <Route path="/send/confirm" element={user ? <ConfirmGiftPage /> : <Navigate to="/send" />} />
+            {/* Existing routes - keep for backward compatibility */}
             <Route path="/add-funds" element={user ? <AddFundsPage /> : <Navigate to="/login" />} />
             <Route path="/gift" element={user ? <GiftPage /> : <Navigate to="/login" />} />
             <Route path="/bundle-gift" element={user ? <BundleGiftPage /> : <Navigate to="/login" />} />

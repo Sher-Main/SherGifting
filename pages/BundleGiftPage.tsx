@@ -9,6 +9,7 @@ import { Bundle } from '../types';
 import { BundleSelector } from '../components/BundleSelector';
 import Spinner from '../components/Spinner';
 import { ArrowLeftIcon } from '../components/icons';
+import { clearPendingGift } from '../lib/giftStore';
 import { VersionedTransaction, Transaction, SystemProgram, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getMint } from '@solana/spl-token';
 import { connection } from '../services/solana';
@@ -150,6 +151,8 @@ export const BundleGiftPage: React.FC = () => {
         if (statusResponse.status === 'SENT') {
           setCurrentStep('sent');
           setLoading(false);
+          // Clear localStorage if gift was created via progressive onboarding
+          clearPendingGift();
           return;
         }
 
@@ -400,6 +403,8 @@ export const BundleGiftPage: React.FC = () => {
         if (status.status === 'SENT') {
           setCurrentStep('sent');
           setLoading(false);
+          // Clear localStorage if gift was created via progressive onboarding
+          clearPendingGift();
           return;
         }
 

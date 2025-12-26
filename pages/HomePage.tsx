@@ -1,14 +1,15 @@
 
 import React, { useEffect, useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { heliusService } from '../services/api';
-import { TokenBalance } from '../types';
+import { heliusService, bundleService } from '../services/api';
+import { TokenBalance, Bundle } from '../types';
 import { GiftIcon, WalletIcon, ArrowUpTrayIcon } from '../components/icons';
 
 const HomePage: React.FC = () => {
   const { user, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
+  const [bundles, setBundles] = useState<Bundle[]>([]);
   const [balances, setBalances] = useState<TokenBalance[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -78,6 +79,15 @@ const HomePage: React.FC = () => {
     return balances.reduce((acc, token) => acc + token.usdValue, 0);
   }, [balances]);
 
+  // Fetch bundles for public landing page
+  useEffect(() => {
+    if (!user) {
+      bundleService.getBundles()
+        .then(setBundles)
+        .catch(console.error);
+    }
+  }, [user]);
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-US', { 
       style: 'currency', 
@@ -87,6 +97,106 @@ const HomePage: React.FC = () => {
     }).format(value);
   };
 
+  // Show public landing page if not authenticated
+  if (!user) {
+    return (
+      <div className="space-y-16 animate-fade-in">
+        {/* Hero Section */}
+        <section className="text-center py-12">
+          <h1 className="text-5xl md:text-6xl font-bold mb-6 bg-gradient-to-r from-sky-500 to-cyan-400 bg-clip-text text-transparent">
+            Send Crypto Gifts
+            <br />
+            In Seconds
+          </h1>
+          <p className="text-xl text-slate-400 mb-8 max-w-2xl mx-auto">
+            The easiest way to send cryptocurrency to friends and family.
+            No wallet needed. No crypto knowledge required.
+          </p>
+          <div className="flex gap-4 justify-center">
+            <Link
+              to="/send"
+              className="bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-600 hover:to-cyan-500 text-white px-8 py-4 rounded-lg font-semibold transition-all duration-300 shadow-lg"
+            >
+              Send a Gift 🎁
+            </Link>
+            <Link
+              to="/login"
+              className="border-2 border-slate-600 text-slate-300 px-8 py-4 rounded-lg font-semibold hover:bg-slate-800 transition"
+            >
+              Sign In
+            </Link>
+          </div>
+          <div className="mt-12 flex gap-8 justify-center text-sm text-slate-500">
+            <div>✅ No signup required</div>
+            <div>✅ Instant delivery</div>
+            <div>✅ Secure & private</div>
+          </div>
+        </section>
+
+        {/* How It Works */}
+        <section className="max-w-4xl mx-auto">
+          <h2 className="text-3xl font-bold text-center mb-8">How It Works</h2>
+          <div className="grid md:grid-cols-3 gap-6">
+            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6 text-center">
+              <div className="text-4xl mb-4">1️⃣</div>
+              <h3 className="text-xl font-semibold mb-2">Choose Recipient</h3>
+              <p className="text-slate-400">Enter their username, email, or wallet address</p>
+            </div>
+            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6 text-center">
+              <div className="text-4xl mb-4">2️⃣</div>
+              <h3 className="text-xl font-semibold mb-2">Select Gift</h3>
+              <p className="text-slate-400">Pick a token or pre-made bundle</p>
+            </div>
+            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6 text-center">
+              <div className="text-4xl mb-4">3️⃣</div>
+              <h3 className="text-xl font-semibold mb-2">Send & Done</h3>
+              <p className="text-slate-400">Sign in once and your gift is sent instantly</p>
+            </div>
+          </div>
+        </section>
+
+        {/* Popular Bundles */}
+        {bundles.length > 0 && (
+          <section className="max-w-4xl mx-auto">
+            <h2 className="text-3xl font-bold text-center mb-8">Popular Gift Bundles</h2>
+            <div className="grid md:grid-cols-3 gap-6">
+              {bundles.slice(0, 3).map((bundle) => (
+                <div key={bundle.id} className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
+                  <div className="text-3xl mb-3">{bundle.badgeText || '🎁'}</div>
+                  <h3 className="text-xl font-semibold mb-2">{bundle.name}</h3>
+                  <p className="text-slate-400 text-sm mb-4">{bundle.description}</p>
+                  <div className="text-2xl font-bold text-sky-400 mb-2">${bundle.totalUsdValue}</div>
+                  <div className="text-xs text-slate-500 mb-4">
+                    {bundle.tokens.map(t => `${t.percentage}% ${t.tokenSymbol}`).join(' + ')}
+                  </div>
+                  <Link
+                    to="/send"
+                    className="block w-full bg-slate-700 hover:bg-slate-600 text-white text-center py-2 rounded-lg transition"
+                  >
+                    Select
+                  </Link>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* CTA Section */}
+        <section className="text-center py-12">
+          <h2 className="text-4xl font-bold mb-6">Ready to Send a Gift?</h2>
+          <p className="text-xl text-slate-400 mb-8">It takes less than 2 minutes</p>
+          <Link
+            to="/send"
+            className="inline-block bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-600 hover:to-cyan-500 text-white px-8 py-4 rounded-lg font-semibold transition-all duration-300 shadow-lg"
+          >
+            Send Your First Gift 🎁
+          </Link>
+        </section>
+      </div>
+    );
+  }
+
+  // Authenticated user - show dashboard (existing behavior)
   return (
     <div className="space-y-8 animate-fade-in">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

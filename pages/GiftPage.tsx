@@ -12,6 +12,7 @@ import Spinner from '../components/Spinner';
 import { ArrowLeftIcon } from '../components/icons';
 import { OnrampCreditPopup } from '../components/OnrampCreditPopup';
 import { CARD_UPSELL_PRICE } from '../lib/cardTemplates';
+import { clearPendingGift } from '../lib/giftStore';
 import QRCode from 'qrcode';
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, VersionedTransaction } from '@solana/web3.js';
 import { createAssociatedTokenAccountInstruction, createTransferCheckedInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
@@ -926,6 +927,10 @@ const GiftPage: React.FC = () => {
             await bundleService.completeBundleGift(response.giftId);
 
             setSuccessMessage('Bundle gift sent successfully!');
+            
+            // Clear localStorage if gift was created via progressive onboarding
+            clearPendingGift();
+            
             setTimeout(() => {
                 navigate('/history');
             }, 2000);
@@ -2270,6 +2275,9 @@ const GiftPage: React.FC = () => {
                 qrCode: qrCodeDataUrl
             });
             setShowSuccessModal(true);
+            
+            // Clear localStorage if gift was created via progressive onboarding
+            clearPendingGift();
             
             // Update user balance
             await refreshUser();
