@@ -12,11 +12,13 @@ import { AnimatedCard } from '../components/AnimatedCard';
 import { ScrollIndicator } from '../components/ScrollIndicator';
 import { AnimatedIcon } from '../components/AnimatedIcon';
 import { useReducedMotion } from '../hooks/useReducedMotion';
+import { savePendingGift } from '../lib/giftStore';
 
 const HomePage: React.FC = () => {
   const { user, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [bundles, setBundles] = useState<Bundle[]>([]);
+  const [bundlesLoading, setBundlesLoading] = useState(false);
   const [balances, setBalances] = useState<TokenBalance[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -86,20 +88,57 @@ const HomePage: React.FC = () => {
     return balances.reduce((acc, token) => acc + token.usdValue, 0);
   }, [balances]);
 
-  // Fetch bundles for public landing page - optimized with immediate fetch
+  // Fetch bundles for public landing page - with caching for instant load
   useEffect(() => {
-    if (!user) {
-      // Fetch immediately without waiting
-      const fetchBundles = async () => {
-        try {
-          const fetchedBundles = await bundleService.getBundles();
-          setBundles(fetchedBundles);
-        } catch (error) {
-          console.error('Failed to fetch bundles:', error);
+    // Check cache first (works for both authenticated and unauthenticated users)
+    const CACHE_KEY = 'sher_bundles_cache';
+    const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+    
+    const cached = localStorage.getItem(CACHE_KEY);
+    if (cached) {
+      try {
+        const { data, timestamp } = JSON.parse(cached);
+        if (Date.now() - timestamp < CACHE_DURATION) {
+          setBundles(data);
+          // Still fetch in background to refresh cache, but don't show loading
+          bundleService.getBundles().then(fetchedBundles => {
+            localStorage.setItem(CACHE_KEY, JSON.stringify({
+              data: fetchedBundles,
+              timestamp: Date.now()
+            }));
+            setBundles(fetchedBundles);
+          }).catch(() => {
+            // Silent fail for background refresh
+          });
+          return; // Use cached data immediately
         }
-      };
-      fetchBundles();
+      } catch (e) {
+        // Invalid cache, continue to fetch
+      }
     }
+    
+    // Only show loading state if no cache exists
+    if (!user) {
+      setBundlesLoading(true);
+    }
+    
+    // Fetch bundles immediately
+    const fetchBundles = async () => {
+      try {
+        const fetchedBundles = await bundleService.getBundles();
+        setBundles(fetchedBundles);
+        // Cache the result
+        localStorage.setItem(CACHE_KEY, JSON.stringify({
+          data: fetchedBundles,
+          timestamp: Date.now()
+        }));
+      } catch (error) {
+        console.error('Failed to fetch bundles:', error);
+      } finally {
+        setBundlesLoading(false);
+      }
+    };
+    fetchBundles();
   }, [user]);
 
   const formatCurrency = (value: number) => {
@@ -113,7 +152,7 @@ const HomePage: React.FC = () => {
 
   // Show public landing page if not authenticated
   if (!user) {
-    return <LandingPage bundles={bundles} />;
+    return <LandingPage bundles={bundles} bundlesLoading={bundlesLoading} />;
   }
 
   // Authenticated user - show dashboard (existing behavior)
@@ -398,6 +437,7 @@ interface BundleCardProps {
 
 const BundleCard: React.FC<BundleCardProps> = memo(({ bundle, index }) => {
   const prefersReducedMotion = useReducedMotion();
+  const navigate = useNavigate();
 
   return (
     <motion.div
@@ -504,15 +544,24 @@ const BundleCard: React.FC<BundleCardProps> = memo(({ bundle, index }) => {
           ))}
           </div>
         
-        <Link to="/send">
-          <motion.div
-            className="w-full bg-gradient-to-r from-slate-700 to-slate-600 hover:from-sky-600 hover:to-cyan-500 text-white text-center py-3 rounded-xl font-semibold transition-all duration-300 shadow-lg group-hover:shadow-xl group-hover:shadow-sky-500/30"
-            whileHover={prefersReducedMotion ? {} : { scale: 1.05 }}
-            whileTap={prefersReducedMotion ? {} : { scale: 0.98 }}
-                  >
-                    Select
-          </motion.div>
-                  </Link>
+        <motion.div
+          className="w-full bg-gradient-to-r from-slate-700 to-slate-600 hover:from-sky-600 hover:to-cyan-500 text-white text-center py-3 rounded-xl font-semibold transition-all duration-300 shadow-lg group-hover:shadow-xl group-hover:shadow-sky-500/30 cursor-pointer"
+          whileHover={prefersReducedMotion ? {} : { scale: 1.05 }}
+          whileTap={prefersReducedMotion ? {} : { scale: 0.98 }}
+          onClick={() => {
+            // Save bundle selection and navigate
+            savePendingGift({
+              recipient: '',
+              recipientType: 'username',
+              token: bundle.id,
+              amount: bundle.totalUsdValue,
+              bundle: bundle,
+            });
+            navigate('/send');
+          }}
+        >
+          Select
+        </motion.div>
                 </div>
     </motion.div>
   );
@@ -606,6 +655,40 @@ const CTASection: React.FC = memo(() => {
 
 CTASection.displayName = 'CTASection';
 
+// Bundle Section Skeleton Loader
+const BundleSectionSkeleton: React.FC = memo(() => {
+  return (
+    <section className="max-w-6xl mx-auto px-4">
+      <div className="text-4xl md:text-5xl font-bold text-center mb-4 md:mb-6">
+        <div className="h-12 w-64 bg-slate-700 rounded-lg mx-auto animate-pulse" />
+      </div>
+      
+      <div className="grid md:grid-cols-3 gap-6 md:gap-8">
+        {[1, 2, 3].map((i) => (
+          <div
+            key={i}
+            className="relative bg-slate-800/60 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-6 md:p-8 overflow-hidden animate-pulse"
+          >
+            <div className="h-16 w-16 bg-slate-700 rounded-full mb-4" />
+            <div className="h-4 w-20 bg-slate-700 rounded mb-2" />
+            <div className="h-6 w-32 bg-slate-700 rounded mb-3" />
+            <div className="h-4 w-full bg-slate-700 rounded mb-2" />
+            <div className="h-4 w-3/4 bg-slate-700 rounded mb-4" />
+            <div className="h-8 w-24 bg-slate-700 rounded mb-4" />
+            <div className="flex gap-2 mb-6">
+              <div className="h-5 w-16 bg-slate-700 rounded" />
+              <div className="h-5 w-16 bg-slate-700 rounded" />
+            </div>
+            <div className="h-10 w-full bg-slate-700 rounded-xl" />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+});
+
+BundleSectionSkeleton.displayName = 'BundleSectionSkeleton';
+
 // Landing Page Component (defined later in file)
 
 const BalanceRowSkeleton: React.FC = () => (
@@ -627,9 +710,10 @@ const BalanceRowSkeleton: React.FC = () => (
 // Modern Landing Page Component
 interface LandingPageProps {
   bundles: Bundle[];
+  bundlesLoading: boolean;
 }
 
-const LandingPage: React.FC<LandingPageProps> = memo(({ bundles }) => {
+const LandingPage: React.FC<LandingPageProps> = memo(({ bundles, bundlesLoading }) => {
   const prefersReducedMotion = useReducedMotion();
 
   const heroVariants = {
@@ -779,7 +863,11 @@ const LandingPage: React.FC<LandingPageProps> = memo(({ bundles }) => {
         <HowItWorksSection />
 
         {/* Popular Bundles */}
-        {bundles.length > 0 && <BundleSection bundles={bundles} />}
+        {bundlesLoading ? (
+          <BundleSectionSkeleton />
+        ) : bundles.length > 0 ? (
+          <BundleSection bundles={bundles} />
+        ) : null}
 
         {/* CTA Section */}
         <CTASection />

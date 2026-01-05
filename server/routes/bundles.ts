@@ -7,9 +7,27 @@ import { v4 as uuidv4 } from 'uuid';
 const router = express.Router();
 const bundleService = new BundleService();
 
+// In-memory cache for bundles (5 minute TTL)
+let bundlesCache: { data: any[]; timestamp: number } | null = null;
+const BUNDLES_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 router.get('/', async (_req, res) => {
   try {
+    // Check cache first
+    if (bundlesCache && Date.now() - bundlesCache.timestamp < BUNDLES_CACHE_TTL) {
+      res.setHeader('Cache-Control', 'public, max-age=300'); // 5 minutes
+      return res.json({ success: true, bundles: bundlesCache.data });
+    }
+    
     const bundles = await bundleService.getActiveBundles();
+    
+    // Update cache
+    bundlesCache = {
+      data: bundles,
+      timestamp: Date.now()
+    };
+    
+    res.setHeader('Cache-Control', 'public, max-age=300'); // 5 minutes
     res.json({ success: true, bundles });
   } catch (e: any) {
     console.error('Error fetching bundles', e);
