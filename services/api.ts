@@ -277,6 +277,60 @@ export const giftService = {
     return response.data;
   },
 
+  calculateCustomGiftFees: async (amountUSD: number): Promise<{
+    success: boolean;
+    feeBreakdown: any;
+    onrampAmount: number;
+  }> => {
+    const response = await apiClient.post('/gifts/calculate-fees', { amountUSD });
+    return response.data;
+  },
+
+  initiateCustomGift: async (data: {
+    recipientEmail: string;
+    amountUSD: number;
+    message?: string;
+  }): Promise<{
+    success: boolean;
+    giftId: string;
+    onrampAmount: number;
+    breakdown: {
+      baseAmount: number;
+      serviceFee: number;
+      cardFee: number;
+      ataBuffer: number;
+      slippageBuffer: number;
+      total: number;
+    };
+    feeBreakdown: any;
+  }> => {
+    const response = await apiClient.post('/gifts/initiate', data);
+    return response.data;
+  },
+
+  pollCustomGiftStatus: async (giftId: string): Promise<{
+    success: boolean;
+    onrampStatus: string;
+    status: string;
+    message: string;
+  }> => {
+    const response = await apiClient.get(`/gifts/poll/${giftId}`);
+    return response.data;
+  },
+
+  completeCustomGift: async (giftId: string): Promise<{
+    success: boolean;
+    giftId: string;
+    tiplinkRefId: string;
+    tiplinkPublicKey: string;
+    transaction: string;
+    solAmount: number;
+    solAmountLamports: number;
+  }> => {
+    const response = await apiClient.post(`/gifts/${giftId}/complete`);
+    return response.data;
+  },
+
   claimGift: async (giftId: string, claimData: { 
     recipient_did: string; 
     recipient_wallet: string;
@@ -360,6 +414,14 @@ export const bundleService = {
       };
     }
     throw new Error('Failed to calculate bundle');
+  },
+
+  calculateBundleFees: async (bundleId: string, includeCard: boolean = false): Promise<any> => {
+    const response = await apiClient.get(`/bundles/${bundleId}/fees?includeCard=${includeCard}&paymentMethod=moonpay`);
+    if (response.data.success) {
+      return response.data;
+    }
+    throw new Error('Failed to calculate bundle fees');
   },
 
   createBundleGift: async (giftData: {

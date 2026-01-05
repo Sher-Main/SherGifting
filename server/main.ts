@@ -1423,6 +1423,386 @@ app.post('/api/gifts/create', authenticateToken, async (req: AuthRequest, res) =
   }
 });
 
+/**
+ * POST /api/gifts/calculate-fees
+ * Calculate fees for a custom SOL gift without creating a gift record
+ * Used for displaying fees before user confirms
+ */
+app.post('/api/gifts/calculate-fees', async (req, res) => {
+  try {
+    const { amountUSD } = req.body;
+
+    if (!amountUSD || amountUSD <= 0) {
+      return res.status(400).json({ success: false, error: 'Missing or invalid amountUSD' });
+    }
+
+    // Calculate fees using dynamic fee calculator
+    const { DynamicFeeCalculator } = await import('./services/dynamicFeeCalculator');
+    const dynamicCalculator = new DynamicFeeCalculator(pool!);
+    const fees = await dynamicCalculator.calculateCustomSOLFees(
+      amountUSD,
+      'moonpay' // Use moonpay to include payment processing fee
+    );
+
+    res.json({
+      success: true,
+      feeBreakdown: fees,
+      onrampAmount: fees.totalCostUSD,
+    });
+  } catch (error: any) {
+    console.error('Error calculating fees:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/gifts/initiate
+ * Initiate a custom SOL gift - calculate fees and create pending gift record
+ * Similar to bundle initiation, but for custom SOL amounts
+ */
+app.post('/api/gifts/initiate', authenticateToken, async (req: AuthRequest, res) => {
+  const client = await pool!.connect();
+  try {
+    const { recipientEmail, amountUSD, message } = req.body;
+    const privyUser = req.user;
+    const privyUserId = req.userId || privyUser?.id;
+
+    if (!privyUser || !privyUserId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    if (!recipientEmail || !amountUSD || amountUSD <= 0) {
+      return res.status(400).json({ success: false, error: 'Missing required fields: recipientEmail and amountUSD' });
+    }
+
+    // Get user from database
+    let dbUser = null;
+    let privyDid = privyUserId;
+    if (!privyUserId.startsWith('did:privy:')) {
+      privyDid = `did:privy:${privyUserId}`;
+    }
+    dbUser = await getUserByPrivyDid(privyDid);
+    if (!dbUser && privyDid.startsWith('did:privy:')) {
+      const altPrivyDid = privyDid.replace('did:privy:', '');
+      dbUser = await getUserByPrivyDid(altPrivyDid);
+      if (dbUser) {
+        privyDid = dbUser.privy_did;
+      }
+    }
+    if (!dbUser) {
+      privyDid = privyUserId.startsWith('did:privy:') ? privyUserId : `did:privy:${privyUserId}`;
+    } else {
+      privyDid = dbUser.privy_did;
+    }
+
+    const senderEmail = dbUser?.email || privyUser.email?.address || privyUser.linkedAccounts?.find((acc: any) => acc.type === 'email')?.address || null;
+    if (!senderEmail) {
+      return res.status(400).json({ success: false, error: 'User email not found' });
+    }
+
+    // Calculate fees using dynamic fee calculator
+    const { DynamicFeeCalculator } = await import('./services/dynamicFeeCalculator');
+    const dynamicCalculator = new DynamicFeeCalculator(pool!);
+    const fees = await dynamicCalculator.calculateCustomSOLFees(
+      amountUSD,
+      'moonpay' // Use moonpay to include payment processing fee
+    );
+
+    // Create gift record with pending_payment status
+    const { v4: uuidv4 } = await import('uuid');
+    const giftId = uuidv4();
+    await client.query(
+      `INSERT INTO gifts (
+        id, sender_did, sender_email, recipient_email,
+        token_mint, token_symbol, token_decimals, amount, usd_value,
+        message, status, tiplink_url, tiplink_public_key, transaction_signature,
+        total_onramp_amount, swap_status, onramp_status, payment_method, fee_breakdown,
+        expires_at, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW())`,
+      [
+        giftId,
+        privyDid,
+        senderEmail,
+        recipientEmail,
+        'So11111111111111111111111111111111111111112', // SOL mint
+        'SOL',
+        9,
+        0, // Amount will be set when funded
+        amountUSD, // USD value
+        message || null,
+        'pending_payment',
+        'pending',
+        'pending',
+        'pending',
+        fees.totalCostUSD, // Total onramp amount including fees
+        'completed', // No swaps needed for SOL
+        'pending',
+        'moonpay',
+        JSON.stringify(fees),
+        new Date(Date.now() + 48 * 60 * 60 * 1000), // 48 hours
+      ]
+    );
+
+    res.json({
+      success: true,
+      giftId,
+      onrampAmount: fees.totalCostUSD,
+      breakdown: {
+        baseAmount: fees.baseValueUSD,
+        serviceFee: fees.moonpayFeeUSD,
+        cardFee: 0, // No card for custom SOL
+        ataBuffer: fees.details.ataCostUSD,
+        slippageBuffer: 0, // No swaps for SOL
+        total: fees.totalCostUSD,
+      },
+      feeBreakdown: fees,
+    });
+  } catch (error: any) {
+    console.error('Error initiating custom SOL gift:', error);
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * GET /api/gifts/poll/:giftId
+ * Poll custom SOL gift status (onramp_status)
+ */
+app.get('/api/gifts/poll/:giftId', authenticateToken, async (req: AuthRequest, res) => {
+  const client = await pool!.connect();
+  try {
+    const { giftId } = req.params;
+    const privyUser = req.user;
+    const privyUserId = req.userId || privyUser?.id;
+
+    if (!privyUser || !privyUserId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    // Normalize Privy ID format
+    let privyDid = privyUserId;
+    if (!privyUserId.startsWith('did:privy:')) {
+      privyDid = `did:privy:${privyUserId}`;
+    }
+
+    const giftRes = await client.query(
+      `SELECT onramp_status, status, token_mint FROM gifts WHERE id = $1 AND sender_did = $2`,
+      [giftId, privyDid]
+    );
+
+    if (!giftRes.rows.length) {
+      return res.status(404).json({ success: false, error: 'Gift not found' });
+    }
+
+    const gift = giftRes.rows[0];
+
+    res.json({
+      success: true,
+      onrampStatus: gift.onramp_status,
+      status: gift.status,
+      message: gift.status === 'SENT' ? 'Gift sent successfully!' : 
+               gift.onramp_status === 'completed' ? 'Payment confirmed! Processing gift...' :
+               gift.onramp_status === 'pending' ? 'Waiting for payment...' : 'Processing...',
+    });
+  } catch (error: any) {
+    console.error('Polling error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * POST /api/gifts/:giftId/complete
+ * Complete custom SOL gift after onramp payment is detected
+ * Creates TipLink, transfers SOL, and marks gift as sent
+ */
+app.post('/api/gifts/:giftId/complete', authenticateToken, async (req: AuthRequest, res) => {
+  const client = await pool!.connect();
+  try {
+    const { giftId } = req.params;
+    const privyUser = req.user;
+    const privyUserId = req.userId || privyUser?.id;
+
+    if (!privyUser || !privyUserId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    // Normalize Privy ID format
+    let privyDid = privyUserId;
+    if (!privyUserId.startsWith('did:privy:')) {
+      privyDid = `did:privy:${privyUserId}`;
+    }
+
+    // Get gift details
+    const giftRes = await client.query(
+      `SELECT id, sender_did, recipient_email, usd_value, message, token_mint, total_onramp_amount
+       FROM gifts WHERE id = $1 AND sender_did = $2 AND status = 'pending_payment'`,
+      [giftId, privyDid]
+    );
+
+    if (!giftRes.rows.length) {
+      return res.status(404).json({ success: false, error: 'Gift not found or already processed' });
+    }
+
+    const gift = giftRes.rows[0];
+    const { recipient_email, usd_value, message } = gift;
+
+    // Get user wallet address
+    const userRes = await client.query(
+      `SELECT wallet_address FROM users WHERE privy_did = $1`,
+      [privyDid]
+    );
+
+    if (!userRes.rows.length) {
+      return res.status(404).json({ success: false, error: 'User wallet not found' });
+    }
+
+    const userWalletAddress = userRes.rows[0].wallet_address;
+
+    // Get SOL price to convert USD to SOL
+    const { JupiterService } = await import('./services/jupiterService');
+    const jupiterService = new JupiterService(connection);
+    const solPrice = await jupiterService.getTokenPrice('So11111111111111111111111111111111111111112');
+    
+    if (!solPrice || solPrice <= 0) {
+      throw new Error('Failed to fetch SOL price');
+    }
+
+    const solAmount = usd_value / solPrice;
+
+    // Create TipLink
+    const ENCRYPTION_KEY = process.env.TIPLINK_ENCRYPTION_KEY;
+    if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length < 32) {
+      throw new Error('TIPLINK_ENCRYPTION_KEY not set or too short');
+    }
+
+    const tipLink = await TipLink.create();
+    const encryptedKeypair = encryptTipLink(
+      JSON.stringify(Array.from(tipLink.keypair.secretKey)),
+      ENCRYPTION_KEY
+    );
+    const tiplinkPublicKey = tipLink.keypair.publicKey.toBase58();
+    const tiplinkRefId = generateSecureToken();
+
+    // Store TipLink in database
+    await client.query(
+      `INSERT INTO tiplinks (ref_id, public_key, keypair_encrypted, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (ref_id) DO NOTHING`,
+      [tiplinkRefId, tiplinkPublicKey, encryptedKeypair]
+    );
+
+    // Transfer SOL to TipLink
+    const { PublicKey, LAMPORTS_PER_SOL } = await import('@solana/web3.js');
+    const userPubkey = new PublicKey(userWalletAddress);
+    const tipLinkPubkey = new PublicKey(tiplinkPublicKey);
+    const solAmountLamports = Math.round(solAmount * LAMPORTS_PER_SOL);
+
+    const transaction = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: userPubkey,
+        toPubkey: tipLinkPubkey,
+        lamports: solAmountLamports,
+      })
+    );
+
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = userPubkey;
+    if (lastValidBlockHeight) {
+      transaction.lastValidBlockHeight = lastValidBlockHeight;
+    }
+
+    // Note: For onramp flow, the user's wallet should already have SOL from onramp
+    // But we can't sign here - the frontend will need to sign and send this transaction
+    // For now, we'll store the transaction details and let frontend handle it
+    
+    // Update gift with TipLink details (but keep status as pending_payment until funding is confirmed)
+    await client.query(
+      `UPDATE gifts 
+       SET tiplink_url = $1, tiplink_public_key = $2, onramp_status = 'completed'
+       WHERE id = $3`,
+      [tipLink.url.toString(), tiplinkPublicKey, giftId]
+    );
+
+    // Return transaction details for frontend to sign
+    const serializedTransaction = transaction.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false,
+    });
+
+    res.json({
+      success: true,
+      giftId,
+      tiplinkRefId,
+      tiplinkPublicKey,
+      transaction: Buffer.from(serializedTransaction).toString('base64'),
+      solAmount,
+      solAmountLamports,
+    });
+  } catch (error: any) {
+    console.error('Error completing custom SOL gift:', error);
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * POST /api/gifts/:giftId/update-funding
+ * Update gift with funding transaction signature
+ */
+app.post('/api/gifts/:giftId/update-funding', authenticateToken, async (req: AuthRequest, res) => {
+  const client = await pool!.connect();
+  try {
+    const { giftId } = req.params;
+    const { funding_signature, tiplink_ref_id, tiplink_public_key } = req.body;
+    const privyUser = req.user;
+    const privyUserId = req.userId || privyUser?.id;
+
+    if (!privyUser || !privyUserId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    // Normalize Privy ID format
+    let privyDid = privyUserId;
+    if (!privyUserId.startsWith('did:privy:')) {
+      privyDid = `did:privy:${privyUserId}`;
+    }
+
+    // Verify the funding transaction
+    const tx = await connection.getTransaction(funding_signature, {
+      maxSupportedTransactionVersion: 0,
+      commitment: 'confirmed'
+    });
+
+    if (!tx || !tx.meta) {
+      return res.status(400).json({ success: false, error: 'Funding transaction not found or not confirmed' });
+    }
+
+    if (tx.meta.err) {
+      return res.status(400).json({ success: false, error: 'Funding transaction failed on-chain' });
+    }
+
+    // Update gift with funding signature and mark as sent
+    await client.query(
+      `UPDATE gifts 
+       SET transaction_signature = $1, status = 'SENT', onramp_status = 'completed'
+       WHERE id = $2 AND sender_did = $3`,
+      [funding_signature, giftId, privyDid]
+    );
+
+    res.json({ success: true, giftId });
+  } catch (error: any) {
+    console.error('Error updating funding:', error);
+    res.status(500).json({ success: false, error: error.message });
+  } finally {
+    client.release();
+  }
+});
+
 // Create bundle gift endpoint - Frontend funds TipLink, backend creates record
 app.post('/api/gifts/bundle', authenticateToken, async (req: AuthRequest, res) => {
   const client = await pool!.connect();

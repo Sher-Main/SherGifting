@@ -42,8 +42,8 @@ export const AmountStep: React.FC<AmountStepProps> = ({
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-3xl font-bold mb-2 text-white">How much {selectedToken}?</h2>
-        <p className="text-slate-400">Choose a preset amount or enter your own</p>
+        <h2 className="text-3xl font-bold mb-2 text-white">What should be the gift size?</h2>
+        <p className="text-slate-400">Enter the amount in USD (US Dollars)</p>
       </div>
       
       {/* Preset amounts */}
@@ -86,7 +86,7 @@ export const AmountStep: React.FC<AmountStepProps> = ({
         <div className="bg-sky-500/10 border-2 border-sky-500 rounded-lg p-4 text-center">
           <p className="text-sm text-slate-400 mb-1">You're sending</p>
           <p className="text-3xl font-bold text-sky-400">
-            ${amount.toLocaleString()} {selectedToken}
+            ${amount.toLocaleString()} USD
           </p>
         </div>
       )}

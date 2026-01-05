@@ -183,5 +183,109 @@ export class DynamicFeeCalculator {
       client.release();
     }
   }
+
+  /**
+   * Calculate fees for a custom SOL gift
+   * For custom SOL gifts, we need:
+   * - Base amount (gift value)
+   * - TipLink ATA (1 ATA for SOL)
+   * - Recipient ATA (1 ATA for SOL, if needed)
+   * - Transaction fees (TipLink creation + claim)
+   * - MoonPay fee (if using onramp)
+   */
+  async calculateCustomSOLFees(
+    baseValueUSD: number,
+    paymentMethod: 'wallet' | 'moonpay' = 'moonpay'
+  ): Promise<DynamicFeeBreakdown> {
+    try {
+      // Fetch current SOL price
+      const solPriceUSD = await getSOLPrice();
+      
+      if (solPriceUSD === 0) {
+        throw new Error('Failed to fetch SOL price');
+      }
+
+      // For custom SOL gifts:
+      // - TipLink needs 1 ATA (for SOL itself, but SOL is native so no ATA needed)
+      // - Actually, for native SOL, no ATA is needed for the token itself
+      // - But we need SOL for transaction fees
+      // - Recipient might need ATA if they don't have one (but for SOL, it's native, so no ATA)
+      // - However, we still need to reserve SOL for transaction fees
+      
+      // Calculate ATA costs:
+      // - TipLink: 0 (SOL is native, no ATA needed)
+      // - Recipient: 0 (SOL is native, no ATA needed)
+      // - But we need SOL buffer for transaction fees and potential edge cases
+      const tiplinkATAs = 0; // SOL is native
+      const recipientATAs = 0; // SOL is native
+      // However, we should reserve some SOL for transaction fees
+      // Base transaction: TipLink creation + claim transaction
+      const baseTxsLamports = BASE_TX_FEE_LAMPORTS * 2; // TipLink creation + claim
+      // Reserve SOL for transaction fees (base fee + priority fee buffer)
+      const txFeeReserveLamports = BASE_TX_FEE_LAMPORTS + PRIORITY_FEE_OTHER_LAMPORTS;
+      // Total network fees (just transaction fees, no ATA costs for native SOL)
+      const networkFeeLamports = baseTxsLamports + txFeeReserveLamports;
+      const networkFeeSOL = networkFeeLamports / LAMPORTS_PER_SOL;
+      const networkFeeUSD = networkFeeSOL * solPriceUSD;
+      
+      // MoonPay fee (percentage of base value + network fee)
+      const moonpayFeeBase = baseValueUSD + networkFeeUSD;
+      const moonpayFeeUSD = paymentMethod === 'moonpay' ? moonpayFeeBase * MOONPAY_FEE_PERCENT : 0;
+      const moonpayFeeSOL = moonpayFeeUSD / solPriceUSD;
+      const moonpayFeeLamports = Math.floor(moonpayFeeSOL * LAMPORTS_PER_SOL);
+      
+      // Base value conversions
+      const baseValueSOL = baseValueUSD / solPriceUSD;
+      const baseValueLamports = Math.floor(baseValueSOL * LAMPORTS_PER_SOL);
+      
+      // Total costs
+      const totalCostUSD = baseValueUSD + moonpayFeeUSD + networkFeeUSD;
+      const totalCostSOL = totalCostUSD / solPriceUSD;
+      const totalCostLamports = Math.floor(totalCostSOL * LAMPORTS_PER_SOL);
+      
+      // Overhead percentage
+      const overheadPercent = ((moonpayFeeUSD + networkFeeUSD) / baseValueUSD) * 100;
+      
+      return {
+        // USD
+        baseValueUSD: parseFloat(baseValueUSD.toFixed(2)),
+        moonpayFeeUSD: parseFloat(moonpayFeeUSD.toFixed(2)),
+        networkFeeUSD: parseFloat(networkFeeUSD.toFixed(2)),
+        totalCostUSD: parseFloat(totalCostUSD.toFixed(2)),
+        overheadPercent: parseFloat(overheadPercent.toFixed(1)),
+        
+        // SOL
+        baseValueSOL: parseFloat(baseValueSOL.toFixed(6)),
+        moonpayFeeSOL: parseFloat(moonpayFeeSOL.toFixed(6)),
+        networkFeeSOL: parseFloat(networkFeeSOL.toFixed(6)),
+        totalCostSOL: parseFloat(totalCostSOL.toFixed(6)),
+        
+        // Lamports
+        baseValueLamports,
+        moonpayFeeLamports,
+        networkFeeLamports,
+        totalCostLamports,
+        
+        // Details
+        details: {
+          solPriceUSD: parseFloat(solPriceUSD.toFixed(2)),
+          ataCount: 0, // No ATA needed for native SOL
+          ataCostLamports: 0,
+          ataCostSOL: 0,
+          ataCostUSD: 0,
+          swapCount: 0, // No swaps for custom SOL
+          swapFeesLamports: 0,
+          swapFeesSOL: 0,
+          swapFeesUSD: 0,
+          dexFeeUSD: 0,
+          dexFeeLamports: 0,
+          baseTxsLamports
+        }
+      };
+    } catch (error) {
+      console.error('Error calculating custom SOL fees:', error);
+      throw error;
+    }
+  }
 }
 

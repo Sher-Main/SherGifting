@@ -1,5 +1,6 @@
 import React from 'react';
 import { GiftFlowStep } from '../../pages/SendGiftPage';
+import { loadPendingGift } from '../../lib/giftStore';
 
 interface ProgressBarProps {
   currentStep: GiftFlowStep;
@@ -14,11 +15,20 @@ const steps: { key: GiftFlowStep; label: string }[] = [
 ];
 
 export const ProgressBar: React.FC<ProgressBarProps> = ({ currentStep }) => {
-  const currentIndex = steps.findIndex(s => s.key === currentStep);
+  // Check if bundle is selected to hide token/amount steps
+  const pending = loadPendingGift();
+  const hasBundle = !!pending?.bundle;
+  
+  // Filter out token and amount steps if bundle is selected
+  const visibleSteps = hasBundle 
+    ? steps.filter(s => s.key !== 'token' && s.key !== 'amount')
+    : steps;
+  
+  const currentIndex = visibleSteps.findIndex(s => s.key === currentStep);
   
   return (
     <div className="flex items-center justify-between">
-      {steps.map((step, index) => {
+      {visibleSteps.map((step, index) => {
         const isCompleted = index < currentIndex;
         const isCurrent = index === currentIndex;
         

@@ -65,11 +65,80 @@ export const BundleGiftPage: React.FC = () => {
       setOnrampAmount(response.onrampAmount);
       setBreakdown(response.breakdown);
 
-      // Step 2: Open Privy onramp popup
+      // Step 2: Convert USD to SOL and prepare for onramp
       setCurrentStep('waiting_payment');
-      await fundWallet({
-        address: walletAddress,
-      });
+      
+      console.log('💰 Onramp amount (USD):', response.onrampAmount);
+      
+      // Fetch SOL price to convert USD to SOL
+      let solAmount = 0;
+      try {
+        const solPriceResponse = await priceService.getTokenPrice('So11111111111111111111111111111111111111112');
+        const solPrice = solPriceResponse?.price || 150; // Fallback to $150 if fetch fails
+        solAmount = response.onrampAmount / solPrice;
+        console.log(`💰 Onramp amount (SOL): ${solAmount.toFixed(6)} SOL (at $${solPrice.toFixed(2)}/SOL)`);
+      } catch (priceError) {
+        console.warn('Failed to fetch SOL price, using estimate:', priceError);
+        const estimatedSolPrice = 150;
+        solAmount = response.onrampAmount / estimatedSolPrice;
+      }
+      
+      // Store both USD and SOL amounts in localStorage
+      localStorage.setItem('sher_onramp_amount_usd', response.onrampAmount.toString());
+      localStorage.setItem('sher_onramp_amount_sol', solAmount.toString());
+      
+      // Show user the amount they need to enter
+      const amountMessage = `Please enter $${response.onrampAmount.toFixed(2)} USD (≈ ${solAmount.toFixed(6)} SOL) in the onramp widget.`;
+      console.log('📝 User instruction:', amountMessage);
+      
+      // Open Privy onramp popup - try multiple formats
+      try {
+        // Try with SOL amount (as number)
+        await fundWallet({
+          address: walletAddress,
+          amount: solAmount,
+        } as any);
+        console.log('✅ Opened with SOL amount (number format)');
+      } catch (error1: any) {
+        console.warn('Format 1 (SOL number) failed, trying format 2:', error1);
+        try {
+          // Try with SOL amount (as string)
+          await fundWallet({
+            address: walletAddress,
+            amount: solAmount.toString(),
+          } as any);
+          console.log('✅ Opened with SOL amount (string format)');
+        } catch (error2: any) {
+          console.warn('Format 2 (SOL string) failed, trying format 3:', error2);
+          try {
+            // Try with USD amount (as number)
+            await fundWallet({
+              address: walletAddress,
+              amount: response.onrampAmount,
+              defaultAmount: response.onrampAmount,
+            } as any);
+            console.log('✅ Opened with USD amount (number format)');
+          } catch (error3: any) {
+            console.warn('Format 3 (USD number) failed, trying format 4:', error3);
+            try {
+              // Try with USD amount (as string)
+              await fundWallet({
+                address: walletAddress,
+                amount: response.onrampAmount.toString(),
+                defaultAmount: response.onrampAmount,
+              } as any);
+              console.log('✅ Opened with USD amount (string format)');
+            } catch (error4: any) {
+              console.warn('All amount formats failed, opening without amount:', error4);
+              // Final fallback: open without amount parameter
+              await fundWallet({
+                address: walletAddress,
+              });
+              console.log('⚠️ Opened without amount - user must enter manually');
+            }
+          }
+        }
+      }
 
       // Step 3: Start polling for SOL arrival
       startBalancePolling(response.giftId, walletAddress, response.onrampAmount);

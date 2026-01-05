@@ -34,7 +34,7 @@ export const PreviewModal: React.FC<PreviewModalProps> = ({
         <div className="flex justify-between items-center">
           <span className="text-slate-400">Amount:</span>
           <span className="font-bold text-2xl text-sky-400">
-            ${giftData.amount} {giftData.token}
+            ${giftData.amount.toLocaleString()} USD
           </span>
         </div>
         

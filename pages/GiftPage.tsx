@@ -874,7 +874,7 @@ const GiftPage: React.FC = () => {
         return;
     };
 
-    const handleBundlePayment = async (paymentMethod: 'wallet' | 'moonpay') => {
+    const handleBundlePayment = async (paymentMethod: 'wallet' | 'moonpay', onrampAmountFromModal?: number) => {
         if (!selectedBundle || !bundleCalculation) return;
         
         setShowBundlePreview(false);
@@ -888,7 +888,7 @@ const GiftPage: React.FC = () => {
             // MoonPay/onramp payment flow - open Privy onramp popup
             // handleBundleOnramp manages its own state (setIsSending, setIsOnramping)
             try {
-                await handleBundleOnramp(recipientEmailValue, messageValue);
+                await handleBundleOnramp(recipientEmailValue, messageValue, onrampAmountFromModal);
             } catch (error: any) {
                 console.error('Error processing bundle payment:', error);
                 setError(error.message || 'Failed to process payment');
@@ -942,7 +942,7 @@ const GiftPage: React.FC = () => {
         }
     };
 
-    const handleBundleOnramp = async (recipientEmailValue: string, messageValue: string) => {
+    const handleBundleOnramp = async (recipientEmailValue: string, messageValue: string, expectedOnrampAmount?: number) => {
         if (!selectedBundle || !bundleCalculation) return;
         
         setIsSending(true);
@@ -974,19 +974,87 @@ const GiftPage: React.FC = () => {
             });
 
             setBundleGiftId(initiateResponse.giftId);
-            setOnrampAmount(initiateResponse.onrampAmount);
+            const finalOnrampAmount = initiateResponse.onrampAmount;
+            setOnrampAmount(finalOnrampAmount);
 
-            // Step 2: Open Privy onramp popup
+            // Verify the amount matches what was shown in the modal (within 1% tolerance)
+            if (expectedOnrampAmount && Math.abs(finalOnrampAmount - expectedOnrampAmount) / expectedOnrampAmount > 0.01) {
+                console.warn(`⚠️ Onramp amount mismatch: expected ${expectedOnrampAmount}, got ${finalOnrampAmount}. Using calculated amount.`);
+            }
+
+            // Step 2: Convert USD to SOL and prepare for onramp
             console.log('🚀 Opening Privy funding flow for bundle gift...');
-            console.log('💰 Onramp amount:', initiateResponse.onrampAmount);
+            console.log('💰 Onramp amount (USD):', finalOnrampAmount);
             
-            // Open Privy onramp popup - Privy will handle the onramp flow
-            // Note: Privy's fundWallet may not support pre-filling amount, but the popup will open
-            await fundWallet({
-                address: walletAddress,
-                // If Privy supports amount parameter in the future, we can add it here
-                // amount: initiateResponse.onrampAmount,
-            });
+            // Fetch SOL price to convert USD to SOL
+            let solAmount = 0;
+            try {
+                const solPriceResponse = await priceService.getTokenPrice('So11111111111111111111111111111111111111112');
+                const solPrice = solPriceResponse?.price || 150; // Fallback to $150 if fetch fails
+                solAmount = finalOnrampAmount / solPrice;
+                console.log(`💰 Onramp amount (SOL): ${solAmount.toFixed(6)} SOL (at $${solPrice.toFixed(2)}/SOL)`);
+            } catch (priceError) {
+                console.warn('Failed to fetch SOL price, using estimate:', priceError);
+                const estimatedSolPrice = 150;
+                solAmount = finalOnrampAmount / estimatedSolPrice;
+            }
+            
+            // Store both USD and SOL amounts in localStorage
+            localStorage.setItem('sher_onramp_amount_usd', finalOnrampAmount.toString());
+            localStorage.setItem('sher_onramp_amount_sol', solAmount.toString());
+            
+            // Show user the amount they need to enter (in a clear way)
+            const amountMessage = `Please enter $${finalOnrampAmount.toFixed(2)} USD (≈ ${solAmount.toFixed(6)} SOL) in the onramp widget.`;
+            console.log('📝 User instruction:', amountMessage);
+            
+            // Open Privy onramp popup - try multiple formats
+            try {
+                // Try with SOL amount (as number)
+                await fundWallet({
+                    address: walletAddress,
+                    amount: solAmount,
+                } as any);
+                console.log('✅ Opened with SOL amount (number format)');
+            } catch (error1: any) {
+                console.warn('Format 1 (SOL number) failed, trying format 2:', error1);
+                try {
+                    // Try with SOL amount (as string)
+                    await fundWallet({
+                        address: walletAddress,
+                        amount: solAmount.toString(),
+                    } as any);
+                    console.log('✅ Opened with SOL amount (string format)');
+                } catch (error2: any) {
+                    console.warn('Format 2 (SOL string) failed, trying format 3:', error2);
+                    try {
+                        // Try with USD amount (as number)
+                        await fundWallet({
+                            address: walletAddress,
+                            amount: finalOnrampAmount,
+                            defaultAmount: finalOnrampAmount,
+                        } as any);
+                        console.log('✅ Opened with USD amount (number format)');
+                    } catch (error3: any) {
+                        console.warn('Format 3 (USD number) failed, trying format 4:', error3);
+                        try {
+                            // Try with USD amount (as string)
+                            await fundWallet({
+                                address: walletAddress,
+                                amount: finalOnrampAmount.toString(),
+                                defaultAmount: finalOnrampAmount,
+                            } as any);
+                            console.log('✅ Opened with USD amount (string format)');
+                        } catch (error4: any) {
+                            console.warn('All amount formats failed, opening without amount:', error4);
+                            // Final fallback: open without amount parameter
+                            await fundWallet({
+                                address: walletAddress,
+                            });
+                            console.log('⚠️ Opened without amount - user must enter manually');
+                        }
+                    }
+                }
+            }
 
             console.log('✅ Funding modal opened - starting polling for transaction...');
 

@@ -11,7 +11,7 @@ interface BundlePreviewModalProps {
   recipientLabel: string;
   message?: string;
   includeCard: boolean;
-  onConfirm: (paymentMethod: 'wallet' | 'moonpay') => void;
+  onConfirm: (paymentMethod: 'wallet' | 'moonpay', onrampAmount?: number) => void;
   onCancel: () => void;
 }
 
@@ -78,6 +78,7 @@ export const BundlePreviewModal: React.FC<BundlePreviewModalProps> = ({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [feesLoading, setFeesLoading] = useState(true);
 
   useEffect(() => {
     fetchFeeBreakdown();
@@ -94,6 +95,7 @@ export const BundlePreviewModal: React.FC<BundlePreviewModalProps> = ({
   }, [bundle.id, includeCard]);
 
   const fetchFeeBreakdown = async () => {
+    setFeesLoading(true);
     try {
       const token = await getAccessToken();
       const response = await fetch(
@@ -107,9 +109,14 @@ export const BundlePreviewModal: React.FC<BundlePreviewModalProps> = ({
       if (response.ok) {
         const data = await response.json();
         setFeeBreakdown(data);
+      } else {
+        setError('Failed to load fee breakdown. Please try again.');
       }
     } catch (err: any) {
       console.error('Error fetching fee breakdown:', err);
+      setError('Failed to load fee breakdown. Please try again.');
+    } finally {
+      setFeesLoading(false);
     }
   };
 
@@ -134,6 +141,26 @@ export const BundlePreviewModal: React.FC<BundlePreviewModalProps> = ({
     } finally {
       setRefreshing(false);
     }
+  };
+
+  const handlePaymentMethod = (method: 'wallet' | 'moonpay') => {
+    if (method === 'wallet' && !walletBalance?.available) {
+      setError(walletBalance?.reason || 'Wallet payment not available');
+      return;
+    }
+    if (method === 'moonpay' && feesLoading) {
+      setError('Please wait for fees to load');
+      return;
+    }
+    if (method === 'moonpay' && !feeBreakdown) {
+      setError('Fee breakdown not available. Please try again.');
+      return;
+    }
+    // Pass the onramp amount from fee breakdown to ensure it's used
+    const onrampAmount = method === 'moonpay' && feeBreakdown 
+      ? (feeBreakdown.totalCostUSD || feeBreakdown.totalCost)
+      : undefined;
+    onConfirm(method, onrampAmount);
   };
 
   const checkWalletBalance = async () => {
@@ -199,14 +226,6 @@ export const BundlePreviewModal: React.FC<BundlePreviewModalProps> = ({
     }
   };
 
-  const handlePaymentMethod = (method: 'wallet' | 'moonpay') => {
-    if (method === 'wallet' && !walletBalance?.available) {
-      setError(walletBalance?.reason || 'Wallet payment not available');
-      return;
-    }
-    onConfirm(method);
-  };
-
   // Map token symbols to display names
   const getTokenDisplayName = (symbol: string): string => {
     const displayNames: Record<string, string> = {
@@ -251,8 +270,20 @@ export const BundlePreviewModal: React.FC<BundlePreviewModalProps> = ({
             </div>
           )}
 
+          {/* Fee Breakdown Loading */}
+          {feesLoading && !feeBreakdown && (
+            <div className="mb-6">
+              <div className="bg-slate-900/50 rounded-lg p-6 flex items-center justify-center">
+                <div className="flex flex-col items-center gap-3">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-400"></div>
+                  <span className="text-slate-400 text-sm">Calculating fees...</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Fee Breakdown */}
-          {feeBreakdown && (
+          {feeBreakdown && !feesLoading && (
             <div className="mb-6">
               <h3 className="text-lg font-semibold text-white mb-3">Cost Breakdown</h3>
               <div className="bg-slate-900/50 rounded-lg p-4 space-y-2">
@@ -359,14 +390,28 @@ export const BundlePreviewModal: React.FC<BundlePreviewModalProps> = ({
 
             <button
               onClick={() => handlePaymentMethod('moonpay')}
-              className="w-full py-3 px-4 rounded-lg font-semibold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white transition-all duration-200"
+              disabled={feesLoading || !feeBreakdown}
+              className={`w-full py-3 px-4 rounded-lg font-semibold transition-all duration-200 ${
+                feesLoading || !feeBreakdown
+                  ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white'
+              }`}
             >
               <div className="flex flex-col items-center">
-                <span>Pay via Card/Bank</span>
-                {feeBreakdown && (
-                  <span className="text-xs mt-1">
-                    Onramp ${(feeBreakdown.totalCostUSD || feeBreakdown.totalCost).toFixed(2)}
-                  </span>
+                {feesLoading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mb-1"></div>
+                    <span>Loading fees...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Pay via Card/Bank</span>
+                    {feeBreakdown && (
+                      <span className="text-xs mt-1">
+                        Onramp ${(feeBreakdown.totalCostUSD || feeBreakdown.totalCost).toFixed(2)}
+                      </span>
+                    )}
+                  </>
                 )}
               </div>
             </button>

@@ -18,23 +18,46 @@ export const RecipientStep: React.FC<RecipientStepProps> = ({
   const [error, setError] = useState('');
 
   const detectRecipientType = (value: string): 'username' | 'wallet' | 'email' => {
+    // Only accept emails - must have @ and .
     if (value.includes('@') && value.includes('.')) return 'email';
-    if (value.startsWith('@')) return 'username';
-    if (value.length > 32) return 'wallet'; // Solana wallet address
-    return 'username';
+    // Reject usernames starting with @
+    if (value.startsWith('@')) {
+      return 'email'; // Force to email type but will show error
+    }
+    // For wallet addresses, check length
+    if (value.length > 32) return 'wallet';
+    // Default to email (will validate)
+    return 'email';
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    
     if (!recipient.trim()) {
-      setError('Please enter a recipient');
+      setError('Please enter a recipient email');
       return;
     }
     
     const recipientType = initialRecipientType || detectRecipientType(recipient);
     
-    onNext({ 
+    // Validate email format
+    if (recipientType === 'email') {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(recipient.trim())) {
+        setError('Please enter a valid email address');
+        return;
+      }
+    }
+    
+    // Reject usernames
+    if (recipient.trim().startsWith('@')) {
+      setError('Please enter an email address, not a username');
+      return;
+    }
+
+    onNext({
       recipient: recipient.trim(),
-      recipientType 
+      recipientType: recipientType === 'email' ? 'email' : recipientType,
     });
   };
 
@@ -42,14 +65,14 @@ export const RecipientStep: React.FC<RecipientStepProps> = ({
     <div className="space-y-6">
       <div>
         <h2 className="text-3xl font-bold mb-2 text-white">Who are you sending to?</h2>
-        <p className="text-slate-400">Enter their username, email, or wallet address</p>
+        <p className="text-slate-400">Enter their email address</p>
       </div>
       
       {/* Input field */}
       <div>
         <input 
-          type="text"
-          placeholder="@username, email, or wallet address"
+          type="email"
+          placeholder="recipient@example.com"
           value={recipient}
           onChange={(e) => {
             setRecipient(e.target.value);
@@ -64,22 +87,6 @@ export const RecipientStep: React.FC<RecipientStepProps> = ({
           autoFocus
         />
         {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
-      </div>
-      
-      {/* Quick select contacts (optional) */}
-      <div>
-        <p className="text-sm text-slate-500 mb-3">Or choose from recent:</p>
-        <div className="grid grid-cols-3 gap-3">
-          {['@john', '@sarah', '@alex'].map(contact => (
-            <button
-              key={contact}
-              onClick={() => setRecipient(contact)}
-              className="px-4 py-2 border-2 border-slate-600 rounded-lg hover:border-sky-500 transition text-slate-300"
-            >
-              {contact}
-            </button>
-          ))}
-        </div>
       </div>
       
       {/* Next button */}
