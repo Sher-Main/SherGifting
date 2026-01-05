@@ -24,17 +24,35 @@ export const SendGiftPage: React.FC = () => {
     const pending = loadPendingGift();
     if (pending) {
       setGiftData(pending);
-      // Determine which step to show based on what's filled
-      if (pending.recipient && pending.token && pending.amount) {
-        if (pending.message !== undefined) {
+      // If bundle is already selected, skip token step
+      if (pending.bundle) {
+        // Bundle selected from home page - skip token and amount steps
+        if (pending.recipient && pending.message !== undefined) {
           setStep('preview');
-        } else {
+        } else if (pending.recipient) {
           setStep('message');
+        } else {
+          setStep('recipient');
         }
-      } else if (pending.recipient && pending.token) {
-        setStep('amount');
-      } else if (pending.recipient) {
-        setStep('token');
+      } else {
+        // No bundle - normal flow (user clicked "Send Gift" button)
+        if (pending.recipient && pending.token && pending.amount && pending.token === 'SOL') {
+          // Custom SOL amount selected
+          if (pending.message !== undefined) {
+            setStep('preview');
+          } else {
+            setStep('message');
+          }
+        } else if (pending.recipient && pending.token && pending.token === 'SOL') {
+          // Custom SOL selected but no amount yet
+          setStep('amount');
+        } else if (pending.recipient && pending.token) {
+          // Other token selected
+          setStep('amount');
+        } else if (pending.recipient) {
+          // Show token step to allow bundle or custom selection
+          setStep('token');
+        }
       }
     }
   }, []);
@@ -49,14 +67,28 @@ export const SendGiftPage: React.FC = () => {
       savePendingGift({
         recipient: updatedData.recipient!,
         recipientType: updatedData.recipientType!,
-        token: '',
-        amount: 0,
+        token: updatedData.bundle ? updatedData.bundle.id : '',
+        amount: updatedData.bundle ? updatedData.bundle.totalUsdValue : 0,
+        bundle: updatedData.bundle,
         message: undefined,
       });
-      setStep('token');
+      // If bundle is selected, skip token and amount steps
+      if (updatedData.bundle) {
+        setStep('message');
+      } else {
+        setStep('token');
+      }
     } else if (step === 'token') {
       updatePendingGift({ token: updatedData.token!, bundle: updatedData.bundle });
-      setStep('amount');
+      // If bundle is selected, skip amount step
+      if (updatedData.bundle) {
+        setStep('message');
+      } else if (updatedData.token === 'SOL') {
+        // Custom SOL selected - go to amount step
+        setStep('amount');
+      } else {
+        setStep('amount');
+      }
     } else if (step === 'amount') {
       updatePendingGift({ amount: updatedData.amount! });
       setStep('message');
@@ -68,10 +100,20 @@ export const SendGiftPage: React.FC = () => {
 
   // Go back to previous step
   const handleBack = () => {
-    if (step === 'preview') setStep('message');
-    else if (step === 'message') setStep('amount');
-    else if (step === 'amount') setStep('token');
-    else if (step === 'token') setStep('recipient');
+    if (step === 'preview') {
+      setStep('message');
+    } else if (step === 'message') {
+      // If bundle is selected, skip amount step
+      if (giftData.bundle) {
+        setStep('recipient');
+      } else {
+        setStep('amount');
+      }
+    } else if (step === 'amount') {
+      setStep('token');
+    } else if (step === 'token') {
+      setStep('recipient');
+    }
   };
 
   // User confirms preview - save to localStorage and redirect to auth
@@ -117,7 +159,7 @@ export const SendGiftPage: React.FC = () => {
             />
           )}
           
-          {step === 'token' && (
+          {step === 'token' && !giftData.bundle && (
             <TokenStep 
               initialValue={giftData.token}
               initialBundle={giftData.bundle}
@@ -126,7 +168,7 @@ export const SendGiftPage: React.FC = () => {
             />
           )}
           
-          {step === 'amount' && (
+          {step === 'amount' && !giftData.bundle && (
             <AmountStep 
               selectedToken={giftData.token!}
               initialValue={giftData.amount}

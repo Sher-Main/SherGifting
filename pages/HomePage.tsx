@@ -550,6 +550,7 @@ const BundleCard: React.FC<BundleCardProps> = memo(({ bundle, index }) => {
           whileTap={prefersReducedMotion ? {} : { scale: 0.98 }}
           onClick={() => {
             // Save bundle selection and navigate
+            // Clear any existing pending gift first to ensure clean state
             savePendingGift({
               recipient: '',
               recipientType: 'username',
@@ -802,6 +803,17 @@ const LandingPage: React.FC<LandingPageProps> = memo(({ bundles, bundlesLoading 
               >
                 <Link
                   to="/send"
+                  onClick={() => {
+                    // Clear any bundle selection when clicking "Send Gift" button
+                    // This ensures custom amount option is available
+                    savePendingGift({
+                      recipient: '',
+                      recipientType: 'username',
+                      token: '',
+                      amount: 0,
+                      bundle: undefined,
+                    });
+                  }}
                   className="group relative inline-block bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-400 hover:to-cyan-300 text-white px-8 py-4 md:px-10 md:py-5 rounded-xl font-bold text-lg md:text-xl transition-all duration-300 shadow-lg shadow-sky-500/30 hover:shadow-xl hover:shadow-sky-500/50 overflow-hidden"
                 >
                   <span className="relative z-10 flex items-center gap-2">
