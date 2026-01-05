@@ -5,7 +5,7 @@ import { useEffect } from 'react';
  * 
  * React hook that replaces Privy branding with Sher branding in all Privy modals.
  * Uses MutationObserver to watch for dynamically loaded Privy UI elements and
- * replaces "Protected by Privy" with "Protected by Sher" linking to https://sher.one/
+ * replaces "Protected by Privy" with "Protected by Sher" linking to https://sher-app.vercel.app/home
  */
 export function usePrivyBrandingReplacer() {
   useEffect(() => {
@@ -16,7 +16,7 @@ export function usePrivyBrandingReplacer() {
       
       if (protectedByPrivyElement) {
         // Update the link
-        protectedByPrivyElement.setAttribute('href', 'https://sher.one/');
+        protectedByPrivyElement.setAttribute('href', 'https://sher-app.vercel.app/home');
         protectedByPrivyElement.setAttribute('target', '_blank');
         protectedByPrivyElement.setAttribute('rel', 'noopener noreferrer');
         
@@ -60,7 +60,7 @@ export function usePrivyBrandingReplacer() {
               : element.closest('a') as HTMLAnchorElement;
             
             if (linkElement) {
-              linkElement.href = 'https://sher.one/';
+              linkElement.href = 'https://sher-app.vercel.app/home';
               linkElement.target = '_blank';
               linkElement.rel = 'noopener noreferrer';
               

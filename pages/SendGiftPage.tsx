@@ -154,7 +154,7 @@ export const SendGiftPage: React.FC = () => {
         
         {/* Security badge */}
         <div className="text-center mt-8 text-sm text-slate-500">
-          🔒 Secured by Solana blockchain
+          🔒 Secured by <a href="https://sher-app.vercel.app/home" target="_blank" rel="noopener noreferrer" className="text-sky-400 hover:text-sky-300 underline">Sher</a>
         </div>
       </div>
     </div>

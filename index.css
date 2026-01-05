@@ -2,6 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
+/* CSS Variables for Theme Colors */
+:root {
+  --color-primary: 56 189 248; /* sky-400 */
+  --color-primary-dark: 14 165 233; /* sky-500 */
+  --color-secondary: 34 211 238; /* cyan-400 */
+  --color-bg-dark: 15 23 42; /* slate-900 */
+  --color-bg-medium: 30 41 59; /* slate-800 */
+  --color-text-primary: 226 232 240; /* slate-200 */
+  --color-text-secondary: 148 163 184; /* slate-400 */
+}
+
 /* Sher Branding Replacement Styles */
 #protected-by-privy {
   color: currentColor;
@@ -18,6 +29,10 @@
 
 body {
   @apply bg-slate-900 text-slate-200 font-sans;
+  font-feature-settings: 'kern' 1, 'liga' 1;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 @keyframes scale-in {
@@ -48,6 +63,94 @@ body {
 
 .fade-in {
   animation: fadeIn 0.5s ease-out;
+}
+
+/* Shimmer animation for cards */
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer 2s infinite linear;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(255, 255, 255, 0.1) 50%,
+    transparent 100%
+  );
+  background-size: 1000px 100%;
+}
+
+/* Pulse glow animation */
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(56, 189, 248, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 40px rgba(56, 189, 248, 0.6);
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Gradient text animation */
+@keyframes gradient-text {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+.animate-gradient-text {
+  background: linear-gradient(
+    90deg,
+    rgb(56, 189, 248),
+    rgb(34, 211, 238),
+    rgb(56, 189, 248)
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: gradient-text 3s ease infinite;
+}
+
+/* Float animation */
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* Performance optimizations */
+.will-change-transform {
+  will-change: transform;
+}
+
+.will-change-opacity {
+  will-change: opacity;
+}
+
+.gpu-accelerated {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
 }
 
 /* Mobile-specific adjustments for loading tips */

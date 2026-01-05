@@ -44,7 +44,7 @@ const loadingTips: LoadingTip[] = [
   {
     emoji: '🔒',
     title: 'Secure & Safe',
-    text: 'Every gift is secured on Solana blockchain with unique claim links'
+    text: 'Every gift is secured by Sher with unique claim links'
   },
   {
     emoji: '📊',

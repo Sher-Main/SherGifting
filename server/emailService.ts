@@ -148,7 +148,7 @@ export async function sendGiftNotification(params: GiftNotificationParams): Prom
                 This gift link is secure and can only be claimed once.
               </p>
               <p style="margin: 0; color: #9ca3af; font-size: 12px;">
-                Powered by Crypto Gifting • Solana Blockchain
+                Powered by <a href="https://sher-app.vercel.app/home" style="color: #38bdf8; text-decoration: underline;">Sher</a>
               </p>
             </td>
           </tr>
@@ -173,7 +173,7 @@ Claim your gift here: ${claimUrl}
 
 This gift link is secure and can only be claimed once.
 
-Powered by Crypto Gifting • Solana Blockchain
+Powered by Sher - https://sher-app.vercel.app/home
     `.trim();
 
     console.log('📧 Attempting to send email...');

@@ -203,7 +203,7 @@ export const ConfirmGiftPage: React.FC = () => {
           
           {/* Security note */}
           <p className="text-xs text-slate-500 text-center">
-            🔒 Secured by Solana blockchain • Gas fees covered
+            🔒 Secured by <a href="https://sher-app.vercel.app/home" target="_blank" rel="noopener noreferrer" className="text-sky-400 hover:text-sky-300 underline">Sher</a> • Gas fees covered
           </p>
         </div>
       </div>
