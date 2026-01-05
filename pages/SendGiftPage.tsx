@@ -24,34 +24,40 @@ export const SendGiftPage: React.FC = () => {
     const pending = loadPendingGift();
     if (pending) {
       setGiftData(pending);
-      // If bundle is already selected, skip token step
-      if (pending.bundle) {
-        // Bundle selected from home page - skip token and amount steps
-        if (pending.recipient && pending.message !== undefined) {
-          setStep('preview');
-        } else if (pending.recipient) {
-          setStep('message');
-        } else {
-          setStep('recipient');
-        }
-      } else {
-        // No bundle - normal flow (user clicked "Send Gift" button)
-        if (pending.recipient && pending.token && pending.amount && pending.token === 'SOL') {
-          // Custom SOL amount selected
-          if (pending.message !== undefined) {
+      
+      // Check if we're coming back from /send/confirm (user might have navigated back)
+      // If so, don't restore step - let them continue from where they were
+      const currentPath = window.location.pathname;
+      if (currentPath === '/send') {
+        // If bundle is already selected, skip token step
+        if (pending.bundle) {
+          // Bundle selected from home page - skip token and amount steps
+          if (pending.recipient && pending.message !== undefined) {
             setStep('preview');
-          } else {
+          } else if (pending.recipient) {
             setStep('message');
+          } else {
+            setStep('recipient');
           }
-        } else if (pending.recipient && pending.token && pending.token === 'SOL') {
-          // Custom SOL selected but no amount yet
-          setStep('amount');
-        } else if (pending.recipient && pending.token) {
-          // Other token selected
-          setStep('amount');
-        } else if (pending.recipient) {
-          // Show token step to allow bundle or custom selection
-          setStep('token');
+        } else {
+          // No bundle - normal flow (user clicked "Send Gift" button)
+          if (pending.recipient && pending.token && pending.amount && pending.token === 'SOL') {
+            // Custom SOL amount selected
+            if (pending.message !== undefined) {
+              setStep('preview');
+            } else {
+              setStep('message');
+            }
+          } else if (pending.recipient && pending.token && pending.token === 'SOL') {
+            // Custom SOL selected but no amount yet
+            setStep('amount');
+          } else if (pending.recipient && pending.token) {
+            // Other token selected
+            setStep('amount');
+          } else if (pending.recipient) {
+            // Show token step to allow bundle or custom selection
+            setStep('token');
+          }
         }
       }
     }

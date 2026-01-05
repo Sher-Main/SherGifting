@@ -92,8 +92,8 @@ const AppContent: React.FC = () => {
             <Route path="/" element={<HomePage />} />
             {/* New progressive onboarding flow - no auth required */}
             <Route path="/send" element={<SendGiftPage />} />
-            {/* Confirmation page - auth required */}
-            <Route path="/send/confirm" element={user ? <ConfirmGiftPage /> : <Navigate to="/send" />} />
+            {/* Confirmation page - allow unauthenticated access, ConfirmGiftPage handles login */}
+            <Route path="/send/confirm" element={<ConfirmGiftPage />} />
             {/* Existing routes - keep for backward compatibility */}
             <Route path="/add-funds" element={user ? <AddFundsPage /> : <Navigate to="/login" />} />
             <Route path="/gift" element={user ? <GiftPage /> : <Navigate to="/login" />} />
