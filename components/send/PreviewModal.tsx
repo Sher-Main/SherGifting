@@ -14,6 +14,11 @@ export const PreviewModal: React.FC<PreviewModalProps> = ({
   onConfirm, 
   onBack 
 }) => {
+  // Use bundle's totalUsdValue if amount is missing or 0
+  const displayAmount = giftData.amount && giftData.amount > 0 
+    ? giftData.amount 
+    : (giftData.bundle?.totalUsdValue || 0);
+  
   return (
     <div className="space-y-6">
       <div className="text-center">
@@ -34,7 +39,7 @@ export const PreviewModal: React.FC<PreviewModalProps> = ({
         <div className="flex justify-between items-center">
           <span className="text-slate-400">Amount:</span>
           <span className="font-bold text-2xl text-sky-400">
-            ${giftData.amount.toLocaleString()} USD
+            ${displayAmount.toLocaleString()} USD
           </span>
         </div>
         

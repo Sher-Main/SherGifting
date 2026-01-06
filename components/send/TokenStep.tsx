@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { Bundle } from '../../types';
 import { bundleService } from '../../services/api';
 import { PendingGift } from '../../lib/giftStore';
+import { useAuth } from '../../context/AuthContext';
 
 interface TokenStepProps {
   initialValue?: string;
@@ -23,6 +24,7 @@ export const TokenStep: React.FC<TokenStepProps> = ({
   onNext, 
   onBack 
 }) => {
+  const { user } = useAuth();
   const [selectedToken, setSelectedToken] = useState(initialValue);
   const [selectedBundle, setSelectedBundle] = useState<Bundle | undefined>(initialBundle);
   const [bundles, setBundles] = useState<Bundle[]>([]);
@@ -111,27 +113,29 @@ export const TokenStep: React.FC<TokenStepProps> = ({
         </div>
       )}
       
-      {/* Custom SOL option */}
-      <div>
-        <p className="font-semibold mb-3 text-white">Custom Amount</p>
-        <button
-          onClick={() => handleTokenSelect('SOL')}
-          className={`
-            w-full p-4 border-2 rounded-lg transition text-left
-            ${selectedToken === 'SOL' && !selectedBundle
-              ? 'border-sky-500 bg-sky-500/10'
-              : 'border-slate-600 hover:border-sky-400'}
-          `}
-        >
-          <div className="flex items-center gap-4">
-            <div className="text-3xl">◎</div>
-            <div className="flex-1">
-              <div className="font-semibold text-white">SOL (Solana)</div>
-              <div className="text-sm text-slate-400">Send a custom amount in SOL</div>
+      {/* Custom SOL option - only show for signed-in users */}
+      {user && (
+        <div>
+          <p className="font-semibold mb-3 text-white">Custom Amount</p>
+          <button
+            onClick={() => handleTokenSelect('SOL')}
+            className={`
+              w-full p-4 border-2 rounded-lg transition text-left
+              ${selectedToken === 'SOL' && !selectedBundle
+                ? 'border-sky-500 bg-sky-500/10'
+                : 'border-slate-600 hover:border-sky-400'}
+            `}
+          >
+            <div className="flex items-center gap-4">
+              <div className="text-3xl">◎</div>
+              <div className="flex-1">
+                <div className="font-semibold text-white">SOL (Solana)</div>
+                <div className="text-sm text-slate-400">Send a custom amount in SOL</div>
+              </div>
             </div>
-          </div>
-        </button>
-      </div>
+          </button>
+        </div>
+      )}
       
       {/* Navigation */}
       <div className="flex gap-3">

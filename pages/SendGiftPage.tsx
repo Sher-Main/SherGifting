@@ -23,6 +23,12 @@ export const SendGiftPage: React.FC = () => {
   useEffect(() => {
     const pending = loadPendingGift();
     if (pending) {
+      // Ensure amount is set correctly if bundle exists
+      if (pending.bundle && (!pending.amount || pending.amount === 0)) {
+        pending.amount = pending.bundle.totalUsdValue;
+        updatePendingGift({ amount: pending.amount });
+      }
+      
       setGiftData(pending);
       
       // Check if we're coming back from /send/confirm (user might have navigated back)
@@ -85,7 +91,18 @@ export const SendGiftPage: React.FC = () => {
         setStep('token');
       }
     } else if (step === 'token') {
-      updatePendingGift({ token: updatedData.token!, bundle: updatedData.bundle });
+      // When bundle is selected, ensure amount is set to bundle's totalUsdValue
+      const amountToSave = updatedData.bundle ? updatedData.bundle.totalUsdValue : updatedData.amount || 0;
+      updatePendingGift({ 
+        token: updatedData.token!, 
+        bundle: updatedData.bundle,
+        amount: amountToSave
+      });
+      // Update local state with amount
+      if (updatedData.bundle) {
+        updatedData.amount = updatedData.bundle.totalUsdValue;
+        setGiftData(updatedData);
+      }
       // If bundle is selected, skip amount step
       if (updatedData.bundle) {
         setStep('message');
