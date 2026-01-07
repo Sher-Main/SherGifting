@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePrivy } from '@privy-io/react-auth';
 import { useSignAndSendTransaction, useWallets, useFundWallet } from '@privy-io/react-auth/solana';
@@ -33,6 +33,7 @@ export const ConfirmGiftPage: React.FC = () => {
   const [feeBreakdown, setFeeBreakdown] = useState<any>(null);
   const [feesLoading, setFeesLoading] = useState<boolean>(false);
   const [isSending, setIsSending] = useState(false);
+  const loginTriggeredRef = useRef(false);
 
   useEffect(() => {
     // Load pending gift from localStorage
@@ -115,13 +116,23 @@ export const ConfirmGiftPage: React.FC = () => {
     }
     
     // Trigger login if not authenticated
-    if (!authenticated && ready) {
+    // Only trigger once when component mounts and user is not authenticated
+    if (!authenticated && ready && !loginTriggeredRef.current) {
+      loginTriggeredRef.current = true;
+      // Call login immediately - Privy will handle showing the modal
       try {
         login();
       } catch (loginError) {
         console.error('Error triggering login:', loginError);
+        // Reset ref on error so user can retry
+        loginTriggeredRef.current = false;
         // Don't set error here - let Privy handle it
       }
+    }
+    
+    // Reset login trigger if user becomes authenticated
+    if (authenticated) {
+      loginTriggeredRef.current = false;
     }
   }, [authenticated, ready, login, navigate]);
 
@@ -488,15 +499,27 @@ export const ConfirmGiftPage: React.FC = () => {
     }
   };
 
-  // Loading state while auth happens
-  if (!ready || (!authenticated && ready)) {
+  // Loading state while Privy initializes
+  if (!ready) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center">
         <div className="text-center">
           <Spinner size="8" color="border-sky-400" />
-          <h2 className="text-2xl font-bold mb-2 mt-4 text-white">Sign in to continue</h2>
+          <h2 className="text-2xl font-bold mb-2 mt-4 text-white">Initializing...</h2>
+        </div>
+      </div>
+    );
+  }
+
+  // If authenticated but user not loaded yet, show loading
+  if (authenticated && ready && !user) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <Spinner size="8" color="border-sky-400" />
+          <h2 className="text-2xl font-bold mb-2 mt-4 text-white">Setting up your account...</h2>
           <p className="text-slate-400">
-            Almost there! Sign in to send your gift.
+            Almost there! We're preparing your account.
           </p>
         </div>
       </div>
@@ -513,6 +536,9 @@ export const ConfirmGiftPage: React.FC = () => {
       </div>
     );
   }
+
+  // Continue to render the page even when not authenticated
+  // Privy modal will overlay on top - this ensures the page is fully rendered
 
   // Show different UI based on custom gift step
   if (customGiftStep === 'waiting_payment' || customGiftStep === 'payment_confirmed' || customGiftStep === 'funding') {
@@ -756,7 +782,7 @@ export const ConfirmGiftPage: React.FC = () => {
           {/* Send button */}
           <button
             onClick={handleSendGift}
-            disabled={loading || !resolvedEmail || feesLoading}
+            disabled={loading || !resolvedEmail || feesLoading || !authenticated}
             className="w-full bg-gradient-to-r from-sky-500 to-cyan-400 text-white py-4 rounded-lg font-semibold text-lg hover:from-sky-600 hover:to-cyan-500 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed transition"
           >
             {loading ? (
