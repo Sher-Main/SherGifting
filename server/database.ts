@@ -24,8 +24,8 @@ const pool = DATABASE_URL
         : false,
       // Connection pool settings for Neon free tier
       max: 10, // Maximum number of clients in the pool
-      connectionTimeoutMillis: 10000, // Allow time for Neon cold start (10 seconds)
-      idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
+      connectionTimeoutMillis: 30000, // Increased to 30 seconds for Neon cold starts (was 10s)
+      idleTimeoutMillis: 60000, // Close idle clients after 60 seconds (increased from 30s)
       // Retry connection on error
       allowExitOnIdle: false, // Keep pool alive even when idle
     })

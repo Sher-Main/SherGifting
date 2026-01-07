@@ -57,7 +57,10 @@ export const ConfirmGiftPage: React.FC = () => {
     setGiftData(pending);
     
     // Resolve recipient email if needed
-    if (pending.recipientType === 'username') {
+    // Only resolve username if recipient actually looks like a username (starts with @)
+    // Otherwise treat as email (the new flow only supports emails)
+    if (pending.recipientType === 'username' && pending.recipient && pending.recipient.startsWith('@')) {
+      // Only try to resolve if it's actually a username format
       usernameService.resolveRecipient(pending.recipient)
         .then((result) => {
           setResolvedEmail(result.email);
@@ -66,11 +69,15 @@ export const ConfirmGiftPage: React.FC = () => {
           console.error('Failed to resolve username:', err);
           setError('Failed to resolve username. Please try again.');
         });
-    } else if (pending.recipientType === 'email') {
+    } else if (pending.recipientType === 'email' || (pending.recipient && pending.recipient.includes('@'))) {
+      // Treat as email - either explicitly set as email or contains @ symbol
+      setResolvedEmail(pending.recipient);
+    } else if (pending.recipient) {
+      // For wallet addresses or other formats, use as-is
       setResolvedEmail(pending.recipient);
     } else {
-      // For wallet addresses, we'll need to handle differently
-      setResolvedEmail(pending.recipient);
+      // No recipient yet - will be set when user completes the flow
+      setResolvedEmail('');
     }
     
     // Calculate fees immediately (before user clicks confirm)

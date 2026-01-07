@@ -7,7 +7,35 @@ export class BundleService {
       throw new Error('Database not configured');
     }
 
-    const client = await pool.connect();
+    let client;
+    let retryCount = 0;
+    const maxRetries = 2;
+    
+    while (retryCount <= maxRetries) {
+      try {
+        client = await pool.connect();
+        break; // Success, exit retry loop
+      } catch (connectError: any) {
+        // Retry on timeout or connection errors (but not on other errors)
+        if (retryCount < maxRetries && (
+          connectError?.message?.includes('timeout') || 
+          connectError?.message?.includes('Connection terminated') ||
+          connectError?.code === '57P01'
+        )) {
+          retryCount++;
+          // Wait before retry (exponential backoff: 2s, 4s)
+          await new Promise(resolve => setTimeout(resolve, 2000 * retryCount));
+          continue;
+        }
+        
+        // If we've exhausted retries or it's a non-retryable error, throw
+        throw connectError;
+      }
+    }
+    
+    if (!client) {
+      throw new Error('Failed to connect to database after retries');
+    }
     try {
       const bundlesRes = await client.query(
         `SELECT id, name, description, total_usd_value, display_order,
