@@ -7,13 +7,27 @@ if (!DATABASE_URL) {
   console.warn('⚠️ Warning: DATABASE_URL not set. Database features will be disabled.');
 }
 
-// Create a connection pool
+// Check if we should use pooler endpoint (recommended for Neon)
+// If DATABASE_URL doesn't contain '-pooler', suggest using it
+const isNeon = DATABASE_URL?.includes('neon.tech');
+const usePooler = isNeon && DATABASE_URL?.includes('-pooler');
+if (isNeon && !usePooler) {
+  console.warn('⚠️ Consider using Neon pooler endpoint (-pooler) for better connection handling');
+}
+
+// Create a connection pool with timeout handling for Neon
 const pool = DATABASE_URL
   ? new Pool({
       connectionString: DATABASE_URL,
       ssl: DATABASE_URL.includes('neon.tech') || DATABASE_URL.includes('vercel') 
         ? { rejectUnauthorized: false } 
         : false,
+      // Connection pool settings for Neon free tier
+      max: 10, // Maximum number of clients in the pool
+      connectionTimeoutMillis: 10000, // Allow time for Neon cold start (10 seconds)
+      idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
+      // Retry connection on error
+      allowExitOnIdle: false, // Keep pool alive even when idle
     })
   : null;
 
@@ -23,8 +37,11 @@ if (pool) {
     console.log('✅ Connected to PostgreSQL database');
   });
 
+  // Handle pool errors gracefully (Neon suspension, network issues, etc.)
   pool.on('error', (err) => {
-    console.error('❌ Unexpected error on idle PostgreSQL client:', err);
+    console.error('❌ Pool error (Neon likely suspended or connection dropped):', err.message);
+    // Don't crash - let the application handle it gracefully
+    // The pool will attempt to reconnect on next query
   });
 
   // Initialize database schema
@@ -36,6 +53,30 @@ if (pool) {
       console.error('❌ Error initializing database schema:', error);
     }
   })();
+
+  // Keep-alive ping to prevent Neon suspension (every 4 minutes)
+  // This keeps the Neon compute awake but counts against free tier compute hours (400 hours/month)
+  if (isNeon) {
+    const keepAliveInterval = setInterval(async () => {
+      try {
+        await pool.query('SELECT 1');
+        console.log('💓 Database keep-alive ping successful');
+      } catch (error) {
+        console.warn('⚠️ Database keep-alive ping failed (Neon may be suspended):', error);
+        // Don't clear interval - keep trying
+      }
+    }, 240000); // 4 minutes (240000 ms)
+
+    // Clean up interval on process exit
+    process.on('SIGINT', () => {
+      clearInterval(keepAliveInterval);
+    });
+    process.on('SIGTERM', () => {
+      clearInterval(keepAliveInterval);
+    });
+
+    console.log('💓 Database keep-alive ping enabled (every 4 minutes)');
+  }
 }
 
 async function initializeSchema() {
@@ -380,7 +421,20 @@ export async function query<T extends QueryResultRow = any>(
   try {
     const result = await pool.query<T>(text, params);
     return result.rows;
-  } catch (error) {
+  } catch (error: any) {
+    // Handle Neon-specific errors gracefully
+    if (error.code === '57P01' || error.message?.includes('terminating connection')) {
+      console.warn('⚠️ Database connection terminated (likely Neon suspension). Retrying...');
+      // Retry once after a short delay
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      try {
+        const retryResult = await pool.query<T>(text, params);
+        return retryResult.rows;
+      } catch (retryError) {
+        console.error('❌ Database query retry failed:', retryError);
+        throw retryError;
+      }
+    }
     console.error('❌ Database query error:', error);
     throw error;
   }
